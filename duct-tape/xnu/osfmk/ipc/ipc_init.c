@@ -152,8 +152,12 @@ SECURITY_READ_ONLY_LATE(vm_size_t) msg_ool_size_small;
  *	Purpose:
  *		Final initialization
  */
+#ifdef __DARLING__
+void
+#else
 __startup_func
 static void
+#endif // __DARLING__
 ipc_init(void)
 {
 	kern_return_t kr;
@@ -207,8 +211,10 @@ ipc_init(void)
 		panic("ipc_init: kmem_suballoc of ipc_kernel_copy_map failed");
 	}
 
+#ifndef __DARLING__
 	ipc_kernel_copy_map->no_zero_fill = TRUE;
 	ipc_kernel_copy_map->wait_for_space = TRUE;
+#endif // __DARLING__
 
 	/*
 	 * As an optimization, 'small' out of line data regions using a

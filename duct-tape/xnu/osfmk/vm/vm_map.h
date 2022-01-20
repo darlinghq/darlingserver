@@ -418,7 +418,7 @@ VME_OBJECT_SHADOW(
 #define MAX_WIRE_COUNT          65535
 
 
-
+#ifndef __DARLING__
 /*
  *	Type:		struct vm_map_header
  *
@@ -437,11 +437,15 @@ struct vm_map_header {
 #endif
 	int                     page_shift;     /* page shift */
 };
+#endif // __DARLING__
 
 #define VM_MAP_HDR_PAGE_SHIFT(hdr) ((hdr)->page_shift)
 #define VM_MAP_HDR_PAGE_SIZE(hdr) (1 << VM_MAP_HDR_PAGE_SHIFT((hdr)))
 #define VM_MAP_HDR_PAGE_MASK(hdr) (VM_MAP_HDR_PAGE_SIZE((hdr)) - 1)
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/memory.h>
+#else
 /*
  *	Type:		vm_map_t [exported; contents invisible]
  *
@@ -527,6 +531,7 @@ struct _vm_map {
 	/* reserved */ pad:14;
 	unsigned int            timestamp;      /* Version number */
 };
+#endif // __DARLING__
 
 #define CAST_TO_VM_MAP_ENTRY(x) ((struct vm_map_entry *)(uintptr_t)(x))
 #define vm_map_to_entry(map) CAST_TO_VM_MAP_ENTRY(&(map)->hdr.links)
@@ -551,6 +556,7 @@ typedef struct vm_map_version {
 	unsigned int    main_timestamp;
 } vm_map_version_t;
 
+#ifndef __DARLING__
 /*
  *	Type:		vm_map_copy_t [exported; contents invisible]
  *
@@ -599,6 +605,7 @@ struct vm_map_copy {
 		void *XNU_PTRAUTH_SIGNED_PTR("vm_map_copy.kdata") kdata;  /* KERNEL_BUFFER */
 	} c_u;
 };
+#endif // __DARLING__
 
 
 #define cpy_hdr                 c_u.hdr
@@ -644,6 +651,7 @@ vm_map_copy_adjust_to_target(
 	((map)->timestamp = 0 ,                                         \
 	lck_rw_init(&(map)->lock, &vm_map_lck_grp, &vm_map_lck_rw_attr))
 
+#ifndef __DARLING__
 #define vm_map_lock(map)                     \
 	MACRO_BEGIN                          \
 	DTRACE_VM(vm_map_lock_w);            \
@@ -656,6 +664,7 @@ vm_map_copy_adjust_to_target(
 	(map)->timestamp++;         \
 	lck_rw_done(&(map)->lock);  \
 	MACRO_END
+#endif // __DARLING__
 
 #define vm_map_lock_read(map)             \
 	MACRO_BEGIN                       \
@@ -1541,7 +1550,9 @@ extern kern_return_t vm_map_page_range_info_internal(
 /*
  * Macros for rounding and truncation of vm_map offsets and sizes
  */
+#ifndef __DARLING__
 #define VM_MAP_PAGE_SHIFT(map) ((map) ? (map)->hdr.page_shift : PAGE_SHIFT)
+#endif // __DARLING__
 #define VM_MAP_PAGE_SIZE(map) (1 << VM_MAP_PAGE_SHIFT((map)))
 #define VM_MAP_PAGE_MASK(map) (VM_MAP_PAGE_SIZE((map)) - 1)
 #define VM_MAP_PAGE_ALIGNED(x, pgmask) (((x) & (pgmask)) == 0)
@@ -1597,6 +1608,7 @@ VM_MAP_POLICY_WX_STRIP_X(
 	return false;
 }
 
+#ifndef __DARLING__
 static inline bool
 VM_MAP_POLICY_ALLOW_MULTIPLE_JIT(
 	vm_map_t map __unused)
@@ -1606,6 +1618,7 @@ VM_MAP_POLICY_ALLOW_MULTIPLE_JIT(
 	}
 	return true;
 }
+#endif // __DARLING__
 
 static inline bool
 VM_MAP_POLICY_ALLOW_JIT_RANDOM_ADDRESS(

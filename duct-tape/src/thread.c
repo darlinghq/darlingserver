@@ -64,6 +64,8 @@ dtape_thread_handle_t dtape_thread_create(dtape_task_handle_t xtask, uint64_t ns
 
 	thread->xnu_thread.thread_id = nsid;
 
+	thread->xnu_thread.map = task->xnu_task.map;
+
 	return thread;
 };
 
@@ -200,6 +202,22 @@ void thread_set_thread_name(thread_t xthread, const char* name) {
 	thread->name = name;
 };
 
+__attribute__((noreturn))
+void thread_syscall_return(kern_return_t ret) {
+	dtape_stub_unsafe();
+};
+
+thread_qos_t thread_get_requested_qos(thread_t thread, int* relpri) {
+	dtape_stub_safe();
+	*relpri = 0;
+	return THREAD_QOS_DEFAULT;
+};
+
+thread_qos_t thread_user_promotion_qos_for_pri(int priority) {
+	dtape_stub_safe();
+	return THREAD_QOS_DEFAULT;
+};
+
 void thread_guard_violation(thread_t thread, mach_exception_data_type_t code, mach_exception_data_type_t subcode, boolean_t fatal) {
 	dtape_stub();
 };
@@ -234,32 +252,94 @@ void sched_thread_unpromote_reason(thread_t thread, uint32_t reason, uintptr_t t
 	dtape_stub_safe();
 };
 
-#if 0
-kern_return_t thread_wakeup_prim(event_t event, boolean_t one_thread, wait_result_t result) {
-	dtape_stub();
-	return KERN_FAILURE;
+void thread_poll_yield(thread_t self) {
+	dtape_stub_safe();
 };
 
-kern_return_t thread_wakeup_thread(event_t event, thread_t thread) {
-	dtape_stub();
-	return KERN_FAILURE;
+kern_return_t act_get_state_to_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* count) {
+	dtape_stub_unsafe();
 };
 
-wait_result_t assert_wait_deadline(event_t event, wait_interrupt_t interruptible, uint64_t deadline) {
-	dtape_stub();
-	return THREAD_WAITING;
+kern_return_t act_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t count) {
+	dtape_stub_unsafe();
 };
 
-wait_result_t assert_wait_deadline_with_leeway(event_t event, wait_interrupt_t interruptible, wait_timeout_urgency_t urgency, uint64_t deadline, uint64_t leeway) {
-	dtape_stub();
-	return THREAD_WAITING;
+kern_return_t thread_abort(thread_t thread) {
+	dtape_stub_unsafe();
 };
 
-kern_return_t clear_wait(thread_t thread, wait_result_t result) {
-	dtape_stub();
-	return KERN_FAILURE;
+kern_return_t thread_abort_safely(thread_t thread) {
+	dtape_stub_unsafe();
 };
-#endif
+
+kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_create_from_user(task_t task, thread_t* new_thread) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_create_running_from_user(task_t task, int flavor, thread_state_t new_state, mach_msg_type_number_t new_state_count, thread_t* new_thread) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_depress_abort_from_user(thread_t thread) {
+	dtape_stub_safe();
+	return KERN_SUCCESS;
+};
+
+kern_return_t thread_get_state_to_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* state_count) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_info(thread_t thread, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t* thread_info_count) {
+	dtape_stub_unsafe();
+};
+
+void thread_inspect_deallocate(thread_inspect_t thread_inspect) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_policy(thread_t thread, policy_t policy, policy_base_t base, mach_msg_type_number_t count, boolean_t set_limit) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_policy_get(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t count) {
+	dtape_stub_unsafe();
+};
+
+void thread_read_deallocate(thread_read_t thread_read) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_resume(thread_t thread) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t policy, policy_base_t base, mach_msg_type_number_t base_count, policy_limit_t limit, mach_msg_type_number_t limit_count) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_suspend(thread_t thread) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wired) {
+	dtape_stub_unsafe();
+};
 
 // ignore the lock timeout
 #define LockTimeOutUsec UINT32_MAX
@@ -527,6 +607,110 @@ clear_wait(
 	thread_unlock(thread);
 	splx(s);
 	return ret;
+}
+
+// </copied>
+
+// <copied from="xnu://7195.141.2/osfmk/kern/thread.c">
+
+kern_return_t
+thread_assign(
+	__unused thread_t                       thread,
+	__unused processor_set_t        new_pset)
+{
+	return KERN_FAILURE;
+}
+
+/*
+ *	thread_assign_default:
+ *
+ *	Special version of thread_assign for assigning threads to default
+ *	processor set.
+ */
+kern_return_t
+thread_assign_default(
+	thread_t                thread)
+{
+	return thread_assign(thread, &pset0);
+}
+
+/*
+ *	thread_get_assignment
+ *
+ *	Return current assignment for this thread.
+ */
+kern_return_t
+thread_get_assignment(
+	thread_t                thread,
+	processor_set_t *pset)
+{
+	if (thread == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	*pset = &pset0;
+
+	return KERN_SUCCESS;
+}
+
+/*
+ *  thread_get_mach_voucher - return a voucher reference for the specified thread voucher
+ *
+ *  Conditions:  nothing locked
+ *
+ *  NOTE:       At the moment, there is no distinction between the current and effective
+ *		vouchers because we only set them at the thread level currently.
+ */
+kern_return_t
+thread_get_mach_voucher(
+	thread_act_t            thread,
+	mach_voucher_selector_t __unused which,
+	ipc_voucher_t           *voucherp)
+{
+	ipc_voucher_t           voucher;
+
+	if (THREAD_NULL == thread) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	thread_mtx_lock(thread);
+	voucher = thread->ith_voucher;
+
+	if (IPC_VOUCHER_NULL != voucher) {
+		ipc_voucher_reference(voucher);
+		thread_mtx_unlock(thread);
+		*voucherp = voucher;
+		return KERN_SUCCESS;
+	}
+
+	thread_mtx_unlock(thread);
+
+	*voucherp = IPC_VOUCHER_NULL;
+	return KERN_SUCCESS;
+}
+
+/*
+ *  thread_swap_mach_voucher - swap a voucher reference for the specified thread voucher
+ *
+ *  Conditions: callers holds a reference on the new and presumed old voucher(s).
+ *		nothing locked.
+ *
+ *  This function is no longer supported.
+ */
+kern_return_t
+thread_swap_mach_voucher(
+	__unused thread_t               thread,
+	__unused ipc_voucher_t          new_voucher,
+	ipc_voucher_t                   *in_out_old_voucher)
+{
+	/*
+	 * Currently this function is only called from a MIG generated
+	 * routine which doesn't release the reference on the voucher
+	 * addressed by in_out_old_voucher. To avoid leaking this reference,
+	 * a call to release it has been added here.
+	 */
+	ipc_voucher_release(*in_out_old_voucher);
+	return KERN_NOT_SUPPORTED;
 }
 
 // </copied>

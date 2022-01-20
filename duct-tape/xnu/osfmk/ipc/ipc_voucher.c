@@ -196,10 +196,19 @@ ipc_voucher_prepare_processing_recipe(
 	ipc_voucher_attr_manager_flags flags,
 	int *need_processing);
 
+#ifdef __DARLING__
+void
+#else
 __startup_func
 static void
+#endif // __DARLING__
 ipc_voucher_init(void)
 {
+#ifdef __DARLING__
+	ipc_voucher_zone = zone_create("ipc vouchers", sizeof(struct ipc_voucher), ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
+	ipc_voucher_attr_control_zone = zone_create("ipc voucher attr controls", sizeof(struct ipc_voucher_attr_control), ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM);
+	lck_spin_init(&ivgt_lock_data, LCK_GRP_NULL, LCK_ATTR_NULL);
+#endif // __DARLING__
 	/* initialize voucher hash */
 	for (iv_index_t i = 0; i < IV_HASH_BUCKETS; i++) {
 		queue_init(&ivht_bucket[i]);
@@ -3234,8 +3243,12 @@ user_data_release(
 	panic("Voucher user-data manager released");
 }
 
+#ifdef __DARLING__
+void
+#else
 __startup_func
 static void
+#endif // __DARLING__
 user_data_attr_manager_init(void)
 {
 	kern_return_t kr;

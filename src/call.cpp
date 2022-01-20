@@ -95,22 +95,9 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Call::thread() const {
 	return _thread.lock();
 };
 
-/**
- * Note that you MUST NOT have any local variables referencing `this` when this method is called.
- *
- * This Call object MAY be destroyed upon the return of this method.
- */
-void DarlingServer::Call::_stopPending() {
-	// we're done processing this call; dump it
-	if (auto thread = _thread.lock()) {
-		thread->setPendingCall(nullptr);
-	}
-};
-
 void DarlingServer::Call::Checkin::processCall() {
 	// the Call creation already took care of registering the process and thread
 	_sendReply(0);
-	_stopPending();
 };
 
 void DarlingServer::Call::Checkout::processCall() {
@@ -131,7 +118,6 @@ void DarlingServer::Call::Checkout::processCall() {
 	}
 
 	_sendReply(code);
-	_stopPending();
 };
 
 void DarlingServer::Call::VchrootPath::processCall() {
@@ -141,22 +127,14 @@ void DarlingServer::Call::VchrootPath::processCall() {
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
 			if (_body.buffer_size > 0) {
-				struct iovec local;
-				struct iovec remote;
 				auto tmpstr = process->vchrootPath().substr(0, _body.buffer_size - 1);
 				auto len = std::min(tmpstr.length() + 1, _body.buffer_size);
 
 				fullLength = process->vchrootPath().length();
 
-				// note that, despite the const cast, this is safe because the local iovec data is not modified by the call
-				local.iov_base = const_cast<char*>(tmpstr.c_str());
-				local.iov_len = len;
-
-				remote.iov_base = (void*)(uintptr_t)_body.buffer;
-				remote.iov_len = len;
-
-				if (process_vm_writev(process->id(), &local, 1, &remote, 1, 0) < 0) {
-					code = -errno;
+				if (!process->writeMemory(_body.buffer, tmpstr.c_str(), len, &code)) {
+					// writeMemory returns a positive error code, but we want a negative one
+					code = -code;
 				}
 			}
 		} else {
@@ -167,7 +145,6 @@ void DarlingServer::Call::VchrootPath::processCall() {
 	}
 
 	_sendReply(code, fullLength);
-	_stopPending();
 };
 
 void DarlingServer::Call::TaskSelfTrap::processCall() {
@@ -182,7 +159,34 @@ void DarlingServer::Call::TaskSelfTrap::processCall() {
 	callLog.debug() << "TaskSelfTrap returning port " << taskSelfPort << callLog.endLog;
 
 	_sendReply(0, taskSelfPort);
-	_stopPending();
+};
+
+void DarlingServer::Call::HostSelfTrap::processCall() {
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			callLog.debug() << "Got HostSelfTrap call from " << process->nsid() << ":" << thread->nsid() << callLog.endLog;
+		}
+	}
+
+	const auto hostSelfPort = dtape_host_self_trap();
+
+	callLog.debug() << "HostSelfTrap returning port " << hostSelfPort << callLog.endLog;
+
+	_sendReply(0, hostSelfPort);
+};
+
+void DarlingServer::Call::ThreadSelfTrap::processCall() {
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			callLog.debug() << "Got ThreadSelfTrap call from " << process->nsid() << ":" << thread->nsid() << callLog.endLog;
+		}
+	}
+
+	const auto threadSelfPort = dtape_thread_self_trap();
+
+	callLog.debug() << "ThreadSelfTrap returning port " << threadSelfPort << callLog.endLog;
+
+	_sendReply(0, threadSelfPort);
 };
 
 void DarlingServer::Call::MachReplyPort::processCall() {
@@ -197,7 +201,6 @@ void DarlingServer::Call::MachReplyPort::processCall() {
 	callLog.debug() << "MachReplyPort returning port " << machReplyPort << callLog.endLog;
 
 	_sendReply(0, machReplyPort);
-	_stopPending();
 };
 
 void DarlingServer::Call::Kprintf::processCall() {
@@ -209,19 +212,11 @@ void DarlingServer::Call::Kprintf::processCall() {
 			char* tmp = (char*)malloc(_body.string_length + 1);
 
 			if (tmp) {
-				struct iovec local;
-				struct iovec remote;
-
-				local.iov_base = tmp;
-				local.iov_len = _body.string_length;
-
-				remote.iov_base = (void*)(uintptr_t)_body.string;
-				remote.iov_len = _body.string_length;
-
-				if (process_vm_readv(process->id(), &local, 1, &remote, 1, 0) < 0) {
-					code = -errno;
-				} else {
+				if (process->readMemory(_body.string, tmp, _body.string_length, &code)) {
 					kprintfLog.info() << tmp << kprintfLog.endLog;
+				} else {
+					// readMemory returns a positive error code, but we want a negative one
+					code = -code;
 				}
 
 				free(tmp);
@@ -236,5 +231,34 @@ void DarlingServer::Call::Kprintf::processCall() {
 	}
 
 	_sendReply(code);
-	_stopPending();
+};
+
+void DarlingServer::Call::StartedSuspended::processCall() {
+	int code = 0;
+	bool suspended = false;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			suspended = process->startSuspended();
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, suspended);
+};
+
+void DarlingServer::Call::GetTracer::processCall() {
+	int code = 0;
+	uint32_t tracer = 0;
+
+	callLog.warning() << "GetTracer: TODO" << callLog.endLog;
+
+	_sendReply(code, tracer);
+};
+
+void DarlingServer::Call::MachMsgOverwrite::processCall() {
+	_sendReply(dtape_mach_msg_overwrite(_body.msg, _body.option, _body.send_size, _body.rcv_size, _body.rcv_name, _body.timeout, _body.notify, _body.rcv_msg, _body.rcv_limit));
 };

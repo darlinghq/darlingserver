@@ -238,9 +238,17 @@ static const struct mig_subsystem *mig_e[] = {
 	(const struct mig_subsystem *)&mach_eventlink_subsystem,
 };
 
+#ifdef __DARLING__
+void
+#else
 static void
+#endif // ___DARLING__
 mig_init(void)
 {
+#ifdef __DARLING__
+	ipc_kobject_label_zone = zone_create("ipc kobject labels", sizeof(struct ipc_kobject_label), ZC_NONE);
+#endif // __DARLING__
+
 	unsigned int i, n = sizeof(mig_e) / sizeof(const struct mig_subsystem *);
 	int howmany;
 	mach_msg_id_t j, pos, nentry, range;

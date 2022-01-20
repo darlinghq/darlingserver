@@ -342,10 +342,10 @@ extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr);
 __END_DECLS
 
 #ifdef __DARLING__
-#define VM_KERNEL_ADDRHIDE(_v) (_v)
-#define VM_KERNEL_UNSLIDE_OR_PERM(_v) (_v)
-#define VM_KERNEL_UNSLIDE(_v) (_v)
-#define VM_KERNEL_ADDRPERM(_v) (_v)
+#define VM_KERNEL_ADDRHIDE(_v) ((vm_address_t)(_v))
+#define VM_KERNEL_UNSLIDE_OR_PERM(_v) ((vm_offset_t)(_v))
+#define VM_KERNEL_UNSLIDE(_v) ((vm_offset_t)(_v))
+#define VM_KERNEL_ADDRPERM(_v) VM_KERNEL_UNSLIDE_OR_PERM(_v)
 #else
 #define __DO_UNSLIDE(_v) ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) - vm_kernel_slide)
 

@@ -205,7 +205,9 @@ static const auto microthreadLog = DarlingServer::Log("microthread");
 
 // this runs in the context of the microthread (i.e. with the microthread's stack active)
 void DarlingServer::Thread::microthreadWorker() {
-	currentThreadVar->pendingCall()->processCall();
+	auto call = currentThreadVar->pendingCall();
+	currentThreadVar->setPendingCall(nullptr);
+	call->processCall();
 };
 
 void DarlingServer::Thread::microthreadContinuation() {

@@ -55,8 +55,12 @@ static mach_msg_id_t    host_notify_replyid[HOST_NOTIFY_TYPE_MAX + 1] =
 { HOST_CALENDAR_CHANGED_REPLYID,
   HOST_CALENDAR_SET_REPLYID };
 
+#ifdef __DARLING__
+void
+#else
 __startup_func
 static void
+#endif // __DARLING__
 host_notify_init(void)
 {
 	for (int i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++) {

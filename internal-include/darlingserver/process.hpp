@@ -46,14 +46,16 @@ namespace DarlingServer {
 		std::vector<std::weak_ptr<Thread>> _threads;
 		std::string _vchrootPath;
 		dtape_task_handle_t _dtapeTask;
-
 		std::weak_ptr<Process> _parentProcess;
+		bool _startSuspended = false;
 
 		void _unregisterThreads();
 
 		struct KernelProcessConstructorTag {};
 
 		friend struct ::DTapeHooks;
+
+		bool _readOrWriteMemory(bool isWrite, uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const;
 
 	public:
 		using ID = pid_t;
@@ -84,6 +86,12 @@ namespace DarlingServer {
 		void setVchrootPath(std::string path);
 
 		std::shared_ptr<Process> parentProcess() const;
+
+		bool startSuspended() const;
+		void setStartSuspended(bool startSuspended);
+
+		bool readMemory(uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode = nullptr) const;
+		bool writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode = nullptr) const;
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

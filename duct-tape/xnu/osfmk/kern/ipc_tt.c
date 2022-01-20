@@ -3015,6 +3015,7 @@ convert_port_to_map_with_flavor(
 	}
 
 	map = task->map;
+#ifndef __DARLING__
 	if (map->pmap == kernel_pmap) {
 		if (flavor == TASK_FLAVOR_CONTROL) {
 			panic("userspace has control access to a "
@@ -3027,6 +3028,7 @@ convert_port_to_map_with_flavor(
 	} else {
 		pmap_require(map->pmap);
 	}
+#endif // __DARLING__
 
 	vm_map_reference(map);
 	task_unlock(task);

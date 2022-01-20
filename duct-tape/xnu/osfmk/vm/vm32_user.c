@@ -67,7 +67,9 @@
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/mach_types.h>    /* to get vm_address_t */
+#ifndef __DARLING__ // causes unnecessary build issues
 #include <mach/memory_object.h>
+#endif // __DARLING__
 #include <mach/std_types.h>     /* to get pointer_t */
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
@@ -549,6 +551,7 @@ vm32_make_memory_entry(
 	return kr;
 }
 
+#ifndef __DARLING__
 kern_return_t
 vm32__task_wire(
 	vm_map_t        map,
@@ -579,6 +582,6 @@ vm32__map_exec_lockdown(
 
 	return KERN_SUCCESS;
 }
-
+#endif // __DARLING__
 
 #endif /* VM32_SUPPORT */

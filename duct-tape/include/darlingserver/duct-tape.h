@@ -2,6 +2,8 @@
 #define _DARLINGSERVER_DUCT_TAPE_H_
 
 #include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
 #include <libsimple/lock.h>
 
@@ -42,6 +44,8 @@ typedef dtape_thread_handle_t (*dtape_hook_thread_create_kernel_f)(void);
 typedef void (*dtape_hook_thread_start_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback);
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
+typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
+typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
 
 typedef struct dtape_hooks {
 	dtape_hook_thread_suspend_f thread_suspend;
@@ -55,13 +59,18 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_start_f thread_start;
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
+	dtape_hook_task_read_memory_f task_read_memory;
+	dtape_hook_task_write_memory_f task_write_memory;
 } dtape_hooks_t;
 
 void dtape_init(const dtape_hooks_t* hooks);
 void dtape_deinit(void);
 
 uint32_t dtape_task_self_trap(void);
+uint32_t dtape_host_self_trap(void);
+uint32_t dtape_thread_self_trap(void);
 uint32_t dtape_mach_reply_port(void);
+int dtape_mach_msg_overwrite(uintptr_t msg, int32_t option, uint32_t send_size, uint32_t rcv_size, uint32_t rcv_name, uint32_t timeout, uint32_t notify, uintptr_t rcv_msg, uint32_t rcv_limit);
 
 /**
  * The threshold beyond which thread IDs are considered IDs for kernel threads.

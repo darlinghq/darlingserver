@@ -226,6 +226,18 @@ void lck_ticket_assert_owned(lck_ticket_t* tlock) {
 	lck_spin_assert(&tlock->dtape_lock, LCK_ASSERT_OWNED);
 };
 
+//
+// read-write lock
+//
+
+lck_rw_type_t lck_rw_done(lck_rw_t* lock) {
+	dtape_stub_unsafe();
+};
+
+void lck_rw_lock_exclusive(lck_rw_t* lock) {
+	dtape_stub_unsafe();
+};
+
 // <copied from="xnu://7195.141.2/osfmk/kern/locks.c">
 
 /*

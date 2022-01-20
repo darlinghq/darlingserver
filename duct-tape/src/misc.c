@@ -1,6 +1,9 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/duct-tape/hooks.h>
 #include <darlingserver/duct-tape/log.h>
+#include <darlingserver/duct-tape/processor.h>
+#include <darlingserver/duct-tape/memory.h>
+#include <darlingserver/duct-tape/task.h>
 
 #include <kern/waitq.h>
 #include <kern/clock.h>
@@ -15,34 +18,68 @@
 #include <sys/types.h>
 
 const dtape_hooks_t* dtape_hooks;
+char version[] = "Darling 11.5";
 
 int vsnprintf(char* buffer, size_t buffer_size, const char* format, va_list args);
 ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
 
 void ipc_table_init(void);
+void ipc_init(void);
+void mig_init(void);
+void host_notify_init(void);
+void user_data_attr_manager_init(void);
+void ipc_voucher_init(void);
+
+void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
+	char message[4096];
+	vsnprintf(message, sizeof(message), format, args);
+	dtape_hooks->log(level, message);
+};
 
 void dtape_log(dtape_log_level_t level, const char* format, ...) {
-	char message[4096];
-
 	va_list args;
 	va_start(args, format);
-	vsnprintf(message, sizeof(message), format, args);
+	dtape_logv(level, format, args);
 	va_end(args);
-
-	dtape_hooks->log(level, message);
 };
 
 void dtape_init(const dtape_hooks_t* hooks) {
 	dtape_hooks = hooks;
 
-	ipc_space_zone = zone_create("ipc spaces", sizeof(struct ipc_space), ZC_NOENCRYPT);
+	dtape_log_debug("dtape_processor_init");
+	dtape_processor_init();
 
-	ipc_table_init();
+	dtape_log_debug("dtape_memory_init");
+	dtape_memory_init();
+
+	ipc_space_zone = zone_create("ipc spaces", sizeof(struct ipc_space), ZC_NOENCRYPT);
+	ipc_kmsg_zone = zone_create("ipc kmsgs", IKM_SAVED_KMSG_SIZE, ZC_CACHING | ZC_ZFREE_CLEARMEM);
 
 	ipc_object_zones[IOT_PORT] = zone_create("ipc ports", sizeof(struct ipc_port), ZC_NOENCRYPT | ZC_CACHING | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
 	ipc_object_zones[IOT_PORT_SET] = zone_create("ipc port sets", sizeof(struct ipc_pset), ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
 
 	lck_mtx_init(&realhost.lock, LCK_GRP_NULL, LCK_ATTR_NULL);
+
+	dtape_log_debug("ipc_table_init");
+	ipc_table_init();
+
+	dtape_log_debug("ipc_voucher_init");
+	ipc_voucher_init();
+
+	dtape_log_debug("dtape_task_init");
+	dtape_task_init();
+
+	dtape_log_debug("ipc_init");
+	ipc_init();
+
+	dtape_log_debug("mig_init");
+	mig_init();
+
+	dtape_log_debug("host_notify_init");
+	host_notify_init();
+
+	dtape_log_debug("user_data_attr_manager_init");
+	user_data_attr_manager_init();
 
 	dtape_log_debug("waitq_bootstrap");
 	waitq_bootstrap();
@@ -69,4 +106,23 @@ void dtape_deinit(void) {
 
 void read_frandom(void* buffer, unsigned int numBytes) {
 	getrandom(buffer, numBytes, 0);
+};
+
+void kprintf(const char* fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	dtape_logv(dtape_log_level_info, fmt, args);
+	va_end(args);
+};
+
+int scnprintf(char* buffer, size_t buffer_size, const char* format, ...) {
+	va_list args;
+	va_start(args, format);
+	int code = vsnprintf(buffer, buffer_size, format, args);
+	va_end(args);
+	if (code < 0) {
+		return code;
+	} else {
+		return strnlen(buffer, buffer_size);
+	}
 };

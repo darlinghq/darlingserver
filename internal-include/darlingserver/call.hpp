@@ -43,8 +43,6 @@ namespace DarlingServer {
 		MessageQueue& _replyQueue;
 		Address _replyAddress;
 
-		void _stopPending();
-
 	public:
 		Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress);
 		virtual ~Call();

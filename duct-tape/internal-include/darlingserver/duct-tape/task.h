@@ -15,4 +15,6 @@ static dtape_task_t* dtape_task_for_xnu_task(task_t xnu_task) {
 	return (dtape_task_t*)((char*)xnu_task - offsetof(dtape_task_t, xnu_task));
 };
 
+void dtape_task_init(void);
+
 #endif // _DARLINGSERVER_DUCT_TAPE_TASK_H_

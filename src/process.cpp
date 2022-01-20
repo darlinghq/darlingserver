@@ -21,6 +21,8 @@
 #include <darlingserver/registry.hpp>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <sys/uio.h>
+#include <darlingserver/logging.hpp>
 
 #include <fstream>
 
@@ -146,4 +148,77 @@ std::shared_ptr<DarlingServer::Process> DarlingServer::Process::kernelProcess() 
 		return proc;
 	}();
 	return process;
+};
+
+bool DarlingServer::Process::startSuspended() const {
+	std::shared_lock lock(_rwlock);
+	return _startSuspended;
+};
+
+void DarlingServer::Process::setStartSuspended(bool startSuspended) {
+	std::unique_lock lock(_rwlock);
+	_startSuspended = startSuspended;
+};
+
+bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const {
+	struct iovec local;
+	struct iovec remote;
+	const auto func = isWrite ? process_vm_writev : process_vm_readv;
+	static DarlingServer::Log processMemoryAccessLog("procmem");
+
+	local.iov_base = localBuffer;
+	local.iov_len = length;
+
+	remote.iov_base = (void*)remoteAddress;
+	remote.iov_len = length;
+
+	if (func(id(), &local, 1, &remote, 1, 0) < 0) {
+		int code = errno;
+		processMemoryAccessLog.error()
+			<< "Failed to "
+			<< (isWrite ? "write " : "read ")
+			<< length
+			<< " byte(s) at "
+			<< remoteAddress
+			<< " in process "
+			<< id()
+			<< " ("
+			<< nsid()
+			<< "): "
+			<< code
+			<< " ("
+			<< strerror(code)
+			<< ")"
+			<< processMemoryAccessLog.endLog;
+		if (errorCode) {
+			*errorCode = code;
+		}
+		return false;
+	} else {
+		processMemoryAccessLog.debug()
+			<< "Successfully "
+			<< (isWrite ? "wrote " : "read ")
+			<< length
+			<< " byte(s) at "
+			<< remoteAddress
+			<< " in process "
+			<< id()
+			<< " ("
+			<< nsid()
+			<< ")"
+			<< processMemoryAccessLog.endLog;
+		if (errorCode) {
+			*errorCode = 0;
+		}
+		return true;
+	}
+};
+
+bool DarlingServer::Process::readMemory(uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const {
+	return _readOrWriteMemory(false, remoteAddress, localBuffer, length, errorCode);
+};
+
+bool DarlingServer::Process::writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode) const {
+	// the const_cast is safe; when writing to a process' memory, localBuffer is not modified
+	return _readOrWriteMemory(true, remoteAddress, const_cast<void*>(localBuffer), length, errorCode);
 };

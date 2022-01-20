@@ -125,6 +125,14 @@ struct DTapeHooks {
 		DarlingServer::Thread::interruptEnable();
 	};
 
+	static bool dtape_hook_task_read_memory(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length) {
+		return static_cast<DarlingServer::Process*>(task_context)->readMemory(remote_address, local_buffer, length);
+	};
+
+	static bool dtape_hook_task_write_memory(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length) {
+		return static_cast<DarlingServer::Process*>(task_context)->writeMemory(remote_address, local_buffer, length);
+	};
+
 	static constexpr dtape_hooks_t dtape_hooks = {
 		.thread_suspend = dtape_hook_thread_suspend,
 		.thread_resume = dtape_hook_thread_resume,
@@ -137,6 +145,8 @@ struct DTapeHooks {
 		.thread_start = dtape_hook_thread_start,
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
+		.task_read_memory = dtape_hook_task_read_memory,
+		.task_write_memory = dtape_hook_task_write_memory,
 	};
 };
 

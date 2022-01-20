@@ -50,6 +50,10 @@
 
 #include <libkern/section_keywords.h>
 
+#ifdef __DARLING__
+#include <mach/host_priv_server.h>
+#endif // __DARLING__
+
 /*
  * Mach kobject port to reflect Mach exceptions into Unix signals.
  *

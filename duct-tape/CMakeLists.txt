@@ -129,6 +129,7 @@ add_compile_options(
 	-fblocks
 	-ffunction-sections
 	-fdata-sections
+	-Wno-incompatible-library-redeclaration
 )
 
 set(MIG_USER_SOURCE_SUFFIX "User.c")
@@ -196,6 +197,7 @@ add_custom_target(kernel_mig_generate
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/upl.h
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/host_notify_reply.h
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/vm32_map_server.h
+		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/vm32_map_server.c
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/mach_notify.h
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/mach_voucher_attr_control.h
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/memory_entry_server.h
@@ -237,6 +239,8 @@ add_library(darlingserver_duct_tape
 	src/thread.c
 	src/timer.c
 	src/traps.c
+	src/host.c
+	src/processor.c
 
 	xnu/libkern/os/refcnt.c
 	xnu/libkern/gen/OSAtomicOperations.c
@@ -261,6 +265,9 @@ add_library(darlingserver_duct_tape
 	xnu/osfmk/kern/timer_call.c
 	xnu/osfmk/kern/clock_oldops.c
 	xnu/osfmk/kern/sync_sema.c
+	xnu/osfmk/kern/sync_lock.c
+	xnu/osfmk/kern/syscall_emulation.c
+	xnu/osfmk/kern/ux_handler.c
 
 	xnu/osfmk/ipc/ipc_entry.c
 	xnu/osfmk/ipc/ipc_hash.c
@@ -287,6 +294,8 @@ add_library(darlingserver_duct_tape
 
 	xnu/osfmk/prng/prng_random.c
 
+	xnu/osfmk/vm/vm32_user.c
+
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/clock_priv_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/clock_reply_user.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/clock_server.c
@@ -310,6 +319,7 @@ add_library(darlingserver_duct_tape
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/task_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/thread_act_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/mach_eventlink_server.c
+	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/vm32_map_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/device/device_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/UserNotification/UNDReplyServer.c
 )

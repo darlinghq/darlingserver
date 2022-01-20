@@ -68,6 +68,11 @@
 #include <mach/message.h>
 #include <mach/mig_log.h>
 
+#ifdef __DARLING__
+__attribute__((format(printf, 1, 2)))
+int printf(const char* format, ...);
+#endif // __DARLING__
+
 int mig_tracing, mig_errors, mig_full_tracing;
 
 /*

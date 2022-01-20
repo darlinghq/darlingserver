@@ -7,7 +7,17 @@
 #include <sys/file_internal.h>
 #include <pthread/workqueue_internal.h>
 
+#include <kern/host.h>
+#include <mach_debug/lockgroup_info.h>
+
 unsigned int kdebug_enable = 0;
+uint32_t avenrun[3] = {0};
+uint32_t mach_factor[3] = {0};
+vm_object_t compressor_object;
+uint32_t c_segment_pages_compressed;
+expired_task_statistics_t dead_task_statistics;
+struct machine_info machine_info;
+int sched_allow_NO_SMT_threads;
 
 #undef panic
 
@@ -23,7 +33,7 @@ int fflush(FILE* stream);
 	#define DTAPE_FATAL_STUBS 0
 #endif
 
-void dtape_stub_log(const char* function_name, int safety) {
+void dtape_stub_log(const char* function_name, int safety, const char* subsection) {
 	dtape_log_level_t log_level;
 	bool do_abort;
 	const char* kind_info;
@@ -46,7 +56,7 @@ void dtape_stub_log(const char* function_name, int safety) {
 		kind_info = " (safe)";
 	}
 
-	dtape_log(log_level, "stub%s: %s", kind_info, function_name);
+	dtape_log(log_level, "stub%s: %s%s%s", kind_info, function_name, subsection[0] == '\0' ? "" : ":", subsection);
 
 	if (do_abort) {
 		abort();
@@ -170,4 +180,50 @@ boolean_t PE_parse_boot_argn(const char* arg_string, void* arg_ptr, int max_len)
 boolean_t machine_timeout_suspended(void) {
 	dtape_stub_safe();
 	return true;
+};
+
+boolean_t IOTaskHasEntitlement(task_t task, const char* entitlement) {
+	dtape_stub_safe();
+	return TRUE;
+};
+
+kern_return_t kmod_create(host_priv_t host_priv, vm_address_t addr, kmod_t* id) {
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
+};
+
+kern_return_t kmod_destroy(host_priv_t host_priv, kmod_t id) {
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
+};
+
+kern_return_t kmod_control(host_priv_t host_priv, kmod_t id, kmod_control_flavor_t flavor, kmod_args_t* data, mach_msg_type_number_t* dataCount) {
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
+};
+
+kern_return_t kmod_get_info(host_t host, kmod_info_array_t* kmod_list, mach_msg_type_number_t* kmodCount) {
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
+};
+
+kern_return_t kext_request(host_priv_t hostPriv, uint32_t clientLogSpec, vm_offset_t requestIn, mach_msg_type_number_t requestLengthIn, vm_offset_t* responseOut, mach_msg_type_number_t* responseLengthOut, vm_offset_t* logDataOut, mach_msg_type_number_t* logDataLengthOut, kern_return_t* op_result) {
+	dtape_stub_unsafe();
+};
+
+uint32_t PE_i_can_has_debugger(uint32_t* something) {
+	dtape_stub_unsafe();
+};
+
+bool work_interval_port_type_render_server(mach_port_name_t port_name) {
+	dtape_stub_safe();
+	return false;
+};
+
+ipc_port_t convert_suid_cred_to_port(suid_cred_t sc) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t handle_ux_exception(thread_t thread, int exception, mach_exception_code_t code, mach_exception_subcode_t subcode) {
+	dtape_stub_unsafe();
 };

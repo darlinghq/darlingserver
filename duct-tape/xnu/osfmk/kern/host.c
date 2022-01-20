@@ -130,6 +130,9 @@ host_data_t realhost;
 static void
 get_host_vm_stats(vm_statistics64_t out)
 {
+#ifdef __DARLING__
+	memset(out, 0, sizeof(*out));
+#else
 	out->zero_fill_count = counter_load(&vm_statistics_zero_fill_count);
 	out->reactivations = counter_load(&vm_statistics_reactivations);
 	out->pageins = counter_load(&vm_statistics_pageins);
@@ -142,6 +145,7 @@ get_host_vm_stats(vm_statistics64_t out)
 	out->decompressions = counter_load(&vm_statistics_decompressions);
 	out->swapins = counter_load(&vm_statistics_swapins);
 	out->swapouts = counter_load(&vm_statistics_swapouts);
+#endif // __DARLING__
 }
 vm_extmod_statistics_data_t host_extmod_statistics;
 
@@ -179,6 +183,7 @@ host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_t
 
 extern int sched_allow_NO_SMT_threads;
 
+#ifndef __DARLING__
 kern_return_t
 host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count)
 {
@@ -393,9 +398,11 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	default: return KERN_INVALID_ARGUMENT;
 	}
 }
+#endif // __DARLING__
 
 kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count);
 
+#ifndef __DARLING__
 kern_return_t
 host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count)
 {
@@ -585,6 +592,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 	default: return KERN_INVALID_ARGUMENT;
 	}
 }
+#endif // __DARLING__
 
 extern uint32_t c_segment_pages_compressed;
 
@@ -797,6 +805,7 @@ out:
 	return rate_limited;
 }
 
+#ifndef __DARLING__
 kern_return_t
 vm_stats(void *info, unsigned int *count)
 {
@@ -873,6 +882,7 @@ vm_stats(void *info, unsigned int *count)
 
 	return KERN_SUCCESS;
 }
+#endif // __DARLING__
 
 kern_return_t host_statistics64(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count);
 

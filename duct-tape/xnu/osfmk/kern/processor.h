@@ -402,7 +402,11 @@ extern uint32_t                 processor_avail_count_user;
 extern uint32_t                 primary_processor_avail_count;
 extern uint32_t                 primary_processor_avail_count_user;
 
+#ifdef __DARLING__
+extern processor_t master_processor;
+#else
 #define master_processor PERCPU_GET_MASTER(processor)
+#endif // __DARLING__
 PERCPU_DECL(struct processor, processor);
 
 extern processor_t      current_processor(void);

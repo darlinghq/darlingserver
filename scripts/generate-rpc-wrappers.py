@@ -21,16 +21,44 @@ calls = [
 	]),
 
 	('task_self_trap', [], [
-		('port_name', 'unsigned int'),
+		('port_name', 'uint32_t'),
+	]),
+
+	('host_self_trap', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('thread_self_trap', [], [
+		('port_name', 'uint32_t'),
 	]),
 
 	('mach_reply_port', [], [
-		('port_name', 'unsigned int'),
+		('port_name', 'uint32_t'),
 	]),
 
 	('kprintf', [
-		('string', 'char*', 'uint64_t'),
+		('string', 'const char*', 'uint64_t'),
 		('string_length', 'uint64_t'),
+	], []),
+
+	('started_suspended', [], [
+		('suspended', 'bool'),
+	]),
+
+	('get_tracer', [], [
+		('tracer', 'uint32_t'),
+	]),
+
+	('mach_msg_overwrite', [
+		('msg', 'void*', 'uint64_t'),
+		('option', 'int32_t'),
+		('send_size', 'uint32_t'),
+		('rcv_size', 'uint32_t'),
+		('rcv_name', 'uint32_t'),
+		('timeout', 'uint32_t'),
+		('notify', 'uint32_t'),
+		('rcv_msg', 'void*', 'uint64_t'),
+		('rcv_limit', 'uint32_t'),
 	], [])
 ]
 
@@ -97,6 +125,7 @@ public_header.write("""\
 
 #include <sys/types.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
