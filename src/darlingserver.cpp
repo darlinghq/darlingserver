@@ -42,10 +42,9 @@
 #include <darling-config.h>
 
 #include <darlingserver/server.hpp>
+#include <darlingserver/config.hpp>
 
 // TODO: most of the code here was ported over from startup/darling.c; we should C++-ify it.
-
-#define MLDR_PATH LIBEXEC_PATH "/usr/libexec/darling/mldr"
 
 void fixPermissionsRecursive(const char* path, uid_t originalUID, gid_t originalGID)
 {
@@ -251,7 +250,7 @@ void spawnLaunchd(const char* prefix)
 
 	setenv("DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
-	execl(MLDR_PATH, "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, "/sbin/launchd", NULL);
+	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, "/sbin/launchd", NULL);
 
 	fprintf(stderr, "Failed to exec launchd: %s\n", strerror(errno));
 	abort();
@@ -475,17 +474,11 @@ int main(int argc, char** argv) {
 	// we have to use `clone` rather than `fork` to create the process in its own PID namespace
 	// and still be able to spawn new processes and threads of our own
 	struct clone_args launchdCloneArgs;
+	// TODO: use CMake to detect the structure version
+	// memset-ing everything is not future-safe
+	memset(&launchdCloneArgs, 0, sizeof(launchdCloneArgs));
 	launchdCloneArgs.flags = CLONE_NEWPID;
-	launchdCloneArgs.pidfd = 0;
-	launchdCloneArgs.child_tid = 0;
-	launchdCloneArgs.parent_tid = 0;
 	launchdCloneArgs.exit_signal = SIGCHLD;
-	launchdCloneArgs.stack = 0;
-	launchdCloneArgs.stack_size = 0;
-	launchdCloneArgs.tls = 0;
-	launchdCloneArgs.set_tid = 0;
-	launchdCloneArgs.set_tid_size = 0;
-	launchdCloneArgs.cgroup = 0;
 	launchdGlobalPID = syscall(SYS_clone3, &launchdCloneArgs, sizeof(launchdCloneArgs));
 
 	// drop privileges in both parent and child

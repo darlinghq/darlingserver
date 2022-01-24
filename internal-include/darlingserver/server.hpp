@@ -28,10 +28,42 @@
 #include <darlingserver/workers.hpp>
 #include <darlingserver/call.hpp>
 #include <darlingserver/registry.hpp>
+#include <darlingserver/utility.hpp>
 
 namespace DarlingServer {
+	class Server;
+
+	class Monitor {
+		friend class Server;
+
+	public:
+		enum class Event: uint32_t {
+			Readable = EPOLLIN,
+			Writable = EPOLLOUT,
+			Error = EPOLLERR,
+			HangUp = EPOLLHUP,
+			ReadHangUp = EPOLLRDHUP,
+		};
+
+	private:
+		std::shared_ptr<FD> _fd;
+		std::function<void(std::shared_ptr<Monitor>)> _callback;
+		Server* _server;
+		Event _event;
+		uint32_t _events;
+		std::mutex _lock;
+
+	public:
+		Monitor(std::shared_ptr<FD> descriptor, Event event, bool edgeTriggered, bool oneshot, std::function<void(std::shared_ptr<Monitor>)> callback);
+
+		void enable(bool edgeTriggered = false, bool oneshot = false);
+		void disable();
+	};
+
 	// NOTE: server instances MUST be created with `new` rather than as a normal local/stack variable
 	class Server {
+		friend class Monitor;
+
 	private:
 		int _listenerSocket;
 		std::string _prefix;
@@ -45,6 +77,9 @@ namespace DarlingServer {
 		int _wakeupFD;
 		int _timerFD;
 		std::mutex _timerLock;
+		std::vector<std::shared_ptr<Monitor>> _monitors;
+		std::vector<std::shared_ptr<Monitor>> _monitorsWaitingToDie;
+		std::mutex _monitorsLock;
 
 		void _worker(std::shared_ptr<Thread> thread);
 
@@ -68,6 +103,9 @@ namespace DarlingServer {
 		static Server& sharedInstance();
 
 		void scheduleThread(std::shared_ptr<Thread> thread);
+
+		void addMonitor(std::shared_ptr<Monitor> monitor);
+		void removeMonitor(std::shared_ptr<Monitor> monitor);
 	};
 };
 

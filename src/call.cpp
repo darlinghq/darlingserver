@@ -24,6 +24,8 @@
 
 #include <darlingserver/logging.hpp>
 #include <darlingserver/duct-tape.h>
+#include <darlingserver/config.hpp>
+#include <sys/fcntl.h>
 
 static DarlingServer::Log callLog("calls");
 
@@ -95,9 +97,56 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Call::thread() const {
 	return _thread.lock();
 };
 
+//
+// call processing
+//
+
+/*
+ *
+ * A note about RPC wrappers:
+ *
+ * The auto-generated RPC wrappers provide both client-side wrappers as well as server-side wrappers.
+ * The server-side wrappers automatically handle a few things like replies and descriptors.
+ *
+ * Replies:
+ * The RPC wrappers provide a custom `_sendReply` method specific to each call class.
+ * This method takes the result/status code as its first parameter followed by the return parameters
+ * specified in the call interface. When a call is done processing, it simply calls `_sendReply` with the necessary
+ * parameters and the RPC wrappers will take care of setting up the message and loading it onto the reply queue
+ * for the server to send it out.
+ *
+ * Descriptors:
+ * The RPC wrappers automatically handle ownership of descriptors, both incoming and outgoing.
+ *
+ * Incoming descriptors are extracted from the message and ownership is moved into the call instance.
+ * The call processing code can use the descriptor however it likes while the call instance is still alive.
+ * If it would like to move ownership out of the call instance, it can set the descriptor in the `_body` to `-1`.
+ * Descriptors still left in the `_body` when the call instance is destroyed are automatically closed.
+ *
+ * Ownership of outgoing descriptors is passed into the reply message. In other words, when a descriptor
+ * is given to `_sendReply`, the call instance loses ownership of that descriptor. If the call instance
+ * would like to retain ownership, it should `dup()` the descriptor and pass the `dup()`ed descriptor to `_sendReply` instead.
+ *
+ */
+
 void DarlingServer::Call::Checkin::processCall() {
-	// the Call creation already took care of registering the process and thread
-	_sendReply(0);
+	// the Call instance creation already took care of registering the process and thread.
+
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			// the process needs to know when the checkin occurs, in case it has a pending replacement
+			// and also to notify its parent about when the fork is complete
+			process->notifyCheckin();
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
 };
 
 void DarlingServer::Call::Checkout::processCall() {
@@ -105,10 +154,67 @@ void DarlingServer::Call::Checkout::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			threadRegistry().unregisterEntry(thread);
+			if (_body.exec_listener_pipe >= 0) {
+				// this is actually an execve;
+				// let's monitor the FD we got
 
-			if (thread->id() == process->id()) {
-				processRegistry().unregisterEntry(process);
+				// make it non-blocking
+				int flags = fcntl(_body.exec_listener_pipe, F_GETFL);
+				if (flags < 0) {
+					code = -errno;
+				} else {
+					flags |= O_NONBLOCK;
+					if (fcntl(_body.exec_listener_pipe, F_SETFL, flags) < 0) {
+						code = -errno;
+					} else {
+						// now monitor it
+						auto fd = std::make_shared<FD>(_body.exec_listener_pipe);
+						_body.exec_listener_pipe = -1; // the FD instance now owns the descriptor
+
+						auto replacingWithDarlingProcess = _body.executing_macho;
+
+						std::weak_ptr<Process> weakProcess = process;
+						Server::sharedInstance().addMonitor(std::make_shared<Monitor>(fd, Monitor::Event::HangUp, false, true, [fd, weakProcess, replacingWithDarlingProcess](std::shared_ptr<Monitor> monitor) {
+							Server::sharedInstance().removeMonitor(monitor);
+
+							auto process = weakProcess.lock();
+
+							if (!process) {
+								// the process died...
+								return;
+							}
+
+							char tmp;
+							int result = read(fd->fd(), &tmp, sizeof(tmp));
+
+							if (result < 0) {
+								// we shouldn't even get EAGAIN
+								throw std::system_error(errno, std::generic_category(), "Failed to read from exec listener pipe");
+							}
+
+							if (result == 0) {
+								// the execve succeeded
+								if (replacingWithDarlingProcess) {
+									process->setPendingReplacement();
+								} else {
+									// the Darling process was replaced with a non-Darling process
+									// treat it like death
+									process->_unregisterThreads();
+									processRegistry().unregisterEntry(process);
+								}
+							} else {
+								// the execve failed
+								// do nothing in this case
+							}
+						}));
+					}
+				}
+			} else {
+				threadRegistry().unregisterEntry(thread);
+
+				if (thread->id() == process->id()) {
+					processRegistry().unregisterEntry(process);
+				}
 			}
 		} else {
 			code = -ESRCH;
@@ -213,6 +319,14 @@ void DarlingServer::Call::Kprintf::processCall() {
 
 			if (tmp) {
 				if (process->readMemory(_body.string, tmp, _body.string_length, &code)) {
+					size_t len = _body.string_length;
+
+					// strip trailing whitespace
+					while (len > 0 && isspace(tmp[len - 1])) {
+						--len;
+					}
+					tmp[len] = '\0';
+
 					kprintfLog.info() << tmp << kprintfLog.endLog;
 				} else {
 					// readMemory returns a positive error code, but we want a negative one
@@ -261,4 +375,89 @@ void DarlingServer::Call::GetTracer::processCall() {
 
 void DarlingServer::Call::MachMsgOverwrite::processCall() {
 	_sendReply(dtape_mach_msg_overwrite(_body.msg, _body.option, _body.send_size, _body.rcv_size, _body.rcv_name, _body.timeout, _body.notify, _body.rcv_msg, _body.rcv_limit));
+};
+
+void DarlingServer::Call::MachPortDeallocate::processCall() {
+	_sendReply(dtape_mach_port_deallocate(_body.task_right_name, _body.port_right_name));
+};
+
+void DarlingServer::Call::Uidgid::processCall() {
+	int code = 0;
+	int uid = -1;
+	int gid = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			// HACK
+			// we shouldn't need to access _dtapeTask; Process should provide a method for this (but it doesn't yet because i'm not sure how to make that API feel at-home in C++)
+			dtape_task_uidgid(process->_dtapeTask, _body.new_uid, _body.new_gid, &uid, &gid);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, uid, gid);
+};
+
+void DarlingServer::Call::SetThreadHandles::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		thread->setThreadHandles(_body.pthread_handle, _body.dispatch_qaddr);
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::Vchroot::processCall() {
+	int code = 0;
+
+	// TODO: wrap all `processCall` calls in try-catch like this
+	try {
+		if (auto thread = _thread.lock()) {
+			if (auto process = thread->process()) {
+				process->setVchrootDirectory(std::make_shared<FD>(_body.directory_fd));
+				_body.directory_fd = -1;
+			} else {
+				code = -ESRCH;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} catch (std::system_error err) {
+		code = -err.code().value();
+	} catch (...) {
+		code = std::numeric_limits<int>::min();
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::MldrPath::processCall() {
+	int code = 0;
+	uint64_t fullLength = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			auto tmpstr = std::string(Config::defaultMldrPath).substr(0, _body.buffer_size - 1);
+			auto len = std::min(tmpstr.length() + 1, _body.buffer_size);
+
+			fullLength = process->vchrootPath().length();
+
+			if (!process->writeMemory(_body.buffer, tmpstr.c_str(), len, &code)) {
+				// writeMemory returns a positive error code, but we want a negative one
+				code = -code;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, fullLength);
 };

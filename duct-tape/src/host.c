@@ -85,6 +85,31 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 			return KERN_SUCCESS;
 		}
 
+		case HOST_PRIORITY_INFO: {
+			// <copied from="xnu://7195.141.2/osfmk/kern/host.c">
+			host_priority_info_t priority_info;
+
+			if (*count < HOST_PRIORITY_INFO_COUNT) {
+				return KERN_FAILURE;
+			}
+
+			priority_info = (host_priority_info_t)info;
+
+			priority_info->kernel_priority = MINPRI_KERNEL;
+			priority_info->system_priority = MINPRI_KERNEL;
+			priority_info->server_priority = MINPRI_RESERVED;
+			priority_info->user_priority = BASEPRI_DEFAULT;
+			priority_info->depress_priority = DEPRESSPRI;
+			priority_info->idle_priority = IDLEPRI;
+			priority_info->minimum_priority = MINPRI_USER;
+			priority_info->maximum_priority = MAXPRI_RESERVED;
+
+			*count = HOST_PRIORITY_INFO_COUNT;
+
+			return KERN_SUCCESS;
+			// </copied>
+		}
+
 		case HOST_DEBUG_INFO_INTERNAL:
 			return KERN_NOT_SUPPORTED;
 
@@ -92,8 +117,6 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 			dtape_stub_unsafe("HOST_SCHED_INFO");
 		case HOST_RESOURCE_SIZES:
 			dtape_stub_unsafe("HOST_RESOURCE_SIZES");
-		case HOST_PRIORITY_INFO:
-			dtape_stub_unsafe("HOST_PRIORITY_INFO");
 		case HOST_PREFERRED_USER_ARCH:
 			dtape_stub_unsafe("HOST_PREFERRED_USER_ARCH");
 		case HOST_CAN_HAS_DEBUGGER:

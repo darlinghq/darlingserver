@@ -67,6 +67,11 @@ namespace DarlingServer {
 		static void interruptDisable();
 		static void interruptEnable();
 
+		/**
+		 * Schedules the given function to be called within a duct-taped kernel microthread.
+		 */
+		static void _kernelAsync(std::function<void()> fn);
+
 	public:
 		using ID = pid_t;
 		using NSID = ID;
@@ -109,6 +114,8 @@ namespace DarlingServer {
 		void suspend(dtape_thread_continuation_callback_f continuationCallback = nullptr, libsimple_lock_t* unlockMe = nullptr);
 		void resume();
 		void terminate();
+
+		void setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress);
 
 		static std::shared_ptr<Thread> currentThread();
 	};

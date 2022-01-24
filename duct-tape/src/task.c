@@ -8,6 +8,7 @@
 #include <kern/policy_internal.h>
 #include <ipc/ipc_importance.h>
 #include <kern/restartable.h>
+#include <kern/sync_sema.h>
 
 #include <stdlib.h>
 
@@ -57,7 +58,18 @@ dtape_task_handle_t dtape_task_create(dtape_task_handle_t xparent_task, uint32_t
 
 	task->xnu_task.map = dtape_vm_map_create(task);
 
+	queue_init(&task->xnu_task.semaphore_list);
+
 	ipc_task_init(&task->xnu_task, parent_task ? &parent_task->xnu_task : NULL);
+
+	if (parent_task != NULL) {
+		task->xnu_task.sec_token = parent_task->xnu_task.sec_token;
+		task->xnu_task.audit_token = parent_task->xnu_task.audit_token;
+	} else {
+		task->xnu_task.sec_token = KERNEL_SECURITY_TOKEN;
+		task->xnu_task.audit_token = KERNEL_AUDIT_TOKEN;
+	}
+
 	ipc_task_enable(&task->xnu_task);
 
 	if (xparent_task == NULL && nsid == 0) {
@@ -80,11 +92,33 @@ void dtape_task_destroy(dtape_task_handle_t xtask) {
 
 	// this next section uses code adapted from XNU's task_deallocate() in osfmk/kern/task.c
 
+	semaphore_destroy_all(&task->xnu_task);
+
 	ipc_task_terminate(&task->xnu_task);
 
 	dtape_vm_map_destroy(task->xnu_task.map);
 
 	lck_mtx_destroy(&task->xnu_task.lock, LCK_GRP_NULL);
+
+	free(task);
+};
+
+void dtape_task_uidgid(dtape_task_handle_t xtask, int new_uid, int new_gid, int* old_uid, int* old_gid) {
+	dtape_task_t* task = xtask;
+	task_lock(&task->xnu_task);
+	if (old_uid) {
+		*old_uid = task->xnu_task.audit_token.val[1];
+	}
+	if (old_gid) {
+		*old_gid = task->xnu_task.audit_token.val[2];
+	}
+	if (new_uid >= 0) {
+		task->xnu_task.audit_token.val[1] = new_uid;
+	}
+	if (new_gid >= 0) {
+		task->xnu_task.audit_token.val[2] = new_gid;
+	}
+	task_unlock(&task->xnu_task);
 };
 
 void task_deallocate(task_t task) {

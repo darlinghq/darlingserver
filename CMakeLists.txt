@@ -44,6 +44,7 @@ add_executable(darlingserver
 	src/logging.cpp
 	src/process.cpp
 	src/thread.cpp
+	src/utility.cpp
 )
 
 add_dependencies(darlingserver

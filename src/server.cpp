@@ -250,10 +250,11 @@ void DarlingServer::Server::start() {
 			}
 		}
 
+		// reset the eventfd by reading from it
+		eventfd_t value;
+		eventfd_read(_wakeupFD, &value);
+
 		if (_canWrite) {
-			// reset the eventfd by reading from it
-			eventfd_t value;
-			eventfd_read(_wakeupFD, &value);
 			_canWrite = _outbox.sendMany(_listenerSocket);
 		}
 
@@ -313,19 +314,43 @@ void DarlingServer::Server::start() {
 				lock.unlock();
 
 				dtape_timer_fired();
-			} else if (event->events & EPOLLIN) {
-				std::shared_ptr<Process>& process = *reinterpret_cast<std::shared_ptr<Process>*>(event->data.ptr);
+			} else {
+				Monitor* monitor = static_cast<Monitor*>(event->data.ptr);
+				std::shared_ptr<Monitor> aliveMonitor = nullptr;
 
-				if (epoll_ctl(_epollFD, EPOLL_CTL_DEL, process->_pidfd, NULL) < 0) {
-					throw std::system_error(errno, std::generic_category(), "Failed to remove process handle from epoll context");
+				// check whether the monitor is still valid
+				_monitorsLock.lock();
+				for (const auto& mon: _monitors) {
+					if (mon.get() == monitor) {
+						aliveMonitor = mon;
+						break;
+					}
+				}
+				_monitorsLock.unlock();
+
+				// if the monitor died/was removed, ignore the event
+				if (!aliveMonitor) {
+					continue;
 				}
 
-				process->_unregisterThreads();
-				processRegistry().unregisterEntry(process);
-
-				delete &process;
+				aliveMonitor->_callback(aliveMonitor);
 			}
 		}
+
+		// as our final job on this wakeup, clear the list of monitors waiting to be removed.
+		// this will destroy those references, possibly causing the monitors to be deallocated.
+		//
+		// it's necessary to do this instead of just removing them in removeMonitor in order to
+		// avoid a potential race between an existing monitor being removed in removeMonitor,
+		// another being subsequently created for the same address and added to the server,
+		// and an event being received for the original monitor.
+		//
+		// since we keep a reference to the shared_ptrs until the end of this event loop iteration,
+		// there's no chance that a new monitor will be created with the same address as a monitor
+		// for which an event was returned in this event loop iteration.
+		_monitorsLock.lock();
+		_monitorsWaitingToDie.clear();
+		_monitorsLock.unlock();
 	}
 
 	// shouldn't ever be reached (exiting the main loop would be an error), but just in case
@@ -333,13 +358,23 @@ void DarlingServer::Server::start() {
 };
 
 void DarlingServer::Server::monitorProcess(std::shared_ptr<Process> process) {
-	struct epoll_event settings;
-	settings.data.ptr = new std::shared_ptr<Process>(process);
-	settings.events = EPOLLIN;
+	// the this-capture here is safe because the Server will always out-live everything else
+	std::weak_ptr<Process> weakProcess = process;
+	auto monitor = std::make_shared<Monitor>(process->_pidfd, Monitor::Event::Readable, false, false, [this, weakProcess](std::shared_ptr<Monitor> thisMonitor) {
+		removeMonitor(thisMonitor);
 
-	if (epoll_ctl(_epollFD, EPOLL_CTL_ADD, process->_pidfd, &settings) < 0) {
-		throw std::system_error(errno, std::generic_category(), "Failed to add process descriptor to epoll context");
-	}
+		auto process = weakProcess.lock();
+
+		if (!process) {
+			// the process already died...
+			return;
+		}
+
+		process->_unregisterThreads();
+		processRegistry().unregisterEntry(process);
+	});
+
+	addMonitor(monitor);
 };
 
 DarlingServer::Server& DarlingServer::Server::sharedInstance() {
@@ -356,4 +391,126 @@ void DarlingServer::Server::_worker(std::shared_ptr<Thread> thread) {
 
 void DarlingServer::Server::scheduleThread(std::shared_ptr<Thread> thread) {
 	_workQueue.push(thread);
+};
+
+void DarlingServer::Server::addMonitor(std::shared_ptr<Monitor> monitor) {
+	bool valid = true;
+
+	_monitorsLock.lock();
+	for (size_t i = 0; i < _monitors.size(); ++i) {
+		if (_monitors[i].get() == monitor.get()) {
+			valid = false;
+			break;
+		}
+	}
+
+	if (!valid) {
+		_monitorsLock.unlock();
+		return;
+	}
+
+	monitor->_lock.lock();
+	struct epoll_event settings;
+	settings.data.ptr = monitor.get();
+	settings.events = monitor->_events;
+
+	if (epoll_ctl(_epollFD, EPOLL_CTL_ADD, monitor->_fd->fd(), &settings) < 0) {
+		monitor->_lock.unlock();
+		_monitorsLock.unlock();
+		throw std::system_error(errno, std::generic_category(), "Failed to add descriptor to epoll context");
+	}
+
+	monitor->_server = this;
+
+	monitor->_lock.unlock();
+
+	_monitors.push_back(monitor);
+
+	_monitorsLock.unlock();
+};
+
+void DarlingServer::Server::removeMonitor(std::shared_ptr<Monitor> monitor) {
+	bool valid = false;
+
+	_monitorsLock.lock();
+	for (size_t i = 0; i < _monitors.size(); ++i) {
+		if (_monitors[i].get() == monitor.get()) {
+			valid = true;
+			_monitorsWaitingToDie.push_back(monitor);
+			_monitors.erase(_monitors.begin() + i);
+			break;
+		}
+	}
+
+	if (!valid) {
+		_monitorsLock.unlock();
+		return;
+	}
+
+	if (epoll_ctl(_epollFD, EPOLL_CTL_DEL, monitor->_fd->fd(), NULL) < 0) {
+		throw std::system_error(errno, std::generic_category(), "Failed to remove descriptor from epoll context");
+	}
+
+	monitor->_server = nullptr;
+
+	_monitorsLock.unlock();
+
+	// force an event loop wakeup (so the removal can be finalized as soon as possible)
+	eventfd_write(_wakeupFD, 1);
+};
+
+DarlingServer::Monitor::Monitor(std::shared_ptr<FD> descriptor, Event event, bool edgeTriggered, bool oneshot, std::function<void(std::shared_ptr<Monitor>)> callback):
+	_fd(descriptor),
+	_event(event),
+	_events((uint32_t)event | (oneshot ? EPOLLONESHOT : 0) | (edgeTriggered ? EPOLLET : 0)),
+	_callback(callback),
+	_server(nullptr)
+	{};
+
+void DarlingServer::Monitor::enable(bool edgeTriggered, bool oneshot) {
+	std::unique_lock lock(_lock);
+
+	if (!_server) {
+		return;
+	}
+
+	_events = (uint32_t)_event;
+
+	if (edgeTriggered) {
+		_events |= EPOLLET;
+	} else {
+		_events &= ~EPOLLET;
+	}
+
+	if (oneshot) {
+		_events |= EPOLLONESHOT;
+	} else {
+		_events &= ~EPOLLONESHOT;
+	}
+
+	struct epoll_event settings;
+	settings.data.ptr = this;
+	settings.events = _events;
+
+	if (epoll_ctl(_server->_epollFD, EPOLL_CTL_MOD, _fd->fd(), &settings) < 0) {
+		throw std::system_error(errno, std::generic_category(), "Failed to modify descriptor in epoll context");
+	}
+};
+
+void DarlingServer::Monitor::disable() {
+	std::unique_lock lock(_lock);
+
+	if (!_server) {
+		return;
+	}
+
+	_events = 0;
+
+	struct epoll_event settings;
+	settings.data.ptr = this;
+	settings.events = _events;
+
+	if (epoll_ctl(_server->_epollFD, EPOLL_CTL_MOD, _fd->fd(), &settings) < 0) {
+		throw std::system_error(errno, std::generic_category(), "Failed to modify descriptor in epoll context");
+	}
 };

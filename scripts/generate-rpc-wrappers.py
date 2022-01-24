@@ -9,9 +9,45 @@ from datetime import datetime
 # NOTE: in Python 3.7+, we can rely on dictionaries having their items in insertion order.
 #       unfortunately, we can't expect everyone building Darling to have Python 3.7+ installed.
 calls = [
-	('checkin', [], []),
+	#
+	# FORMAT:
+	# tuple with 3 members:
+	#   1. call name: the name of the remote procedure
+	#   2. call parameters: the set of parameters callers are expected to provide arguments for.
+	#   3. return parameters: the set of parameters the procedure is expected to return values for.
+	#
+	# each parameter (both for calls and returns) is a tuple with either 2 or 3 members:
+	#   1. parameter name: the name of the parameter (duh)
+	#   2. public type: the type used in the public RPC wrappers
+	#   3. (optional) private type: the type used internally for serialization and for the server implementation.
+	# if the private type (3) is omitted, it is the same as the public type.
+	#
+	# the types that can be used are normal C types. however, to be more architecture-agnostic,
+	# it is recommended to use `stdint.h` types whenever possible (e.g. `int32_t` instead of `int`,
+	# `uint64_t` instead of `unsigned long`, etc.).
+	#
+	# it is VERY IMPORTANT that pointer types ALWAYS have a distinct, fixed-size integral private type
+	# that is wide enough to accommodate pointers for all architectures. a good choice is `uint64_t`;
+	# NOT `uintptr_t`, as its size varies according to the architecture.
+	#
+	# one special type that is supported is `@fd`. this type indicates that the parameter specifies a file descriptor.
+	# it will be treated as an `int` type-wise, but the RPC wrappers will perform some additional work on it
+	# to serialize it across the connection. this works bi-directionally (i.e. both the client and server can send and receive FDs).
+	# the resulting descriptor received on the other end (in either client or server) will behave like a `dup()`ed descriptor.
+	#
+	# TODO: we should probably add a class for these calls (so it's more readable).
+	#       we could even create a DSL (à-la-MIG), but that's probably overkill since
+	#       we only use our RPC for darlingserver calls.
+	#
 
-	('checkout', [], []),
+	('checkin', [
+		('is_fork', 'bool'),
+	], []),
+
+	('checkout', [
+		('exec_listener_pipe', '@fd'),
+		('executing_macho', 'bool'),
+	], []),
 
 	('vchroot_path', [
 		('buffer', 'char*', 'uint64_t'),
@@ -59,7 +95,36 @@ calls = [
 		('notify', 'uint32_t'),
 		('rcv_msg', 'void*', 'uint64_t'),
 		('rcv_limit', 'uint32_t'),
-	], [])
+	], []),
+
+	('mach_port_deallocate', [
+		('task_right_name', 'uint32_t'),
+		('port_right_name', 'uint32_t'),
+	], []),
+
+	('uidgid', [
+		('new_uid', 'int32_t'),
+		('new_gid', 'int32_t'),
+	], [
+		('old_uid', 'int32_t'),
+		('old_gid', 'int32_t'),
+	]),
+
+	('set_thread_handles', [
+		('pthread_handle', 'uint64_t'),
+		('dispatch_qaddr', 'uint64_t'),
+	], []),
+
+	('vchroot', [
+		('directory_fd', '@fd'),
+	], []),
+
+	('mldr_path', [
+		('buffer', 'char*', 'uint64_t'),
+		('buffer_size', 'uint64_t'),
+	], [
+		('length', 'uint64_t'),
+	]),
 ]
 
 def parse_type(param_tuple, is_public):
@@ -459,7 +524,7 @@ for call in calls:
 	library_source.write("\tdserver_rpc_reply_" + call_name + "_t reply;\n")
 
 	if fd_count_in_call > 0 or fd_count_in_reply > 0:
-		library_source.write("\tint fds[" + max(fd_count_in_call, fd_count_in_reply) + "]")
+		library_source.write("\tint fds[" + str(max(fd_count_in_call, fd_count_in_reply)) + "]")
 		if fd_count_in_call > 0:
 			library_source.write(" = { ")
 			is_first = True

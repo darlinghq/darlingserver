@@ -8,6 +8,8 @@ typedef struct dtape_thread {
 	void* context;
 	dtape_mutex_link_t mutex_link;
 	const char* name;
+	uintptr_t pthread_handle;
+	uintptr_t dispatch_qaddr;
 	struct thread xnu_thread;
 } dtape_thread_t;
 

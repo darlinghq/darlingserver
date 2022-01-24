@@ -32,3 +32,11 @@ int dtape_mach_msg_overwrite(uintptr_t msg, int32_t option, uint32_t send_size, 
 	};
 	return mach_msg_overwrite_trap(&args);
 };
+
+int dtape_mach_port_deallocate(uint32_t task_name_right, uint32_t port_name_right) {
+	struct _kernelrpc_mach_port_deallocate_args args = {
+		.target = task_name_right,
+		.name = port_name_right,
+	};
+	return _kernelrpc_mach_port_deallocate_trap(&args);
+};

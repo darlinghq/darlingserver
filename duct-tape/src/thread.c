@@ -89,6 +89,10 @@ void dtape_thread_destroy(dtape_thread_handle_t xthread) {
 	}
 
 	lck_mtx_destroy(&thread->xnu_thread.mutex, LCK_GRP_NULL);
+
+	task_deallocate(thread->xnu_thread.task);
+
+	free(thread);
 };
 
 void dtape_thread_entering(dtape_thread_handle_t thread_handle) {
@@ -99,6 +103,13 @@ void dtape_thread_entering(dtape_thread_handle_t thread_handle) {
 
 void dtape_thread_exiting(dtape_thread_handle_t thread_handle) {
 	dtape_thread_t* thread = thread_handle;
+};
+
+void dtape_thread_set_handles(dtape_thread_handle_t thread_handle, uintptr_t pthread_handle, uintptr_t dispatch_qaddr) {
+	dtape_thread_t* thread = thread_handle;
+
+	thread->pthread_handle = pthread_handle;
+	thread->dispatch_qaddr = dispatch_qaddr;
 };
 
 thread_t current_thread(void) {

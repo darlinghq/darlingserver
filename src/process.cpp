@@ -26,14 +26,18 @@
 
 #include <fstream>
 
+static DarlingServer::Log processLog("process");
+
 DarlingServer::Process::Process(ID id, NSID nsid):
 	_pid(id),
 	_nspid(nsid)
 {
-	_pidfd = syscall(SYS_pidfd_open, _pid, 0);
-	if (_pidfd < 0) {
+	int pidfd = syscall(SYS_pidfd_open, _pid, 0);
+	if (pidfd < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to open pidfd for process");
 	}
+
+	_pidfd = std::make_shared<FD>(pidfd);
 
 	// we could use stat instead of status, but it's more complicated with comm potentially getting in the way of parsing (it can include whitespace and parentheses)
 	std::ifstream statusFile("/proc/" + std::to_string(id) + "/status");
@@ -63,24 +67,33 @@ DarlingServer::Process::Process(ID id, NSID nsid):
 		}
 	}
 
+	if (parentProcess) {
+		std::shared_lock parentLock(parentProcess->_rwlock);
+
+		// inherit vchroot from parent process
+		_vchrootDescriptor = parentProcess->_vchrootDescriptor;
+		_cachedVchrootPath = parentProcess->_cachedVchrootPath;
+	}
+
 	// NOTE: see thread.cpp for why it's okay to use `this` here
 	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this);
 };
 
 DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 	_pid(-1),
-	_nspid(0),
-	_pidfd(-1)
+	_nspid(0)
 {
 	_dtapeTask = dtape_task_create(nullptr, _nspid, this);
 };
 
 DarlingServer::Process::~Process() {
-	close(_pidfd);
-
 	_unregisterThreads();
 
-	dtape_task_destroy(_dtapeTask);
+	// schedule the duct-taped task to be destroyed
+	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
+	Thread::_kernelAsync([dtapeTask = _dtapeTask]() {
+		dtape_task_destroy(dtapeTask);
+	});
 };
 
 void DarlingServer::Process::_unregisterThreads() {
@@ -120,12 +133,26 @@ std::vector<std::shared_ptr<DarlingServer::Thread>> DarlingServer::Process::thre
 
 std::string DarlingServer::Process::vchrootPath() const {
 	std::shared_lock lock(_rwlock);
-	return _vchrootPath;
+	return _cachedVchrootPath;
 };
 
-void DarlingServer::Process::setVchrootPath(std::string path) {
+void DarlingServer::Process::setVchrootDirectory(std::shared_ptr<FD> directoryDescriptor) {
 	std::unique_lock lock(_rwlock);
-	_vchrootPath = path;
+	_vchrootDescriptor = directoryDescriptor;
+
+	char* tmp = new char[4096];
+
+	auto fdPath = "/proc/self/fd/" + std::to_string(_vchrootDescriptor->fd());
+	auto len = readlink(fdPath.c_str(), tmp, 4095);
+
+	if (len < 0) {
+		throw std::system_error(errno, std::generic_category(), "readlink");
+	}
+
+	tmp[len] = '\0';
+
+	_cachedVchrootPath = std::string(tmp);
+	delete[] tmp;
 };
 
 std::shared_ptr<DarlingServer::Process> DarlingServer::Process::currentProcess() {
@@ -221,4 +248,55 @@ bool DarlingServer::Process::readMemory(uintptr_t remoteAddress, void* localBuff
 bool DarlingServer::Process::writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode) const {
 	// the const_cast is safe; when writing to a process' memory, localBuffer is not modified
 	return _readOrWriteMemory(true, remoteAddress, const_cast<void*>(localBuffer), length, errorCode);
+};
+
+void DarlingServer::Process::notifyCheckin() {
+	std::unique_lock lock(_rwlock);
+
+	if (_pendingReplacement) {
+		processLog.info() << "Replacing process " << id() << " (" << nsid() << ") with a new task" << processLog.endLog;
+
+		// also, clear all threads except the main thread
+		// (see _unregisterThreads)
+		std::shared_ptr<Thread> mainThread = nullptr;
+		while (!_threads.empty()) {
+			auto thread = _threads.back().lock();
+			lock.unlock();
+			if (thread) {
+				if (thread->_nstid == _nspid) {
+					mainThread = thread;
+				} else {
+					thread->_process = std::weak_ptr<Process>();
+					threadRegistry().unregisterEntry(thread);
+				}
+			}
+			lock.lock();
+			_threads.pop_back();
+		}
+		if (!mainThread) {
+			throw std::runtime_error("Main thread for process died?");
+		}
+		_threads.push_back(mainThread);
+
+		// destroy the main thread's old duct-taped thread
+		dtape_thread_destroy(mainThread->_dtapeThread);
+
+		// repace the old task with a new task that inherits from it
+		auto oldTask = _dtapeTask;
+		_dtapeTask = dtape_task_create(oldTask, _nspid, this);
+		dtape_task_destroy(oldTask);
+
+		// now replace the main thread's duct-taped thread with a new one
+		mainThread->_dtapeThread = dtape_thread_create(_dtapeTask, mainThread->_nstid, mainThread.get());
+	}
+
+	_pendingReplacement = false;
+};
+
+void DarlingServer::Process::setPendingReplacement() {
+	std::unique_lock lock(_rwlock);
+
+	processLog.info() << "Process " << id() << " (" << nsid() << ") is now pending replacement" << processLog.endLog;
+
+	_pendingReplacement = true;
 };

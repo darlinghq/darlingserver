@@ -119,10 +119,6 @@ add_compile_definitions(
 	_CLOCK_T=1
 	NO_KDEBUG=1
 	CONFIG_IPC_KERNEL_MAP_SIZE=64
-
-	# for debugging
-	CONFIG_WAITQ_DEBUG=1
-	WAITQ_VERBOSE_DEBUG=1
 )
 
 add_compile_options(

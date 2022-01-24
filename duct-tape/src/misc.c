@@ -14,6 +14,7 @@
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_pset.h>
 #include <kern/host.h>
+#include <kern/sync_sema.h>
 
 #include <sys/types.h>
 
@@ -29,6 +30,8 @@ void mig_init(void);
 void host_notify_init(void);
 void user_data_attr_manager_init(void);
 void ipc_voucher_init(void);
+
+extern zone_t semaphore_zone;
 
 void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
 	char message[4096];
@@ -54,6 +57,7 @@ void dtape_init(const dtape_hooks_t* hooks) {
 
 	ipc_space_zone = zone_create("ipc spaces", sizeof(struct ipc_space), ZC_NOENCRYPT);
 	ipc_kmsg_zone = zone_create("ipc kmsgs", IKM_SAVED_KMSG_SIZE, ZC_CACHING | ZC_ZFREE_CLEARMEM);
+	semaphore_zone = zone_create("semaphores", sizeof(struct semaphore), ZC_NONE);
 
 	ipc_object_zones[IOT_PORT] = zone_create("ipc ports", sizeof(struct ipc_port), ZC_NOENCRYPT | ZC_CACHING | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
 	ipc_object_zones[IOT_PORT_SET] = zone_create("ipc port sets", sizeof(struct ipc_pset), ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);

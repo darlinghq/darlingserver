@@ -27,27 +27,32 @@
 #include <shared_mutex>
 
 #include <darlingserver/duct-tape.h>
+#include <darlingserver/utility.hpp>
 
 struct DTapeHooks;
 
 namespace DarlingServer {
 	class Thread;
 	class Server;
+	class Call;
 
 	class Process {
 		friend class Thread;
 		friend class Server;
+		friend class Call; // HACK; see Call.cpp
 
 	private:
 		pid_t _pid;
 		pid_t _nspid;
-		int _pidfd;
+		std::shared_ptr<FD> _pidfd;
 		mutable std::shared_mutex _rwlock;
 		std::vector<std::weak_ptr<Thread>> _threads;
-		std::string _vchrootPath;
+		std::string _cachedVchrootPath;
+		std::shared_ptr<FD> _vchrootDescriptor;
 		dtape_task_handle_t _dtapeTask;
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
+		bool _pendingReplacement = false;
 
 		void _unregisterThreads();
 
@@ -83,7 +88,7 @@ namespace DarlingServer {
 		std::vector<std::shared_ptr<Thread>> threads() const;
 
 		std::string vchrootPath() const;
-		void setVchrootPath(std::string path);
+		void setVchrootDirectory(std::shared_ptr<FD> directoryDescriptor);
 
 		std::shared_ptr<Process> parentProcess() const;
 
@@ -92,6 +97,9 @@ namespace DarlingServer {
 
 		bool readMemory(uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode = nullptr) const;
 		bool writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode = nullptr) const;
+
+		void notifyCheckin();
+		void setPendingReplacement();
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

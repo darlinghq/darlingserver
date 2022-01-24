@@ -133,6 +133,12 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 		throw std::system_error(errno, std::generic_category());
 	}
 
+	// schedule the duct-taped thread to be destroyed
+	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
+	_kernelAsync([dtapeThread = _dtapeThread]() {
+		dtape_thread_destroy(dtapeThread);
+	});
+
 	auto process = _process.lock();
 	if (!process) {
 		// the process is unregistering us
@@ -152,8 +158,6 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 		throw std::runtime_error("Thread was not registered with Process");
 	}
 	process->_threads.erase(it);
-
-	dtape_thread_destroy(_dtapeThread);
 };
 
 DarlingServer::Thread::ID DarlingServer::Thread::id() const {
@@ -189,6 +193,10 @@ DarlingServer::Address DarlingServer::Thread::address() const {
 void DarlingServer::Thread::setAddress(Address address) {
 	std::unique_lock lock(_rwlock);
 	_address = address;
+};
+
+void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress) {
+	dtape_thread_set_handles(_dtapeThread, pthreadHandle, dispatchQueueAddress);
 };
 
 /*
@@ -335,6 +343,7 @@ void DarlingServer::Thread::resume() {
 	_rwlock.lock_shared();
 	if (!_suspended) {
 		// maybe we should throw an error here?
+		_rwlock.unlock_shared();
 		return;
 	}
 	_rwlock.unlock_shared();
@@ -396,4 +405,46 @@ void DarlingServer::Thread::interruptEnable() {
 	if (interruptDisableCount-- == 0) {
 		throw std::runtime_error("interruptEnable() called when already enabled");
 	}
+};
+
+static std::queue<std::function<void()>> kernelAsyncRunnerQueue;
+
+// we have to use a regular lock here because it needs to be lockable from both a microthread and normal thread context.
+// additionally, it's only locked for brief periods.
+//
+// we use libsimple_lock_t so we can pass it to `suspend` to unlock it after suspending.
+// XXX: we could use a std::mutex if we add an overload to `suspend` for it.
+static libsimple_lock_t kernelAsyncRunnerQueueLock;
+
+static void kernelAsyncRunnerThreadWorker(dtape_thread_handle_t dthread) {
+	while (true) {
+		libsimple_lock_lock(&kernelAsyncRunnerQueueLock);
+
+		if (kernelAsyncRunnerQueue.empty()) {
+			// unlocks the lock
+			DarlingServer::Thread::currentThread()->suspend(nullptr, &kernelAsyncRunnerQueueLock);
+			continue;
+		}
+
+		auto func = kernelAsyncRunnerQueue.front();
+		kernelAsyncRunnerQueue.pop();
+
+		libsimple_lock_unlock(&kernelAsyncRunnerQueueLock);
+
+		func();
+	}
+};
+
+void DarlingServer::Thread::_kernelAsync(std::function<void()> fn) {
+	// TODO: this could scale up depending on the size of the queue (like XNU's thread calls)
+	static auto runnerThread = []() {
+		auto thread = std::make_shared<Thread>(KernelThreadConstructorTag());
+		thread->_startKernelThread(kernelAsyncRunnerThreadWorker);
+		return thread;
+	}();
+
+	libsimple_lock_lock(&kernelAsyncRunnerQueueLock);
+	kernelAsyncRunnerQueue.push(fn);
+	runnerThread->resume(); // resume the runner (it's most likely suspended waiting for work)
+	libsimple_lock_unlock(&kernelAsyncRunnerQueueLock);
 };
