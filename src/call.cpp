@@ -26,6 +26,7 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/config.hpp>
 #include <sys/fcntl.h>
+#include <sys/syscall.h>
 
 static DarlingServer::Log callLog("calls");
 
@@ -373,14 +374,6 @@ void DarlingServer::Call::GetTracer::processCall() {
 	_sendReply(code, tracer);
 };
 
-void DarlingServer::Call::MachMsgOverwrite::processCall() {
-	_sendReply(dtape_mach_msg_overwrite(_body.msg, _body.option, _body.send_size, _body.rcv_size, _body.rcv_name, _body.timeout, _body.notify, _body.rcv_msg, _body.rcv_limit));
-};
-
-void DarlingServer::Call::MachPortDeallocate::processCall() {
-	_sendReply(dtape_mach_port_deallocate(_body.task_right_name, _body.port_right_name));
-};
-
 void DarlingServer::Call::Uidgid::processCall() {
 	int code = 0;
 	int uid = -1;
@@ -461,3 +454,53 @@ void DarlingServer::Call::MldrPath::processCall() {
 
 	_sendReply(code, fullLength);
 };
+
+void DarlingServer::Call::ThreadGetSpecialReplyPort::processCall() {
+	_sendReply(0, dtape_thread_get_special_reply_port());
+};
+
+void DarlingServer::Call::MkTimerCreate::processCall() {
+	_sendReply(0, dtape_mk_timer_create());
+};
+
+void DarlingServer::Call::PthreadKill::processCall() {
+	int code = 0;
+
+	if (auto targetThread = Thread::threadForPort(_body.thread_port)) {
+		if (auto targetProcess = targetThread->process()) {
+			if (syscall(SYS_tgkill, targetProcess->id(), targetThread->id(), _body.signal) < 0) {
+				code = -errno;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::PthreadCanceled::processCall() {
+	int code = 0;
+
+	callLog.error() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
+	code = -ENOSYS;
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::PthreadMarkcancel::processCall() {
+	int code = 0;
+
+	if (auto targetThread = Thread::threadForPort(_body.thread_port)) {
+		callLog.error() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
+		code = -ENOSYS;
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+DSERVER_CLASS_SOURCE_DEFS;

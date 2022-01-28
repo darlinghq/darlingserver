@@ -6,22 +6,31 @@ from collections import OrderedDict
 import textwrap
 from datetime import datetime
 
+XNU_TRAP_CALL          = 1 << 0
+XNU_TRAP_NOPREFIX      = 1 << 1
+XNU_TRAP_NOSUFFIX      = 1 << 2
+XNU_TRAP_NOSUFFIX_ARGS = 1 << 3
+
 # NOTE: in Python 3.7+, we can rely on dictionaries having their items in insertion order.
 #       unfortunately, we can't expect everyone building Darling to have Python 3.7+ installed.
 calls = [
 	#
 	# FORMAT:
-	# tuple with 3 members:
+	# tuple with either 3 or 4 members:
 	#   1. call name: the name of the remote procedure
 	#   2. call parameters: the set of parameters callers are expected to provide arguments for.
 	#   3. return parameters: the set of parameters the procedure is expected to return values for.
+	#   4. flags: an optional set of flags that modify how this call is processed and wrapped.
+	# if the set of flags (4) is omitted, it defaults to 0.
 	#
+	# PARAMETERS:
 	# each parameter (both for calls and returns) is a tuple with either 2 or 3 members:
 	#   1. parameter name: the name of the parameter (duh)
 	#   2. public type: the type used in the public RPC wrappers
 	#   3. (optional) private type: the type used internally for serialization and for the server implementation.
 	# if the private type (3) is omitted, it is the same as the public type.
 	#
+	# TYPES:
 	# the types that can be used are normal C types. however, to be more architecture-agnostic,
 	# it is recommended to use `stdint.h` types whenever possible (e.g. `int32_t` instead of `int`,
 	# `uint64_t` instead of `unsigned long`, etc.).
@@ -30,10 +39,15 @@ calls = [
 	# that is wide enough to accommodate pointers for all architectures. a good choice is `uint64_t`;
 	# NOT `uintptr_t`, as its size varies according to the architecture.
 	#
+	# SPECIAL TYPES:
 	# one special type that is supported is `@fd`. this type indicates that the parameter specifies a file descriptor.
 	# it will be treated as an `int` type-wise, but the RPC wrappers will perform some additional work on it
 	# to serialize it across the connection. this works bi-directionally (i.e. both the client and server can send and receive FDs).
 	# the resulting descriptor received on the other end (in either client or server) will behave like a `dup()`ed descriptor.
+	#
+	# FLAGS:
+	# currently, the only flag that can be passed is XNU_TRAP_CALL. this indicates that the given call is actually an XNU trap.
+	# this enables more advanced wrappers to be generated for that call and avoid unnecessary boilerplate code on the server side.
 	#
 	# TODO: we should probably add a class for these calls (so it's more readable).
 	#       we could even create a DSL (à-la-MIG), but that's probably overkill since
@@ -56,22 +70,6 @@ calls = [
 		('length', 'uint64_t'),
 	]),
 
-	('task_self_trap', [], [
-		('port_name', 'uint32_t'),
-	]),
-
-	('host_self_trap', [], [
-		('port_name', 'uint32_t'),
-	]),
-
-	('thread_self_trap', [], [
-		('port_name', 'uint32_t'),
-	]),
-
-	('mach_reply_port', [], [
-		('port_name', 'uint32_t'),
-	]),
-
 	('kprintf', [
 		('string', 'const char*', 'uint64_t'),
 		('string_length', 'uint64_t'),
@@ -84,23 +82,6 @@ calls = [
 	('get_tracer', [], [
 		('tracer', 'uint32_t'),
 	]),
-
-	('mach_msg_overwrite', [
-		('msg', 'void*', 'uint64_t'),
-		('option', 'int32_t'),
-		('send_size', 'uint32_t'),
-		('rcv_size', 'uint32_t'),
-		('rcv_name', 'uint32_t'),
-		('timeout', 'uint32_t'),
-		('notify', 'uint32_t'),
-		('rcv_msg', 'void*', 'uint64_t'),
-		('rcv_limit', 'uint32_t'),
-	], []),
-
-	('mach_port_deallocate', [
-		('task_right_name', 'uint32_t'),
-		('port_right_name', 'uint32_t'),
-	], []),
 
 	('uidgid', [
 		('new_uid', 'int32_t'),
@@ -125,6 +106,246 @@ calls = [
 	], [
 		('length', 'uint64_t'),
 	]),
+
+	#
+	# pthread cancelation
+	#
+
+	('pthread_kill', [
+		('thread_port', 'uint32_t'),
+		('signal', 'int32_t'),
+	], []),
+
+	('pthread_canceled', [
+		('action', 'int32_t'),
+	], []),
+
+	('pthread_markcancel', [
+		('thread_port', 'uint32_t'),
+	], []),
+
+	#
+	# Mach IPC traps
+	#
+
+	('task_self_trap', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('host_self_trap', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('thread_self_trap', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('mach_reply_port', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('thread_get_special_reply_port', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('mach_msg_overwrite', [
+		('msg', 'void*', 'uint64_t'),
+		('option', 'int32_t'),
+		('send_size', 'uint32_t'),
+		('rcv_size', 'uint32_t'),
+		('rcv_name', 'uint32_t'),
+		('timeout', 'uint32_t'),
+		('priority', 'uint32_t'),
+		('rcv_msg', 'void*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('mach_port_deallocate', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_allocate', [
+		('target', 'uint32_t'),
+		('right', 'int32_t'),
+
+		# this would be better as a return parameter,
+		# but due to the way darlingserver handles Mach IPC calls,
+		# we need a pointer into the calling process's memory
+		('name', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_mod_refs', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('right', 'int32_t'),
+		('delta', 'int32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_move_member', [
+		('target', 'uint32_t'),
+		('member', 'uint32_t'),
+		('after', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_insert_right', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('poly', 'uint32_t'),
+		('polyPoly', 'int32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_insert_member', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('pset', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_extract_member', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('pset', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_construct', [
+		('target', 'uint32_t'),
+		('options', 'void*', 'uint64_t'),
+		('context', 'uint64_t'),
+		('name', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_destruct', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('srdelta', 'int32_t'),
+		('guard', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_guard', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('guard', 'uint64_t'),
+		('strict', 'bool'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_unguard', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('guard', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_request_notification', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('msgid', 'int32_t'),
+		('sync', 'uint32_t'),
+		('notify', 'uint32_t'),
+		('notifyPoly', 'uint32_t'),
+		('previous', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_get_attributes', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('flavor', 'int32_t'),
+		('info', 'void*', 'uint64_t'),
+		('count', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('mach_port_type', [
+		('target', 'uint32_t'),
+		('name', 'uint32_t'),
+		('ptype', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	('task_for_pid', [
+		('target_tport', 'uint32_t'),
+		('pid', 'int32_t'),
+		('t', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
+
+	('task_name_for_pid', [
+		('target_tport', 'uint32_t'),
+		('pid', 'int32_t'),
+		('t', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
+
+	('pid_for_task', [
+		('t', 'uint32_t'),
+		('pid', 'int32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
+
+	#
+	# Mach VM traps
+	#
+
+	('mach_vm_allocate', [
+		('target', 'uint32_t'),
+		('addr', 'uint64_t*', 'uint64_t'),
+		('size', 'uint64_t'),
+		('flags', 'int32_t'),
+	], [], XNU_TRAP_CALL),
+
+	('mach_vm_deallocate', [
+		('target', 'uint32_t'),
+		('address', 'uint64_t'),
+		('size', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOSUFFIX_ARGS),
+
+	#
+	# Mach semaphore traps
+	#
+
+	('semaphore_signal', [
+		('signal_name', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('semaphore_signal_all', [
+		('signal_name', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('semaphore_wait', [
+		('wait_name', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('semaphore_wait_signal', [
+		('wait_name', 'uint32_t'),
+		('signal_name', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('semaphore_timedwait', [
+		('wait_name', 'uint32_t'),
+		('sec', 'uint32_t'),
+		('nsec', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('semaphore_timedwait_signal', [
+		('wait_name', 'uint32_t'),
+		('signal_name', 'uint32_t'),
+		('sec', 'uint32_t'),
+		('nsec', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	#
+	# mk_timer traps
+	#
+
+	('mk_timer_create', [], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('mk_timer_destroy', [
+		('name', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('mk_timer_arm', [
+		('name', 'uint32_t'),
+		('expire_time', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	('mk_timer_cancel', [
+		('name', 'uint32_t'),
+		('result_time', 'uint64_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
 ]
 
 def parse_type(param_tuple, is_public):
@@ -408,6 +629,112 @@ for call in calls:
 	internal_header.write("\t\t\t_replyQueue.push(std::move(reply)); \\\n")
 	internal_header.write("\t\t}; \\\n")
 
+	internal_header.write("\t}; \\\n")
+internal_header.write("\n")
+
+internal_header.write("#define DSERVER_CLASS_SOURCE_DEFS \\\n")
+for call in calls:
+	call_name = call[0]
+	call_parameters = call[1]
+	reply_parameters = call[2]
+	flags = call[3] if len(call) >= 4 else 0
+	camel_name = to_camel_case(call_name)
+
+	if (flags & XNU_TRAP_CALL) == 0:
+		continue
+
+	# XNU traps return values by writing directly to the calling process's memory at the addresses given as regular call parameters
+	if len(reply_parameters) > 0:
+		raise RuntimeError("Call marked as an XNU trap has reply parameters")
+
+	internal_header.write("\tvoid DarlingServer::Call::{0}::processCall() {{ \\\n".format(camel_name))
+	internal_header.write("\t\t_sendReply(dtape_{0}(".format(call_name))
+
+	is_first = True
+	for param in call_parameters:
+		param_name = param[0]
+
+		if is_first:
+			is_first = False
+		else:
+			internal_header.write(", ")
+
+		internal_header.write("_body.{0}".format(param_name))
+
+	internal_header.write(")); \\\n")
+	internal_header.write("\t}; \\\n")
+internal_header.write("\n")
+
+internal_header.write("#define DSERVER_DTAPE_DECLS \\\n")
+for call in calls:
+	call_name = call[0]
+	call_parameters = call[1]
+	flags = call[3] if len(call) >= 4 else 0
+	camel_name = to_camel_case(call_name)
+
+	if (flags & XNU_TRAP_CALL) == 0:
+		continue
+
+	internal_header.write("\tint dtape_{0}(".format(call_name))
+
+	is_first = True
+	for param in call_parameters:
+		param_name = param[0]
+
+		if is_first:
+			is_first = False
+		else:
+			internal_header.write(", ")
+
+		internal_header.write("{0} {1}".format(parse_type(param, False), param_name))
+
+	internal_header.write("); \\\n")
+internal_header.write("\n")
+
+internal_header.write("#define DSERVER_DTAPE_DEFS \\\n")
+for call in calls:
+	call_name = call[0]
+	call_parameters = call[1]
+	flags = call[3] if len(call) >= 4 else 0
+	camel_name = to_camel_case(call_name)
+
+	if (flags & XNU_TRAP_CALL) == 0:
+		continue
+
+	trap_name = call_name
+	if (flags & XNU_TRAP_NOPREFIX) == 0:
+		trap_name = "_kernelrpc_" + trap_name
+	if (flags & XNU_TRAP_NOSUFFIX) == 0:
+		trap_name = trap_name + "_trap"
+
+	trap_args_name = call_name
+	if (flags & XNU_TRAP_NOPREFIX) == 0:
+		trap_args_name = "_kernelrpc_" + trap_args_name
+	if (flags & (XNU_TRAP_NOSUFFIX | XNU_TRAP_NOSUFFIX_ARGS)) == 0:
+		trap_args_name = trap_args_name + "_trap"
+
+	internal_header.write("\tint dtape_{0}(".format(call_name))
+
+	is_first = True
+	for param in call_parameters:
+		param_name = param[0]
+
+		if is_first:
+			is_first = False
+		else:
+			internal_header.write(", ")
+
+		internal_header.write("{0} {1}".format(parse_type(param, False), param_name))
+
+	internal_header.write(") { \\\n")
+	internal_header.write("\t\tstruct {0}_args args = {{ \\\n".format(trap_args_name))
+
+	for param in call_parameters:
+		param_name = param[0]
+		internal_header.write("\t\t\t.{0} = {0}, \\\n".format(param_name))
+
+	internal_header.write("\t\t}; \\\n")
+	internal_header.write("\t\treturn {0}(&args); \\\n".format(trap_name))
 	internal_header.write("\t}; \\\n")
 internal_header.write("\n")
 

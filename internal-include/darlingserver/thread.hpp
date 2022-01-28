@@ -118,6 +118,13 @@ namespace DarlingServer {
 		void setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress);
 
 		static std::shared_ptr<Thread> currentThread();
+
+		/**
+		 * Returns the Thread that corresponds to the given thread port in the current port space.
+		 *
+		 * @note This function may only be called from a microthread context.
+		 */
+		static std::shared_ptr<Thread> threadForPort(uint32_t thread_port);
 	};
 };
 

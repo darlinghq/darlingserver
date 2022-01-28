@@ -112,6 +112,24 @@ void dtape_thread_set_handles(dtape_thread_handle_t thread_handle, uintptr_t pth
 	thread->dispatch_qaddr = dispatch_qaddr;
 };
 
+dtape_thread_handle_t dtape_thread_for_port(uint32_t thread_port) {
+	thread_t xnu_thread = port_name_to_thread(thread_port, PORT_TO_THREAD_NONE);
+	if (!xnu_thread) {
+		return xnu_thread;
+	}
+	// port_name_to_thread returns a reference on the thread upon success.
+	// because we cannot take a reference on the duct-taped thread owner,
+	// this reference is meaningless. therefore, we drop it.
+	// we entrust our caller with the responsibility of ensuring it remains alive.
+	thread_deallocate(xnu_thread);
+	return dtape_thread_for_xnu_thread(xnu_thread);
+};
+
+void* dtape_thread_context(dtape_thread_handle_t thread_handle) {
+	dtape_thread_t* thread = thread_handle;
+	return thread->context;
+};
+
 thread_t current_thread(void) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
 	return &thread->xnu_thread;
@@ -349,6 +367,14 @@ kern_return_t thread_suspend(thread_t thread) {
 };
 
 kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wired) {
+	dtape_stub_unsafe();
+};
+
+void thread_handoff_parameter(thread_t thread, thread_continue_t continuation, void *parameter, thread_handoff_option_t option) {
+	dtape_stub_unsafe();
+};
+
+wait_result_t thread_handoff_deallocate(thread_t thread, thread_handoff_option_t option) {
 	dtape_stub_unsafe();
 };
 

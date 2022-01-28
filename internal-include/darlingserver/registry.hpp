@@ -40,7 +40,7 @@ namespace DarlingServer {
 	private:
 		std::unordered_map<typename Entry::ID, std::shared_ptr<Entry>> _map;
 		std::unordered_map<typename Entry::NSID, std::shared_ptr<Entry>> _nsmap;
-		std::shared_mutex _rwlock;
+		mutable std::shared_mutex _rwlock;
 
 		// sometimes, the factory used with registerIfAbsent needs to be able to look up other entries
 		// (and the factory is called with the lock held, so trying to acquire the lock again would be a deadlock)
@@ -175,6 +175,34 @@ namespace DarlingServer {
 			}
 
 			return (*it2).second;
+		};
+
+		/**
+		 * Locks the registry, preventing new entries from being added and old ones from being removed.
+		 *
+		 * This should be used very sparingly; you almost certainly don't want to use this.
+		 * The primary use case for this is preventing an entry from being removed while it is being used
+		 * in a situation where taking its shared_ptr is not possible.
+		 *
+		 * Every call to this method MUST be balanced with a call to unlock().
+		 */
+		void lock() const {
+			_rwlock.lock();
+		};
+
+		void unlock() const {
+			_rwlock.unlock();
+		};
+
+		using ScopedLock = std::unique_lock<std::shared_mutex>;
+
+		/**
+		 * Locks the registry like lock(), but employs the RAII idiom to automatically unlock it at the end of the scope.
+		 *
+		 * Scoped locks can also be manually unlocked earlier.
+		 */
+		ScopedLock scopedLock() const {
+			return ScopedLock(_rwlock);
 		};
 	};
 

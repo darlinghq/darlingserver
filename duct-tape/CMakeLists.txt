@@ -322,6 +322,7 @@ add_library(darlingserver_duct_tape
 
 target_include_directories(darlingserver_duct_tape PRIVATE
 	internal-include
+	${CMAKE_CURRENT_BINARY_DIR}/../internal-include
 )
 
 target_include_directories(darlingserver_duct_tape PUBLIC
@@ -330,6 +331,7 @@ target_include_directories(darlingserver_duct_tape PUBLIC
 
 add_dependencies(darlingserver_duct_tape
 	kernel_mig_generate
+	generate_dserver_rpc_wrappers
 )
 
 target_link_libraries(darlingserver_duct_tape PUBLIC

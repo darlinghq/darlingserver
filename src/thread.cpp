@@ -49,6 +49,8 @@ static thread_local libsimple_lock_t* unlockMeWhenSuspending = nullptr;
  */
 static thread_local uint64_t interruptDisableCount = 0;
 
+static DarlingServer::Log threadLog("thread");
+
 DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 	_nstid(nsid),
 	_process(process)
@@ -96,6 +98,8 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 
 	// NOTE: it's okay to use raw `this` without a shared pointer because the duct-taped thread will always live for less time than this Thread instance
 	_dtapeThread = dtape_thread_create(process->_dtapeTask, _nstid, this);
+
+	threadLog.info() << "New thread created with ID " << _tid << " and NSID " << _nstid << " for process with ID " << (process ? process->id() : -1) << " and NSID " << (process ? process->nsid() : -1);
 };
 
 DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
@@ -447,4 +451,21 @@ void DarlingServer::Thread::_kernelAsync(std::function<void()> fn) {
 	kernelAsyncRunnerQueue.push(fn);
 	runnerThread->resume(); // resume the runner (it's most likely suspended waiting for work)
 	libsimple_lock_unlock(&kernelAsyncRunnerQueueLock);
+};
+
+std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::threadForPort(uint32_t thread_port) {
+	// prevent the target thread from dying by taking the global thread registry lock
+	auto registryLock = threadRegistry().scopedLock();
+
+	dtape_thread_handle_t thread_handle = dtape_thread_for_port(thread_port);
+	if (!thread_handle) {
+		return nullptr;
+	}
+
+	Thread* thread = static_cast<Thread*>(dtape_thread_context(thread_handle));
+	if (!thread) {
+		return nullptr;
+	}
+
+	return thread->shared_from_this();
 };

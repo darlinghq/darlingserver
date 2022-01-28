@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include <libsimple/lock.h>
+#include <darlingserver/rpc.internal.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,8 +71,10 @@ uint32_t dtape_task_self_trap(void);
 uint32_t dtape_host_self_trap(void);
 uint32_t dtape_thread_self_trap(void);
 uint32_t dtape_mach_reply_port(void);
-int dtape_mach_msg_overwrite(uintptr_t msg, int32_t option, uint32_t send_size, uint32_t rcv_size, uint32_t rcv_name, uint32_t timeout, uint32_t notify, uintptr_t rcv_msg, uint32_t rcv_limit);
-int dtape_mach_port_deallocate(uint32_t task_name_right, uint32_t port_name_right);
+uint32_t dtape_thread_get_special_reply_port(void);
+uint32_t dtape_mk_timer_create(void);
+
+DSERVER_DTAPE_DECLS;
 
 /**
  * The threshold beyond which thread IDs are considered IDs for kernel threads.
@@ -106,6 +109,14 @@ void dtape_thread_destroy(dtape_thread_handle_t thread);
 void dtape_thread_entering(dtape_thread_handle_t thread);
 void dtape_thread_exiting(dtape_thread_handle_t thread);
 void dtape_thread_set_handles(dtape_thread_handle_t thread, uintptr_t pthread_handle, uintptr_t dispatch_qaddr);
+/**
+ * Returns the thread corresponding to the given thread port.
+ *
+ * @warning It is VERY important that the caller ensures the thread cannot die while we're looking it up.
+ *          This can be accomplished, for example, by locking the global thread list before the call.
+ */
+dtape_thread_handle_t dtape_thread_for_port(uint32_t thread_port);
+void* dtape_thread_context(dtape_thread_handle_t thread);
 
 void dtape_task_uidgid(dtape_task_handle_t task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 

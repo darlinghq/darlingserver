@@ -9,6 +9,7 @@
 #include <ipc/ipc_importance.h>
 #include <kern/restartable.h>
 #include <kern/sync_sema.h>
+#include <mach/mach_traps.h>
 
 #include <stdlib.h>
 
@@ -330,6 +331,18 @@ kern_return_t task_threads_from_user(mach_port_t port, thread_act_array_t* threa
 };
 
 kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t task_for_pid(struct task_for_pid_args* args) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t task_name_for_pid(struct task_name_for_pid_args* args) {
+	dtape_stub_unsafe();
+};
+
+kern_return_t pid_for_task(struct pid_for_task_args* args) {
 	dtape_stub_unsafe();
 };
 

@@ -77,6 +77,8 @@ DarlingServer::Process::Process(ID id, NSID nsid):
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
 	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this);
+
+	processLog.info() << "New process created with ID " << _pid << " and NSID " << _nspid;
 };
 
 DarlingServer::Process::Process(KernelProcessConstructorTag tag):
