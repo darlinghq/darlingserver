@@ -31,6 +31,8 @@ void host_notify_init(void);
 void user_data_attr_manager_init(void);
 void ipc_voucher_init(void);
 
+void dtape_timer_init(void);
+
 extern zone_t semaphore_zone;
 
 void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
@@ -63,6 +65,11 @@ void dtape_init(const dtape_hooks_t* hooks) {
 	ipc_object_zones[IOT_PORT_SET] = zone_create("ipc port sets", sizeof(struct ipc_pset), ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
 
 	lck_mtx_init(&realhost.lock, LCK_GRP_NULL, LCK_ATTR_NULL);
+
+	dtape_timer_init();
+
+	dtape_log_debug("timer_call_init");
+	timer_call_init();
 
 	dtape_log_debug("ipc_table_init");
 	ipc_table_init();

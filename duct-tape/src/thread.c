@@ -20,8 +20,7 @@ const qos_policy_params_t thread_qos_policy_params;
 // stub
 int thread_max = CONFIG_THREAD_MAX;
 
-dtape_thread_handle_t dtape_thread_create(dtape_task_handle_t xtask, uint64_t nsid, void* context) {
-	dtape_task_t* task = xtask;
+dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* context) {
 	dtape_thread_t* thread = malloc(sizeof(dtape_thread_t));
 	if (!thread) {
 		return NULL;
@@ -66,12 +65,12 @@ dtape_thread_handle_t dtape_thread_create(dtape_task_handle_t xtask, uint64_t ns
 
 	thread->xnu_thread.map = task->xnu_task.map;
 
+	timer_call_setup(&thread->xnu_thread.wait_timer, thread_timer_expire, &thread->xnu_thread);
+
 	return thread;
 };
 
-void dtape_thread_destroy(dtape_thread_handle_t xthread) {
-	dtape_thread_t* thread = xthread;
-
+void dtape_thread_destroy(dtape_thread_t* thread) {
 	if (os_ref_release(&thread->xnu_thread.ref_count) != 0) {
 		panic("Duct-taped thread over-retained or still in-use at destruction");
 	}
@@ -95,27 +94,23 @@ void dtape_thread_destroy(dtape_thread_handle_t xthread) {
 	free(thread);
 };
 
-void dtape_thread_entering(dtape_thread_handle_t thread_handle) {
-	dtape_thread_t* thread = thread_handle;
-
+void dtape_thread_entering(dtape_thread_t* thread) {
 	thread->xnu_thread.state = TH_RUN;
 };
 
-void dtape_thread_exiting(dtape_thread_handle_t thread_handle) {
-	dtape_thread_t* thread = thread_handle;
+void dtape_thread_exiting(dtape_thread_t* thread) {
+	// nothing for now
 };
 
-void dtape_thread_set_handles(dtape_thread_handle_t thread_handle, uintptr_t pthread_handle, uintptr_t dispatch_qaddr) {
-	dtape_thread_t* thread = thread_handle;
-
+void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, uintptr_t dispatch_qaddr) {
 	thread->pthread_handle = pthread_handle;
 	thread->dispatch_qaddr = dispatch_qaddr;
 };
 
-dtape_thread_handle_t dtape_thread_for_port(uint32_t thread_port) {
+dtape_thread_t* dtape_thread_for_port(uint32_t thread_port) {
 	thread_t xnu_thread = port_name_to_thread(thread_port, PORT_TO_THREAD_NONE);
 	if (!xnu_thread) {
-		return xnu_thread;
+		return NULL;
 	}
 	// port_name_to_thread returns a reference on the thread upon success.
 	// because we cannot take a reference on the duct-taped thread owner,
@@ -125,8 +120,7 @@ dtape_thread_handle_t dtape_thread_for_port(uint32_t thread_port) {
 	return dtape_thread_for_xnu_thread(xnu_thread);
 };
 
-void* dtape_thread_context(dtape_thread_handle_t thread_handle) {
-	dtape_thread_t* thread = thread_handle;
+void* dtape_thread_context(dtape_thread_t* thread) {
 	return thread->context;
 };
 
@@ -148,8 +142,8 @@ void thread_deallocate_safe(thread_t thread) {
 	return thread_deallocate(thread);
 };
 
-static void thread_continuation_callback(dtape_thread_handle_t thread_handle) {
-	dtape_thread_t* thread = thread_handle;
+static void thread_continuation_callback(void* context) {
+	dtape_thread_t* thread = context;
 	thread_continue_t continuation = thread->xnu_thread.continuation;
 	void* parameter = thread->xnu_thread.parameter;
 
@@ -167,7 +161,7 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 	thread->xnu_thread.continuation = continuation;
 	thread->xnu_thread.parameter = parameter;
 
-	dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, NULL);
+	dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
 
 	// this should only ever be reached if there is no continuation
 	assert(!continuation);
@@ -208,12 +202,10 @@ void thread_sched_call(thread_t thread, sched_call_t call) {
 };
 
 kern_return_t kernel_thread_start_priority(thread_continue_t continuation, void* parameter, integer_t priority, thread_t* new_thread) {
-	dtape_thread_handle_t thread_handle = dtape_hooks->thread_create_kernel();
-	if (!thread_handle) {
+	dtape_thread_t* thread = dtape_hooks->thread_create_kernel();
+	if (!thread) {
 		return KERN_FAILURE;
 	}
-
-	dtape_thread_t* thread = thread_handle;
 
 	thread_reference(&thread->xnu_thread);
 	*new_thread = &thread->xnu_thread;
@@ -221,7 +213,7 @@ kern_return_t kernel_thread_start_priority(thread_continue_t continuation, void*
 	thread->xnu_thread.continuation = continuation;
 	thread->xnu_thread.parameter = parameter;
 
-	dtape_hooks->thread_start(thread->context, thread_continuation_callback);
+	dtape_hooks->thread_start(thread->context, thread_continuation_callback, thread);
 
 	return KERN_SUCCESS;
 };
@@ -233,7 +225,8 @@ void thread_set_thread_name(thread_t xthread, const char* name) {
 
 __attribute__((noreturn))
 void thread_syscall_return(kern_return_t ret) {
-	dtape_stub_unsafe();
+	dtape_hooks->current_thread_syscall_return(ret);
+	__builtin_unreachable();
 };
 
 thread_qos_t thread_get_requested_qos(thread_t thread, int* relpri) {
@@ -370,12 +363,18 @@ kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wire
 	dtape_stub_unsafe();
 };
 
-void thread_handoff_parameter(thread_t thread, thread_continue_t continuation, void *parameter, thread_handoff_option_t option) {
-	dtape_stub_unsafe();
-};
+static wait_result_t thread_handoff_internal(thread_t thread, thread_continue_t continuation, void* parameter, thread_handoff_option_t option) {
+	if (thread != THREAD_NULL) {
+		if (continuation == NULL || (option & THREAD_HANDOFF_SETRUN_NEEDED)) {
+			thread_deallocate_safe(thread);
+		}
 
-wait_result_t thread_handoff_deallocate(thread_t thread, thread_handoff_option_t option) {
-	dtape_stub_unsafe();
+		// in the real thread_handoff_internal(), an attempt is made to grab the thread to handoff to.
+		// if it could not be pulled from its runq, the current thread simply blocks with thread_block_parameter().
+		// therefore, it's not necessary to actually handoff to the given thread, so we don't do that, in order to make our implementation easier.
+	}
+
+	return thread_block_parameter(continuation, parameter);
 };
 
 // ignore the lock timeout
@@ -646,6 +645,31 @@ clear_wait(
 	return ret;
 }
 
+/*
+ *	Thread wait timer expiration.
+ */
+void
+thread_timer_expire(
+	void                    *p0,
+	__unused void   *p1)
+{
+	thread_t                thread = p0;
+	spl_t                   s;
+
+	assert_thread_magic(thread);
+
+	s = splsched();
+	thread_lock(thread);
+	if (--thread->wait_timer_active == 0) {
+		if (thread->wait_timer_is_set) {
+			thread->wait_timer_is_set = FALSE;
+			clear_wait_internal(thread, THREAD_TIMED_OUT);
+		}
+	}
+	thread_unlock(thread);
+	splx(s);
+}
+
 // </copied>
 
 // <copied from="xnu://7195.141.2/osfmk/kern/thread.c">
@@ -748,6 +772,25 @@ thread_swap_mach_voucher(
 	 */
 	ipc_voucher_release(*in_out_old_voucher);
 	return KERN_NOT_SUPPORTED;
+}
+
+// </copied>
+
+// <copied from="xnu://7195.141.2/osfmk/kern/syscall_subr.c">
+
+void
+thread_handoff_parameter(thread_t thread, thread_continue_t continuation,
+    void *parameter, thread_handoff_option_t option)
+{
+	thread_handoff_internal(thread, continuation, parameter, option);
+	panic("NULL continuation passed to %s", __func__);
+	__builtin_unreachable();
+}
+
+wait_result_t
+thread_handoff_deallocate(thread_t thread, thread_handoff_option_t option)
+{
+	return thread_handoff_internal(thread, NULL, NULL, option);
 }
 
 // </copied>

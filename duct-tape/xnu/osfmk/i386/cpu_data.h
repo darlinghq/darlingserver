@@ -427,6 +427,13 @@ get_active_thread(void)
 
 #define cpu_mode_is64bit()              TRUE
 
+#ifdef __DARLING__
+static inline int
+get_preemption_level(void)
+{
+	return 0;
+}
+#else
 static inline int
 get_preemption_level(void)
 {
@@ -458,6 +465,7 @@ current_cpu_datap(void)
 {
 	return CPU_DATA()->cpu_this;
 }
+#endif // __DARLING__
 
 /*
  * Facility to diagnose preemption-level imbalances, which are otherwise

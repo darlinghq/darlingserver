@@ -186,6 +186,7 @@ extern void act_thread_cfree(void *ctx);
 #define STACK_IKS(stack)        \
 	(&(((struct thread_kernel_state *)((stack) + kernel_stack_size)) - 1)->machine)
 
+#ifndef __DARLING__
 /*
  * Return the current stack depth including thread_kernel_state
  */
@@ -205,6 +206,7 @@ current_stack_depth(void)
 	       + sizeof(struct thread_kernel_state)
 	       - stack_ptr;
 }
+#endif // __DARLING__
 
 /*
  * Return address of the function that called current function, given

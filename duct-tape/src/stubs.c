@@ -33,6 +33,15 @@ int fflush(FILE* stream);
 	#define DTAPE_FATAL_STUBS 0
 #endif
 
+extern char* getenv(const char* name);
+
+static bool log_safe_stubs = false;
+
+__attribute__((constructor))
+static void init_stubs() {
+	log_safe_stubs = getenv("DTAPE_LOG_SAFE_STUBS") != NULL;
+};
+
 void dtape_stub_log(const char* function_name, int safety, const char* subsection) {
 	dtape_log_level_t log_level;
 	bool do_abort;
@@ -51,6 +60,10 @@ void dtape_stub_log(const char* function_name, int safety, const char* subsectio
 		do_abort = true;
 		kind_info = " (unsafe)";
 	} else {
+		if (!log_safe_stubs) {
+			return;
+		}
+
 		log_level = dtape_log_level_debug;
 		do_abort = false;
 		kind_info = " (safe)";
@@ -142,18 +155,6 @@ void mach_destroy_memory_entry(ipc_port_t port) {
 	dtape_stub();
 };
 
-void klist_init(struct klist* list) {
-	dtape_stub();
-};
-
-void knote(struct klist* list, long hint) {
-	dtape_stub();
-};
-
-void knote_vanish(struct klist* list, bool make_active) {
-	dtape_stub();
-};
-
 struct turnstile* kqueue_turnstile(struct kqueue* kqu) {
 	dtape_stub();
 	return NULL;
@@ -168,8 +169,13 @@ void work_interval_port_notify(mach_msg_header_t* msg) {
 };
 
 int proc_get_effective_thread_policy(thread_t thread, int flavor) {
-	dtape_stub();
-	return -1;
+	switch (flavor) {
+		case TASK_POLICY_LATENCY_QOS:
+			return 0;
+		default:
+			dtape_stub("unimplemented flavor");
+			return -1;
+	}
 };
 
 boolean_t PE_parse_boot_argn(const char* arg_string, void* arg_ptr, int max_len) {

@@ -237,6 +237,7 @@ add_library(darlingserver_duct_tape
 	src/traps.c
 	src/host.c
 	src/processor.c
+	src/kqchan.c
 
 	xnu/libkern/os/refcnt.c
 	xnu/libkern/gen/OSAtomicOperations.c
@@ -323,6 +324,7 @@ add_library(darlingserver_duct_tape
 target_include_directories(darlingserver_duct_tape PRIVATE
 	internal-include
 	${CMAKE_CURRENT_BINARY_DIR}/../internal-include
+	../include
 )
 
 target_include_directories(darlingserver_duct_tape PUBLIC

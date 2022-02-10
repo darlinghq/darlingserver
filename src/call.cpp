@@ -27,6 +27,7 @@
 #include <darlingserver/config.hpp>
 #include <sys/fcntl.h>
 #include <sys/syscall.h>
+#include <darlingserver/kqchan.hpp>
 
 static DarlingServer::Log callLog("calls");
 
@@ -96,6 +97,10 @@ DarlingServer::Call::~Call() {};
 
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Call::thread() const {
 	return _thread.lock();
+};
+
+void DarlingServer::Call::sendBasicReply(int resultCode) {
+	throw std::runtime_error("This call cannot send a basic reply");
 };
 
 //
@@ -175,7 +180,7 @@ void DarlingServer::Call::Checkout::processCall() {
 						auto replacingWithDarlingProcess = _body.executing_macho;
 
 						std::weak_ptr<Process> weakProcess = process;
-						Server::sharedInstance().addMonitor(std::make_shared<Monitor>(fd, Monitor::Event::HangUp, false, true, [fd, weakProcess, replacingWithDarlingProcess](std::shared_ptr<Monitor> monitor) {
+						Server::sharedInstance().addMonitor(std::make_shared<Monitor>(fd, Monitor::Event::HangUp, false, true, [fd, weakProcess, replacingWithDarlingProcess](std::shared_ptr<Monitor> monitor, Monitor::Event events) {
 							Server::sharedInstance().removeMonitor(monitor);
 
 							auto process = weakProcess.lock();
@@ -501,6 +506,34 @@ void DarlingServer::Call::PthreadMarkcancel::processCall() {
 	}
 
 	_sendReply(code);
+};
+
+void DarlingServer::Call::KqchanMachPortOpen::processCall() {
+	int code = 0;
+	int socket = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			auto kqchan = std::make_shared<Kqchan::MachPort>(process, _body.port_name, _body.receive_buffer, _body.receive_buffer_size, _body.saved_filter_flags);
+
+			try {
+				socket = kqchan->setup();
+			} catch (std::system_error e) {
+				code = -e.code().value();
+			} catch (...) {
+				// just report that we couldn't find the port
+				code = -ESRCH;
+			}
+
+			process->registerKqchan(kqchan);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, socket);
 };
 
 DSERVER_CLASS_SOURCE_DEFS;

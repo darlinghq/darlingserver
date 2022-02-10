@@ -22,8 +22,8 @@ void dtape_task_init(void) {
 	}
 };
 
-dtape_task_handle_t dtape_task_create(dtape_task_handle_t xparent_task, uint32_t nsid, void* context) {
-	if (xparent_task == NULL && nsid == 0 && kernel_task) {
+dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context) {
+	if (parent_task == NULL && nsid == 0 && kernel_task) {
 		dtape_task_t* task = dtape_task_for_xnu_task(kernel_task);
 
 		// don't acquire an additional reference;
@@ -38,7 +38,6 @@ dtape_task_handle_t dtape_task_create(dtape_task_handle_t xparent_task, uint32_t
 		return task;
 	}
 
-	dtape_task_t* parent_task = xparent_task;
 	dtape_task_t* task = malloc(sizeof(dtape_task_t));
 	if (!task) {
 		return NULL;
@@ -73,7 +72,7 @@ dtape_task_handle_t dtape_task_create(dtape_task_handle_t xparent_task, uint32_t
 
 	ipc_task_enable(&task->xnu_task);
 
-	if (xparent_task == NULL && nsid == 0) {
+	if (parent_task == NULL && nsid == 0) {
 		if (kernel_task) {
 			panic("Another kernel task has been created");
 		}
@@ -84,9 +83,7 @@ dtape_task_handle_t dtape_task_create(dtape_task_handle_t xparent_task, uint32_t
 	return task;
 };
 
-void dtape_task_destroy(dtape_task_handle_t xtask) {
-	dtape_task_t* task = xtask;
-
+void dtape_task_destroy(dtape_task_t* task) {
 	if (os_ref_release(&task->xnu_task.ref_count) != 0) {
 		panic("Duct-taped task over-retained or still in-use at destruction");
 	}
@@ -104,8 +101,7 @@ void dtape_task_destroy(dtape_task_handle_t xtask) {
 	free(task);
 };
 
-void dtape_task_uidgid(dtape_task_handle_t xtask, int new_uid, int new_gid, int* old_uid, int* old_gid) {
-	dtape_task_t* task = xtask;
+void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid) {
 	task_lock(&task->xnu_task);
 	if (old_uid) {
 		*old_uid = task->xnu_task.audit_token.val[1];

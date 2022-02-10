@@ -50,31 +50,27 @@ namespace DarlingServer {
 		size_t _stackSize;
 		bool _suspended = false;
 		ucontext_t _resumeContext;
-		dtape_thread_handle_t _dtapeThread;
-		dtape_thread_continuation_callback_f _continuationCallback = nullptr;
+		dtape_thread_t* _dtapeThread;
+		std::function<void()> _continuationCallback = nullptr;
 		bool _running = false;
 		bool _terminating = false;
+		std::shared_ptr<Call> _activeSyscall = nullptr;
+		std::shared_ptr<Thread> _impersonating = nullptr;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
 
 		friend struct ::DTapeHooks;
 
-		struct KernelThreadConstructorTag {};
-
-		void _startKernelThread(dtape_thread_continuation_callback_f startupCallback);
-
 		static void interruptDisable();
 		static void interruptEnable();
-
-		/**
-		 * Schedules the given function to be called within a duct-taped kernel microthread.
-		 */
-		static void _kernelAsync(std::function<void()> fn);
+		static void syscallReturn(int resultCode);
 
 	public:
 		using ID = pid_t;
 		using NSID = ID;
+
+		struct KernelThreadConstructorTag {};
 
 		Thread(std::shared_ptr<Process> process, NSID nsid);
 		Thread(KernelThreadConstructorTag tag);
@@ -91,6 +87,9 @@ namespace DarlingServer {
 
 		std::shared_ptr<Call> pendingCall() const;
 		void setPendingCall(std::shared_ptr<Call> newPendingCall);
+
+		std::shared_ptr<Call> activeSyscall() const;
+		void setActiveSyscall(std::shared_ptr<Call> activeSyscall);
 
 		/**
 		 * The TID of this Thread as seen from darlingserver's namespace.
@@ -111,11 +110,29 @@ namespace DarlingServer {
 		 * NOTE: This currently only works if this thread is the current thread.
 		 *       It will throw an error in all other cases.
 		 */
-		void suspend(dtape_thread_continuation_callback_f continuationCallback = nullptr, libsimple_lock_t* unlockMe = nullptr);
+		void suspend(std::function<void()> continuationCallback = nullptr, libsimple_lock_t* unlockMe = nullptr);
 		void resume();
 		void terminate();
 
 		void setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress);
+
+		void startKernelThread(std::function<void()> startupCallback);
+
+		/**
+		 * Pretend to be another thread for the purpose of running duct-taped code.
+		 *
+		 * This is useful, for example, to trick duct-taped code into thinking
+		 * that it's running on a particular user microthread when in fact
+		 * it is running on a kernel microthread.
+		 *
+		 * Pass `nullptr` to reset.
+		 */
+		void impersonate(std::shared_ptr<Thread> thread);
+
+		/**
+		 * The thread that this thread is impersonating.
+		 */
+		std::shared_ptr<Thread> impersonatingThread() const;
 
 		static std::shared_ptr<Thread> currentThread();
 
@@ -125,6 +142,11 @@ namespace DarlingServer {
 		 * @note This function may only be called from a microthread context.
 		 */
 		static std::shared_ptr<Thread> threadForPort(uint32_t thread_port);
+
+		/**
+		 * Schedules the given function to be called within a duct-taped kernel microthread.
+		 */
+		static void kernelAsync(std::function<void()> fn);
 	};
 };
 

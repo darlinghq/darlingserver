@@ -7,13 +7,15 @@
 
 #include <libsimple/lock.h>
 #include <darlingserver/rpc.internal.h>
+#include <darlingserver/rpc-supplement.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef void* dtape_thread_handle_t;
-typedef void* dtape_task_handle_t;
+typedef struct dtape_thread dtape_thread_t;
+typedef struct dtape_task dtape_task_t;
+typedef struct dtape_kqchan_mach_port dtape_kqchan_mach_port_t;
 
 typedef enum dtape_log_level {
 	dtape_log_level_debug,
@@ -22,12 +24,12 @@ typedef enum dtape_log_level {
 	dtape_log_level_error,
 } dtape_log_level_t;
 
-typedef void (*dtape_thread_continuation_callback_f)(dtape_thread_handle_t thread);
+typedef void (*dtape_thread_continuation_callback_f)(void* context);
 
-typedef void (*dtape_hook_thread_suspend_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, libsimple_lock_t* unlock_me);
+typedef void (*dtape_hook_thread_suspend_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_contex, libsimple_lock_t* unlock_me);
 typedef void (*dtape_hook_thread_resume_f)(void* thread_context);
-typedef dtape_task_handle_t (*dtape_hook_current_task_f)(void);
-typedef dtape_thread_handle_t (*dtape_hook_current_thread_f)(void);
+typedef dtape_task_t* (*dtape_hook_current_task_f)(void);
+typedef dtape_thread_t* (*dtape_hook_current_thread_f)(void);
 
 /**
  * Arms a timer that should invoke dtape_timer_fired when it expires.
@@ -41,10 +43,11 @@ typedef void (*dtape_hook_log_f)(dtape_log_level_t level, const char* message);
 
 typedef void (*dtape_hook_thread_terminate_f)(void* thread_context);
 
-typedef dtape_thread_handle_t (*dtape_hook_thread_create_kernel_f)(void);
-typedef void (*dtape_hook_thread_start_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback);
+typedef dtape_thread_t* (*dtape_hook_thread_create_kernel_f)(void);
+typedef void (*dtape_hook_thread_start_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
+typedef void (*dtape_hook_current_thread_syscall_return_f)(int return_code);
 typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
 
@@ -60,6 +63,7 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_start_f thread_start;
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
+	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
 	dtape_hook_task_read_memory_f task_read_memory;
 	dtape_hook_task_write_memory_f task_write_memory;
 } dtape_hooks_t;
@@ -75,6 +79,8 @@ uint32_t dtape_thread_get_special_reply_port(void);
 uint32_t dtape_mk_timer_create(void);
 
 DSERVER_DTAPE_DECLS;
+
+typedef void (*dtape_kqchan_mach_port_notification_callback_f)(void* context);
 
 /**
  * The threshold beyond which thread IDs are considered IDs for kernel threads.
@@ -95,35 +101,42 @@ DSERVER_DTAPE_DECLS;
  *
  * An @p nsid value of `0` indicates the task being created is the kernel task.
  */
-dtape_task_handle_t dtape_task_create(dtape_task_handle_t parent_task, uint32_t nsid, void* context);
-dtape_thread_handle_t dtape_thread_create(dtape_task_handle_t task, uint64_t nsid, void* context);
+dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context);
+dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* context);
+dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context);
 
 /**
  * Destroys the given duct-tape task. The caller loses their reference on the task.
  *
  * Additionally, if the caller's reference on the task is not the last reference, this function will abort.
  */
-void dtape_task_destroy(dtape_task_handle_t task);
-void dtape_thread_destroy(dtape_thread_handle_t thread);
+void dtape_task_destroy(dtape_task_t* task);
+void dtape_thread_destroy(dtape_thread_t* thread);
+void dtape_kqchan_mach_port_destroy(dtape_kqchan_mach_port_t* kqchan);
 
-void dtape_thread_entering(dtape_thread_handle_t thread);
-void dtape_thread_exiting(dtape_thread_handle_t thread);
-void dtape_thread_set_handles(dtape_thread_handle_t thread, uintptr_t pthread_handle, uintptr_t dispatch_qaddr);
+void dtape_thread_entering(dtape_thread_t* thread);
+void dtape_thread_exiting(dtape_thread_t* thread);
+void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, uintptr_t dispatch_qaddr);
 /**
  * Returns the thread corresponding to the given thread port.
  *
  * @warning It is VERY important that the caller ensures the thread cannot die while we're looking it up.
  *          This can be accomplished, for example, by locking the global thread list before the call.
  */
-dtape_thread_handle_t dtape_thread_for_port(uint32_t thread_port);
-void* dtape_thread_context(dtape_thread_handle_t thread);
+dtape_thread_t* dtape_thread_for_port(uint32_t thread_port);
+void* dtape_thread_context(dtape_thread_t* thread);
 
-void dtape_task_uidgid(dtape_task_handle_t task, int new_uid, int new_gid, int* old_uid, int* old_gid);
+void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 
 /**
  * Invoked when a timer armed by an earlier call to the timer_arm hook expires.
  */
 void dtape_timer_fired(void);
+
+void dtape_kqchan_mach_port_modify(dtape_kqchan_mach_port_t* kqchan, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags);
+void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqchan);
+void dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size);
+bool dtape_kqchan_mach_port_has_events(dtape_kqchan_mach_port_t* kqchan);
 
 #ifdef __cplusplus
 };

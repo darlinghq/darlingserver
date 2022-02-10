@@ -566,3 +566,8 @@ void DarlingServer::MessageQueue::setMessageArrivalNotificationCallback(std::fun
 	std::unique_lock lock(_lock);
 	_messageArrivalNotificationCallback = messageArrivalNotificationCallback;
 };
+
+bool DarlingServer::MessageQueue::empty() const {
+	std::unique_lock lock(_lock);
+	return _messages.empty();
+};

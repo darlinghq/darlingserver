@@ -44,6 +44,10 @@
 #include <darlingserver/server.hpp>
 #include <darlingserver/config.hpp>
 
+#ifndef DARLINGSERVER_INIT_PROCESS
+	#define DARLINGSERVER_INIT_PROCESS "/sbin/launchd"
+#endif
+
 // TODO: most of the code here was ported over from startup/darling.c; we should C++-ify it.
 
 void fixPermissionsRecursive(const char* path, uid_t originalUID, gid_t originalGID)
@@ -250,7 +254,7 @@ void spawnLaunchd(const char* prefix)
 
 	setenv("DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
-	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, "/sbin/launchd", NULL);
+	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, DARLINGSERVER_INIT_PROCESS, NULL);
 
 	fprintf(stderr, "Failed to exec launchd: %s\n", strerror(errno));
 	abort();

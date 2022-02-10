@@ -108,6 +108,19 @@ calls = [
 	]),
 
 	#
+	# kqueue channels
+	#
+
+	('kqchan_mach_port_open', [
+		('port_name', 'uint32_t'),
+		('receive_buffer', 'void*', 'uint64_t'),
+		('receive_buffer_size', 'uint64_t'),
+		('saved_filter_flags', 'uint64_t'),
+	], [
+		('socket', '@fd'),
+	]),
+
+	#
 	# pthread cancelation
 	#
 
@@ -629,6 +642,12 @@ for call in calls:
 	internal_header.write("\t\t\t_replyQueue.push(std::move(reply)); \\\n")
 	internal_header.write("\t\t}; \\\n")
 
+	if len(reply_parameters) == 0:
+		internal_header.write("\tpublic: \\\n")
+		internal_header.write("\t\tvoid sendBasicReply(int resultCode) { \\\n")
+		internal_header.write("\t\t\t_sendReply(resultCode); \\\n")
+		internal_header.write("\t\t}; \\\n")
+
 	internal_header.write("\t}; \\\n")
 internal_header.write("\n")
 
@@ -648,6 +667,12 @@ for call in calls:
 		raise RuntimeError("Call marked as an XNU trap has reply parameters")
 
 	internal_header.write("\tvoid DarlingServer::Call::{0}::processCall() {{ \\\n".format(camel_name))
+	internal_header.write("\t\t{ \\\n")
+	internal_header.write("\t\t\tauto thread = _thread.lock(); \\\n")
+	internal_header.write("\t\t\tif (thread) { \\\n")
+	internal_header.write("\t\t\t\tthread->setActiveSyscall(shared_from_this()); \\\n")
+	internal_header.write("\t\t\t} \\\n")
+	internal_header.write("\t\t}; \\\n")
 	internal_header.write("\t\t_sendReply(dtape_{0}(".format(call_name))
 
 	is_first = True
@@ -662,6 +687,12 @@ for call in calls:
 		internal_header.write("_body.{0}".format(param_name))
 
 	internal_header.write(")); \\\n")
+	internal_header.write("\t\t{ \\\n")
+	internal_header.write("\t\t\tauto thread = _thread.lock(); \\\n")
+	internal_header.write("\t\t\tif (thread) { \\\n")
+	internal_header.write("\t\t\t\tthread->setActiveSyscall(nullptr); \\\n")
+	internal_header.write("\t\t\t} \\\n")
+	internal_header.write("\t\t}; \\\n")
 	internal_header.write("\t}; \\\n")
 internal_header.write("\n")
 
@@ -946,8 +977,7 @@ for call in calls:
 		library_source.write(textwrap.indent(textwrap.dedent("""\
 			dserver_rpc_hooks_cmsghdr_t* reply_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&replymsg);
 			if (!reply_cmsg || reply_cmsg->cmsg_level != DSERVER_RPC_HOOKS_SOL_SOCKET || reply_cmsg->cmsg_type != DSERVER_RPC_HOOKS_SCM_RIGHTS || reply_cmsg->cmsg_len != DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * {0})) {{
-				status = dserver_rpc_hooks_get_bad_message_status();
-				return status;
+				return dserver_rpc_hooks_get_bad_message_status();
 			}}
 			dserver_rpc_hooks_memcpy(fds, DSERVER_RPC_HOOKS_CMSG_DATA(reply_cmsg), sizeof(int) * {0});
 			"""), '\t').format(fd_count_in_reply))

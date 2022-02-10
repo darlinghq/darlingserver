@@ -86,10 +86,12 @@ static uint64_t rtc_export_speed(uint64_t cycles);
 void
 rtc_timer_start(void)
 {
+#ifndef __DARLING__
 	/*
 	 * Force a complete re-evaluation of timer deadlines.
 	 */
 	x86_lcpu()->rtcDeadline = EndOfAllTime;
+#endif // __DARLING__
 	timer_resync_deadlines();
 }
 

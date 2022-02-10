@@ -81,7 +81,7 @@ void lck_mtx_lock(lck_mtx_t* lock) {
 		TAILQ_INSERT_TAIL(&lock->dtape_mutex->dtape_queue_head, &thread->mutex_link, link);
 
 		// this call drops the lock
-		dtape_hooks->thread_suspend(thread->context, NULL, &lock->dtape_mutex->dtape_queue_lock);
+		dtape_hooks->thread_suspend(thread->context, NULL, NULL, &lock->dtape_mutex->dtape_queue_lock);
 	}
 };
 
@@ -125,6 +125,10 @@ void lck_mtx_unlock(lck_mtx_t* lock) {
 out:
 	libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
 	return;
+};
+
+void lck_mtx_init_ext(lck_mtx_t* lck, struct _lck_mtx_ext_* lck_ext, lck_grp_t* grp, lck_attr_t* attr) {
+	lck_mtx_init(lck, grp, attr);
 };
 
 //

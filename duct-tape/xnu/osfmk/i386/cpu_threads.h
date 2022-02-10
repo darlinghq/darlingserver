@@ -51,11 +51,13 @@
 #define cpu_to_die(cpu)                 ((cpu_to_lcpu(cpu) != NULL) ? _cpu_to_lcpu(cpu)->die : NULL)
 #define cpu_to_package(cpu)             ((cpu_to_lcpu(cpu) != NULL) ? _cpu_to_lcpu(cpu)->package : NULL)
 
+#ifndef __DARLING__
 /* Fast access: */
 #define x86_lcpu()                      (&current_cpu_datap()->lcpu)
 #define x86_core()                      (x86_lcpu()->core)
 #define x86_die()                       (x86_lcpu()->die)
 #define x86_package()                   (x86_lcpu()->package)
+#endif // __DARLING__
 
 #define cpu_is_same_core(cpu1, cpu2)     (cpu_to_core(cpu1) == cpu_to_core(cpu2))
 #define cpu_is_same_die(cpu1, cpu2)      (cpu_to_die(cpu1) == cpu_to_die(cpu2))

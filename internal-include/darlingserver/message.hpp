@@ -157,7 +157,7 @@ namespace DarlingServer {
 	class MessageQueue {
 	private:
 		std::deque<Message> _messages;
-		std::mutex _lock;
+		mutable std::mutex _lock;
 		std::function<void()> _messageArrivalNotificationCallback = nullptr;
 
 	public:
@@ -168,6 +168,8 @@ namespace DarlingServer {
 
 		bool sendMany(int socket);
 		bool receiveMany(int socket);
+
+		bool empty() const;
 	};
 };
 

@@ -38,6 +38,8 @@ static thread_local std::shared_ptr<DarlingServer::Thread> currentThreadVar = nu
 static thread_local bool returningToThreadTop = false;
 static thread_local ucontext_t backToThreadTopContext;
 static thread_local libsimple_lock_t* unlockMeWhenSuspending = nullptr;
+static thread_local std::function<void()> currentContinuation = nullptr;
+static thread_local std::shared_ptr<DarlingServer::Call> currentCall = nullptr;
 
 /**
  * Our microthreads use cooperative multitasking, so we don't really use interrupts per-se.
@@ -139,7 +141,7 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 
 	// schedule the duct-taped thread to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	_kernelAsync([dtapeThread = _dtapeThread]() {
+	kernelAsync([dtapeThread = _dtapeThread]() {
 		dtape_thread_destroy(dtapeThread);
 	});
 
@@ -203,6 +205,19 @@ void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t 
 	dtape_thread_set_handles(_dtapeThread, pthreadHandle, dispatchQueueAddress);
 };
 
+std::shared_ptr<DarlingServer::Call> DarlingServer::Thread::activeSyscall() const {
+	std::shared_lock lock(_rwlock);
+	return _activeSyscall;
+};
+
+void DarlingServer::Thread::setActiveSyscall(std::shared_ptr<DarlingServer::Call> activeSyscall) {
+	std::unique_lock lock(_rwlock);
+	if (activeSyscall && _activeSyscall) {
+		throw std::runtime_error("Thread's active syscall overwritten while active");
+	}
+	_activeSyscall = activeSyscall;
+};
+
 /*
  * IMPORTANT
  * ===
@@ -217,15 +232,19 @@ static const auto microthreadLog = DarlingServer::Log("microthread");
 
 // this runs in the context of the microthread (i.e. with the microthread's stack active)
 void DarlingServer::Thread::microthreadWorker() {
-	auto call = currentThreadVar->pendingCall();
+	currentContinuation = nullptr;
+	currentCall = currentThreadVar->pendingCall();
 	currentThreadVar->setPendingCall(nullptr);
-	call->processCall();
+	currentCall->processCall();
+	currentCall = nullptr;
 };
 
 void DarlingServer::Thread::microthreadContinuation() {
-	auto callback = currentThreadVar->_continuationCallback;
+	currentCall = nullptr;
+	currentContinuation = currentThreadVar->_continuationCallback;
 	currentThreadVar->_continuationCallback = nullptr;
-	callback(currentThreadVar->_dtapeThread);
+	currentContinuation();
+	currentContinuation = nullptr;
 };
 
 void DarlingServer::Thread::doWork() {
@@ -240,6 +259,11 @@ void DarlingServer::Thread::doWork() {
 		microthreadLog.warning() << "Attempt to re-run already running microthread on another thread" << microthreadLog.endLog;
 		_rwlock.unlock();
 		return;
+	}
+
+	if (_terminating) {
+		_rwlock.unlock();
+		goto doneWorking;
 	}
 
 	_running = true;
@@ -260,7 +284,12 @@ void DarlingServer::Thread::doWork() {
 
 		_rwlock.lock();
 
-		if (_suspended) {
+		if (_continuationCallback && _pendingCall) {
+			// we can only have one of the two
+			throw std::runtime_error("Thread has both a pending call and a pending continuation");
+		}
+
+		if (_suspended && !_pendingCall) {
 			// we were in the middle of processing a call and we need to resume now
 			_suspended = false;
 			_rwlock.unlock();
@@ -290,9 +319,11 @@ void DarlingServer::Thread::doWork() {
 
 doneWorking:
 	_rwlock.lock();
-	dtape_thread_exiting(_dtapeThread);
-	currentThreadVar = nullptr;
-	_running = false;
+	if (_running) {
+		dtape_thread_exiting(_dtapeThread);
+		currentThreadVar = nullptr;
+		_running = false;
+	}
 	if (_terminating) {
 		// unregister ourselves from the thread registry
 		//
@@ -308,7 +339,7 @@ doneWorking:
 	return;
 };
 
-void DarlingServer::Thread::suspend(dtape_thread_continuation_callback_f continuationCallback, libsimple_lock_t* unlockMe) {
+void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, libsimple_lock_t* unlockMe) {
 	if (this != currentThreadVar.get()) {
 		throw std::runtime_error("Attempt to suspend thread other than current thread");
 	}
@@ -328,6 +359,11 @@ void DarlingServer::Thread::suspend(dtape_thread_continuation_callback_f continu
 	_rwlock.lock();
 	if (_suspended) {
 		if (continuationCallback) {
+			// when suspendeding with a continuation, the current continuation and call are discarded (since they can no longer be safely returned to)
+			currentContinuation = nullptr;
+			currentCall = nullptr;
+
+			_continuationCallback = continuationCallback;
 			_resumeContext.uc_stack.ss_sp = _stack;
 			_resumeContext.uc_stack.ss_size = _stackSize;
 			_resumeContext.uc_stack.ss_flags = 0;
@@ -344,13 +380,13 @@ void DarlingServer::Thread::suspend(dtape_thread_continuation_callback_f continu
 };
 
 void DarlingServer::Thread::resume() {
-	_rwlock.lock_shared();
-	if (!_suspended) {
-		// maybe we should throw an error here?
-		_rwlock.unlock_shared();
-		return;
+	{
+		std::shared_lock lock(_rwlock);
+		if (!_suspended) {
+			// maybe we should throw an error here?
+			return;
+		}
 	}
-	_rwlock.unlock_shared();
 
 	Server::sharedInstance().scheduleThread(shared_from_this());
 };
@@ -364,33 +400,55 @@ void DarlingServer::Thread::terminate() {
 		throw std::runtime_error("terminate() called on non-kernel thread");
 	}
 
-	if (currentThreadVar.get() != this) {
-		throw std::runtime_error("terminate() called on non-current kernel thread (currently unsupported)");
-	}
-
 	_rwlock.lock();
 	_terminating = true;
-	_rwlock.unlock();
-	suspend();
 
-	throw std::runtime_error("terminate() on current kernel thread returned");
+	if (currentThreadVar.get() == this) {
+		// if it's the current thread, just suspend it;
+		// when we return to the "top" of the microthread,
+		// doWork() will see that it's terminating and clean up
+		_rwlock.unlock();
+		suspend();
+		throw std::runtime_error("terminate() on current kernel thread returned");
+	} else {
+		// if it's not the current thread and it's not currently running, just remove it from the thread registry;
+		// it should die once the caller releases their reference(s) on us
+		if (!_running) {
+			threadRegistry().unregisterEntry(shared_from_this());
+		}
+		// otherwise, if it IS running, once it returns to the microthread "top" and sees `_terminating = true`, it'll unregister itself
+		_rwlock.unlock();
+	}
 };
 
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::currentThread() {
 	return currentThreadVar;
 };
 
-void DarlingServer::Thread::_startKernelThread(dtape_thread_continuation_callback_f startupCallback) {
-	_continuationCallback = startupCallback;
-	_suspended = true;
-	getcontext(&_resumeContext);
-	_resumeContext.uc_stack.ss_sp = _stack;
-	_resumeContext.uc_stack.ss_size = _stackSize;
-	_resumeContext.uc_stack.ss_flags = 0;
-	_resumeContext.uc_link = &backToThreadTopContext;
-	makecontext(&_resumeContext, microthreadContinuation, 0);
+void DarlingServer::Thread::startKernelThread(std::function<void()> startupCallback) {
+	{
+		std::unique_lock lock(_rwlock);
+		_continuationCallback = startupCallback;
+		_suspended = true;
+		getcontext(&_resumeContext);
+		_resumeContext.uc_stack.ss_sp = _stack;
+		_resumeContext.uc_stack.ss_size = _stackSize;
+		_resumeContext.uc_stack.ss_flags = 0;
+		_resumeContext.uc_link = &backToThreadTopContext;
+		makecontext(&_resumeContext, microthreadContinuation, 0);
+	}
 
 	resume();
+};
+
+void DarlingServer::Thread::impersonate(std::shared_ptr<Thread> thread) {
+	std::unique_lock lock(_rwlock);
+	_impersonating = thread;
+};
+
+std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::impersonatingThread() const {
+	std::shared_lock lock(_rwlock);
+	return _impersonating;
 };
 
 void DarlingServer::Thread::interruptDisable() {
@@ -411,6 +469,24 @@ void DarlingServer::Thread::interruptEnable() {
 	}
 };
 
+void DarlingServer::Thread::syscallReturn(int resultCode) {
+	if (!currentThreadVar) {
+		throw std::runtime_error("syscallReturn() called with no current thread");
+	}
+
+	{
+		auto call = currentThreadVar->activeSyscall();
+		if (!call) {
+			throw std::runtime_error("Attempt to return from syscall on thread with no active syscall");
+		}
+		call->sendBasicReply(resultCode);
+	}
+
+	currentThreadVar->setActiveSyscall(nullptr);
+	currentThreadVar->suspend();
+	throw std::runtime_error("Thread should not continue normally after syscall return");
+};
+
 static std::queue<std::function<void()>> kernelAsyncRunnerQueue;
 
 // we have to use a regular lock here because it needs to be lockable from both a microthread and normal thread context.
@@ -420,7 +496,7 @@ static std::queue<std::function<void()>> kernelAsyncRunnerQueue;
 // XXX: we could use a std::mutex if we add an overload to `suspend` for it.
 static libsimple_lock_t kernelAsyncRunnerQueueLock;
 
-static void kernelAsyncRunnerThreadWorker(dtape_thread_handle_t dthread) {
+static void kernelAsyncRunnerThreadWorker() {
 	while (true) {
 		libsimple_lock_lock(&kernelAsyncRunnerQueueLock);
 
@@ -439,11 +515,11 @@ static void kernelAsyncRunnerThreadWorker(dtape_thread_handle_t dthread) {
 	}
 };
 
-void DarlingServer::Thread::_kernelAsync(std::function<void()> fn) {
+void DarlingServer::Thread::kernelAsync(std::function<void()> fn) {
 	// TODO: this could scale up depending on the size of the queue (like XNU's thread calls)
 	static auto runnerThread = []() {
 		auto thread = std::make_shared<Thread>(KernelThreadConstructorTag());
-		thread->_startKernelThread(kernelAsyncRunnerThreadWorker);
+		thread->startKernelThread(kernelAsyncRunnerThreadWorker);
 		return thread;
 	}();
 
@@ -457,7 +533,7 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::threadForPort(uint
 	// prevent the target thread from dying by taking the global thread registry lock
 	auto registryLock = threadRegistry().scopedLock();
 
-	dtape_thread_handle_t thread_handle = dtape_thread_for_port(thread_port);
+	dtape_thread_t* thread_handle = dtape_thread_for_port(thread_port);
 	if (!thread_handle) {
 		return nullptr;
 	}

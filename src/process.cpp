@@ -93,7 +93,7 @@ DarlingServer::Process::~Process() {
 
 	// schedule the duct-taped task to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	Thread::_kernelAsync([dtapeTask = _dtapeTask]() {
+	Thread::kernelAsync([dtapeTask = _dtapeTask]() {
 		dtape_task_destroy(dtapeTask);
 	});
 };
@@ -301,4 +301,21 @@ void DarlingServer::Process::setPendingReplacement() {
 	processLog.info() << "Process " << id() << " (" << nsid() << ") is now pending replacement" << processLog.endLog;
 
 	_pendingReplacement = true;
+};
+
+void DarlingServer::Process::registerKqchan(std::shared_ptr<Kqchan> kqchan) {
+	std::unique_lock lock(_rwlock);
+
+	_kqchannels.push_back(kqchan);
+};
+
+void DarlingServer::Process::unregisterKqchan(std::shared_ptr<Kqchan> kqchan) {
+	std::unique_lock lock(_rwlock);
+
+	for (size_t i = 0; i < _kqchannels.size(); ++i) {
+		if (_kqchannels[i]->_idForProcess() == kqchan->_idForProcess()) {
+			_kqchannels.erase(_kqchannels.begin() + i);
+			break;
+		}
+	}
 };

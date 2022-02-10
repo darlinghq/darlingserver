@@ -699,7 +699,11 @@ filt_wlattach_sync_ipc(struct knote *kn)
 	return 0;
 }
 
+#ifdef __DARLING__
+int
+#else
 static int
+#endif // __DARLING__
 filt_machportattach(
 	struct knote *kn,
 	__unused struct kevent_qos_s *kev)
@@ -903,7 +907,11 @@ _Static_assert(offsetof(struct ipc_pset, ips_messages) ==
     offsetof(struct ipc_port, ip_messages),
     "Make sure the mqueue aliases in both ports and psets");
 
+#ifdef __DARLING__
+void
+#else
 static void
+#endif // __DARLING__
 filt_machportdetach(
 	struct knote *kn)
 {
@@ -981,7 +989,11 @@ filt_machportdetach(
  * QoS of the knote according the requested and override
  * QoS of that first message.
  */
+#ifdef __DARLING__
+int
+#else
 static int
+#endif // __DARLING__
 filt_machportevent(struct knote *kn, long hint __assert_only)
 {
 	ipc_mqueue_t mqueue = kn->kn_mqueue;
@@ -1001,7 +1013,11 @@ filt_machportevent(struct knote *kn, long hint __assert_only)
 	return result;
 }
 
+#ifdef __DARLING__
+int
+#else
 static int
+#endif // __DARLING__
 filt_machporttouch(
 	struct knote *kn,
 	struct kevent_qos_s *kev)
@@ -1042,7 +1058,11 @@ filt_machporttouch(
 	return result;
 }
 
+#ifdef __DARLING__
+int
+#else
 static int
+#endif // __DARLING__
 filt_machportprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
 	ipc_mqueue_t mqueue = kn->kn_mqueue;
@@ -1224,7 +1244,11 @@ filt_machportprocess(struct knote *kn, struct kevent_qos_s *kev)
  * will catch changes in this status when the event gets posted
  * up to the knote's kqueue).
  */
+#ifdef __DARLING__
+int
+#else
 static int
+#endif // __DARLING__
 filt_machportpeek(struct knote *kn)
 {
 	ipc_mqueue_t mqueue = kn->kn_mqueue;

@@ -4,6 +4,8 @@ cmake_minimum_required(VERSION 3.10)
 
 add_subdirectory(duct-tape)
 
+set(DARLINGSERVER_INIT_PROCESS "/sbin/launchd" CACHE STRING "The init process darlingserver should execute (default is \"/sbin/launchd\")")
+
 include_directories(
 	include
 	internal-include
@@ -45,6 +47,7 @@ add_executable(darlingserver
 	src/process.cpp
 	src/thread.cpp
 	src/utility.cpp
+	src/kqchan.cpp
 )
 
 add_dependencies(darlingserver
@@ -71,3 +74,9 @@ include(setcap)
 
 # necessary because mldr has these capabilities, so in order to access it for ptracing, we need the same set or a superset
 setcap(bin/darlingserver cap_sys_rawio,cap_sys_resource+ep)
+
+if (NOT "${DARLINGSERVER_INIT_PROCESS}" STREQUAL "")
+	target_compile_definitions(darlingserver PRIVATE
+		DARLINGSERVER_INIT_PROCESS="${DARLINGSERVER_INIT_PROCESS}"
+	)
+endif()

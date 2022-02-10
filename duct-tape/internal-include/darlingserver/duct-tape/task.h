@@ -3,12 +3,14 @@
 
 #include <kern/task.h>
 
-typedef struct dtape_task {
+typedef struct dtape_task dtape_task_t;
+
+struct dtape_task {
 	void* context;
 	uint32_t saved_pid;
 
 	struct task xnu_task;
-} dtape_task_t;
+};
 
 __attribute__((always_inline))
 static dtape_task_t* dtape_task_for_xnu_task(task_t xnu_task) {

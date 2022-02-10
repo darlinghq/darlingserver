@@ -28,6 +28,7 @@
 
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/utility.hpp>
+#include <darlingserver/kqchan.hpp>
 
 struct DTapeHooks;
 
@@ -40,6 +41,7 @@ namespace DarlingServer {
 		friend class Thread;
 		friend class Server;
 		friend class Call; // HACK; see Call.cpp
+		friend class Kqchan;
 
 	private:
 		pid_t _pid;
@@ -49,10 +51,11 @@ namespace DarlingServer {
 		std::vector<std::weak_ptr<Thread>> _threads;
 		std::string _cachedVchrootPath;
 		std::shared_ptr<FD> _vchrootDescriptor;
-		dtape_task_handle_t _dtapeTask;
+		dtape_task_t* _dtapeTask;
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;
+		std::vector<std::shared_ptr<Kqchan>> _kqchannels;
 
 		void _unregisterThreads();
 
@@ -100,6 +103,9 @@ namespace DarlingServer {
 
 		void notifyCheckin();
 		void setPendingReplacement();
+
+		void registerKqchan(std::shared_ptr<Kqchan> kqchan);
+		void unregisterKqchan(std::shared_ptr<Kqchan> kqchan);
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

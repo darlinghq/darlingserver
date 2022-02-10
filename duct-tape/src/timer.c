@@ -37,7 +37,14 @@ pal_rtc_nanotime_t pal_rtc_nanotime_info;
 
 int master_cpu = 0;
 
+// convince timer_call code not to use long term timers
+int serverperfmode = 1;
+
 static mpqueue_head_t timer_queue;
+
+void dtape_timer_init(void) {
+	mpqueue_init(&timer_queue, LCK_GRP_NULL, LCK_ATTR_NULL);
+};
 
 uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
 	struct timespec ts;
@@ -79,3 +86,8 @@ boolean_t ml_timer_forced_evaluation(void) {
 	dtape_stub();
 	return FALSE;
 };
+
+timer_coalescing_priority_params_ns_t* timer_call_get_priority_params(void) {
+	static timer_coalescing_priority_params_ns_t params = {0};
+	return &params;
+}

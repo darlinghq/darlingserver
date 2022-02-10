@@ -29,37 +29,9 @@
 #include <darlingserver/call.hpp>
 #include <darlingserver/registry.hpp>
 #include <darlingserver/utility.hpp>
+#include <darlingserver/monitor.hpp>
 
 namespace DarlingServer {
-	class Server;
-
-	class Monitor {
-		friend class Server;
-
-	public:
-		enum class Event: uint32_t {
-			Readable = EPOLLIN,
-			Writable = EPOLLOUT,
-			Error = EPOLLERR,
-			HangUp = EPOLLHUP,
-			ReadHangUp = EPOLLRDHUP,
-		};
-
-	private:
-		std::shared_ptr<FD> _fd;
-		std::function<void(std::shared_ptr<Monitor>)> _callback;
-		Server* _server;
-		Event _event;
-		uint32_t _events;
-		std::mutex _lock;
-
-	public:
-		Monitor(std::shared_ptr<FD> descriptor, Event event, bool edgeTriggered, bool oneshot, std::function<void(std::shared_ptr<Monitor>)> callback);
-
-		void enable(bool edgeTriggered = false, bool oneshot = false);
-		void disable();
-	};
-
 	// NOTE: server instances MUST be created with `new` rather than as a normal local/stack variable
 	class Server {
 		friend class Monitor;

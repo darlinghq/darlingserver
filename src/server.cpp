@@ -39,26 +39,49 @@
 static DarlingServer::Server* sharedInstancePointer = nullptr;
 
 struct DTapeHooks {
-	static void dtape_hook_thread_suspend(void* thread_context, dtape_thread_continuation_callback_f continuationCallback, libsimple_lock_t* unlockMe) {
-		static_cast<DarlingServer::Thread*>(thread_context)->suspend(continuationCallback, unlockMe);
+	static void dtape_hook_thread_suspend(void* thread_context, dtape_thread_continuation_callback_f continuationCallback, void* continuationContext, libsimple_lock_t* unlockMe) {
+		if (auto thread = DarlingServer::Thread::currentThread()) {
+			if (auto fakeThread = thread->impersonatingThread()) {
+				if (thread_context == fakeThread.get()) {
+					return dtape_hook_thread_suspend(thread.get(), continuationCallback, continuationContext, unlockMe);
+				}
+			}
+		}
+		if (continuationCallback) {
+			static_cast<DarlingServer::Thread*>(thread_context)->suspend([=]() {
+				continuationCallback(continuationContext);
+			}, unlockMe);
+		} else {
+			static_cast<DarlingServer::Thread*>(thread_context)->suspend(nullptr, unlockMe);
+		}
 	};
 
 	static void dtape_hook_thread_resume(void* thread_context) {
 		static_cast<DarlingServer::Thread*>(thread_context)->resume();
 	};
 
-	static dtape_task_handle_t dtape_hook_current_task(void) {
-		auto process = DarlingServer::Process::currentProcess();
+	static dtape_task_t* dtape_hook_current_task(void) {
+		auto thread = DarlingServer::Thread::currentThread();
+		if (!thread) {
+			return NULL;
+		}
+		if (auto fakeThread = thread->impersonatingThread()) {
+			thread = fakeThread;
+		}
+		auto process = thread->process();
 		if (!process) {
 			return NULL;
 		}
 		return process->_dtapeTask;
 	};
 
-	static dtape_thread_handle_t dtape_hook_current_thread(void) {
+	static dtape_thread_t* dtape_hook_current_thread(void) {
 		auto thread = DarlingServer::Thread::currentThread();
 		if (!thread) {
 			return NULL;
+		}
+		if (auto fakeThread = thread->impersonatingThread()) {
+			thread = fakeThread;
 		}
 		return thread->_dtapeThread;
 	};
@@ -106,15 +129,17 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Thread*>(thread_context)->terminate();
 	};
 
-	static dtape_thread_handle_t dtape_hook_thread_create_kernel(void) {
+	static dtape_thread_t* dtape_hook_thread_create_kernel(void) {
 		auto thread = std::make_shared<DarlingServer::Thread>(DarlingServer::Thread::KernelThreadConstructorTag());
 		thread->registerWithProcess();
 		DarlingServer::threadRegistry().registerEntry(thread, true);
 		return thread->_dtapeThread;
 	};
 
-	static void dtape_hook_thread_start(void* thread_context, dtape_thread_continuation_callback_f startupCallback) {
-		static_cast<DarlingServer::Thread*>(thread_context)->_startKernelThread(startupCallback);
+	static void dtape_hook_thread_start(void* thread_context, dtape_thread_continuation_callback_f startupCallback, void* startupCallbackContext) {
+		static_cast<DarlingServer::Thread*>(thread_context)->startKernelThread([=]() {
+			startupCallback(startupCallbackContext);
+		});
 	};
 
 	static void dtape_hook_current_thread_interrupt_disable(void) {
@@ -123,6 +148,10 @@ struct DTapeHooks {
 
 	static void dtape_hook_current_thread_interrupt_enable(void) {
 		DarlingServer::Thread::interruptEnable();
+	};
+
+	static void dtape_hook_current_thread_syscall_return(int result_code) {
+		DarlingServer::Thread::syscallReturn(result_code);
 	};
 
 	static bool dtape_hook_task_read_memory(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length) {
@@ -145,6 +174,7 @@ struct DTapeHooks {
 		.thread_start = dtape_hook_thread_start,
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
+		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
 	};
@@ -333,7 +363,7 @@ void DarlingServer::Server::start() {
 					continue;
 				}
 
-				aliveMonitor->_callback(aliveMonitor);
+				aliveMonitor->_callback(aliveMonitor, static_cast<Monitor::Event>(event->events & (EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP)));
 			}
 		}
 
@@ -360,7 +390,7 @@ void DarlingServer::Server::start() {
 void DarlingServer::Server::monitorProcess(std::shared_ptr<Process> process) {
 	// the this-capture here is safe because the Server will always out-live everything else
 	std::weak_ptr<Process> weakProcess = process;
-	auto monitor = std::make_shared<Monitor>(process->_pidfd, Monitor::Event::Readable, false, false, [this, weakProcess](std::shared_ptr<Monitor> thisMonitor) {
+	auto monitor = std::make_shared<Monitor>(process->_pidfd, Monitor::Event::Readable, false, false, [this, weakProcess](std::shared_ptr<Monitor> thisMonitor, Monitor::Event events) {
 		removeMonitor(thisMonitor);
 
 		auto process = weakProcess.lock();
@@ -459,10 +489,10 @@ void DarlingServer::Server::removeMonitor(std::shared_ptr<Monitor> monitor) {
 	eventfd_write(_wakeupFD, 1);
 };
 
-DarlingServer::Monitor::Monitor(std::shared_ptr<FD> descriptor, Event event, bool edgeTriggered, bool oneshot, std::function<void(std::shared_ptr<Monitor>)> callback):
+DarlingServer::Monitor::Monitor(std::shared_ptr<FD> descriptor, Event events, bool edgeTriggered, bool oneshot, std::function<void(std::shared_ptr<Monitor>, Event)> callback):
 	_fd(descriptor),
-	_event(event),
-	_events((uint32_t)event | (oneshot ? EPOLLONESHOT : 0) | (edgeTriggered ? EPOLLET : 0)),
+	_userEvents(events),
+	_events((uint32_t)events | (oneshot ? EPOLLONESHOT : 0) | (edgeTriggered ? EPOLLET : 0)),
 	_callback(callback),
 	_server(nullptr)
 	{};
@@ -474,7 +504,7 @@ void DarlingServer::Monitor::enable(bool edgeTriggered, bool oneshot) {
 		return;
 	}
 
-	_events = (uint32_t)_event;
+	_events = (uint32_t)_userEvents;
 
 	if (edgeTriggered) {
 		_events |= EPOLLET;
