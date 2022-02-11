@@ -16,6 +16,7 @@ extern "C" {
 typedef struct dtape_thread dtape_thread_t;
 typedef struct dtape_task dtape_task_t;
 typedef struct dtape_kqchan_mach_port dtape_kqchan_mach_port_t;
+typedef struct dtape_semaphore dtape_semaphore_t;
 
 typedef enum dtape_log_level {
 	dtape_log_level_debug,
@@ -104,6 +105,7 @@ typedef void (*dtape_kqchan_mach_port_notification_callback_f)(void* context);
 dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context);
 dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* context);
 dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context);
+dtape_semaphore_t* dtape_semaphore_create(dtape_task_t* owning_task, int initial_value);
 
 /**
  * Destroys the given duct-tape task. The caller loses their reference on the task.
@@ -113,6 +115,7 @@ dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t 
 void dtape_task_destroy(dtape_task_t* task);
 void dtape_thread_destroy(dtape_thread_t* thread);
 void dtape_kqchan_mach_port_destroy(dtape_kqchan_mach_port_t* kqchan);
+void dtape_semaphore_destroy(dtape_semaphore_t* semaphore);
 
 void dtape_thread_entering(dtape_thread_t* thread);
 void dtape_thread_exiting(dtape_thread_t* thread);
@@ -137,6 +140,9 @@ void dtape_kqchan_mach_port_modify(dtape_kqchan_mach_port_t* kqchan, uint64_t re
 void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqchan);
 void dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size);
 bool dtape_kqchan_mach_port_has_events(dtape_kqchan_mach_port_t* kqchan);
+
+void dtape_semaphore_up(dtape_semaphore_t* semaphore);
+void dtape_semaphore_down(dtape_semaphore_t* semaphore);
 
 #ifdef __cplusplus
 };

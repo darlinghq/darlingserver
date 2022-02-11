@@ -77,6 +77,7 @@ DarlingServer::Process::Process(ID id, NSID nsid):
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
 	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this);
+	_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 	processLog.info() << "New process created with ID " << _pid << " and NSID " << _nspid;
 };
@@ -93,7 +94,11 @@ DarlingServer::Process::~Process() {
 
 	// schedule the duct-taped task to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	Thread::kernelAsync([dtapeTask = _dtapeTask]() {
+	// also destroy the fork-wait semaphore here
+	Thread::kernelAsync([dtapeTask = _dtapeTask, dtapeForkWaitSemaphore = _dtapeForkWaitSemaphore]() {
+		if (dtapeForkWaitSemaphore) {
+			dtape_semaphore_destroy(dtapeForkWaitSemaphore);
+		}
 		dtape_task_destroy(dtapeTask);
 	});
 };
@@ -283,16 +288,27 @@ void DarlingServer::Process::notifyCheckin() {
 		// destroy the main thread's old duct-taped thread
 		dtape_thread_destroy(mainThread->_dtapeThread);
 
+		// destroy the fork-wait semaphore
+		dtape_semaphore_destroy(_dtapeForkWaitSemaphore);
+
 		// repace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;
 		_dtapeTask = dtape_task_create(oldTask, _nspid, this);
 		dtape_task_destroy(oldTask);
+
+		// create a new fork-wait semaphore for the new task
+		_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 		// now replace the main thread's duct-taped thread with a new one
 		mainThread->_dtapeThread = dtape_thread_create(_dtapeTask, mainThread->_nstid, mainThread.get());
 	}
 
 	_pendingReplacement = false;
+
+	// notify the parent process (if we have one) that we've arrived
+	if (auto parent = _parentProcess.lock()) {
+		dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
+	}
 };
 
 void DarlingServer::Process::setPendingReplacement() {
@@ -318,4 +334,9 @@ void DarlingServer::Process::unregisterKqchan(std::shared_ptr<Kqchan> kqchan) {
 			break;
 		}
 	}
+};
+
+void DarlingServer::Process::waitForChildAfterFork() {
+	// this function is always called within a microthread
+	dtape_semaphore_down(_dtapeForkWaitSemaphore);
 };

@@ -56,6 +56,7 @@ namespace DarlingServer {
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;
 		std::vector<std::shared_ptr<Kqchan>> _kqchannels;
+		dtape_semaphore_t* _dtapeForkWaitSemaphore;
 
 		void _unregisterThreads();
 
@@ -106,6 +107,8 @@ namespace DarlingServer {
 
 		void registerKqchan(std::shared_ptr<Kqchan> kqchan);
 		void unregisterKqchan(std::shared_ptr<Kqchan> kqchan);
+
+		void waitForChildAfterFork();
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

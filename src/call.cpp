@@ -63,6 +63,12 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		return tmp;
 	});
 
+	if (process->id() != requestMessage.pid()) {
+		throw std::runtime_error("System-reported message PID != darlingserver-recorded PID");
+	}
+
+	callLog.debug() << "Received call #" << header->number << " (" << dserver_callnum_to_string(header->number) << ") from PID " << process->id() << " (" << process->nsid() << "), TID " << thread->id() << " (" << thread->nsid() << ")" << callLog.endLog;
+
 	// finally, let's construct the call class
 
 	#define CALL_CASE(_callName, _className) \
@@ -534,6 +540,22 @@ void DarlingServer::Call::KqchanMachPortOpen::processCall() {
 	}
 
 	_sendReply(code, socket);
+};
+
+void DarlingServer::Call::ForkWaitForChild::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			process->waitForChildAfterFork();
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
 };
 
 DSERVER_CLASS_SOURCE_DEFS;

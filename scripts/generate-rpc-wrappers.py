@@ -107,6 +107,8 @@ calls = [
 		('length', 'uint64_t'),
 	]),
 
+	('fork_wait_for_child', [], []),
+
 	#
 	# kqueue channels
 	#
@@ -768,6 +770,15 @@ for call in calls:
 	internal_header.write("\t\treturn {0}(&args); \\\n".format(trap_name))
 	internal_header.write("\t}; \\\n")
 internal_header.write("\n")
+
+public_header.write("__attribute__((always_inline)) static const char* dserver_callnum_to_string(dserver_callnum_t callnum) {\n")
+public_header.write("\tswitch (callnum) {\n")
+for call in calls:
+	call_name = call[0]
+	public_header.write("\t\t case dserver_callnum_" + call_name + ": return \"dserver_callnum_" + call_name + "\";\n")
+public_header.write("\t\tdefault: return (const char*)0;\n")
+public_header.write("\t}\n")
+public_header.write("};\n\n")
 
 for call in calls:
 	call_name = call[0]
