@@ -542,6 +542,34 @@ void DarlingServer::Call::KqchanMachPortOpen::processCall() {
 	_sendReply(code, socket);
 };
 
+void DarlingServer::Call::KqchanProcOpen::processCall() {
+	int code = 0;
+	int socket = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			auto kqchan = std::make_shared<Kqchan::Process>(process, _body.pid, _body.flags);
+
+			try {
+				socket = kqchan->setup();
+			} catch (std::system_error e) {
+				code = -e.code().value();
+			} catch (...) {
+				// just report that we couldn't find the process
+				code = -ESRCH;
+			}
+
+			process->registerKqchan(kqchan);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, socket);
+};
+
 void DarlingServer::Call::ForkWaitForChild::processCall() {
 	int code = 0;
 

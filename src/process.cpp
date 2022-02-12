@@ -90,7 +90,15 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 };
 
 DarlingServer::Process::~Process() {
+	processLog.info() << "Process with ID " << _pid << " and NSID " << _nspid << " being destroyed" << processLog.endLog;
+
 	_unregisterThreads();
+
+	{
+		std::shared_lock lock(_rwlock);
+		// TODO: get exit status
+		_notifyListeningKqchannels(NOTE_EXIT, 0);
+	}
 
 	// schedule the duct-taped task to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
@@ -261,6 +269,8 @@ void DarlingServer::Process::notifyCheckin() {
 	std::unique_lock lock(_rwlock);
 
 	if (_pendingReplacement) {
+		// exec case
+
 		processLog.info() << "Replacing process " << id() << " (" << nsid() << ") with a new task" << processLog.endLog;
 
 		// also, clear all threads except the main thread
@@ -301,14 +311,20 @@ void DarlingServer::Process::notifyCheckin() {
 
 		// now replace the main thread's duct-taped thread with a new one
 		mainThread->_dtapeThread = dtape_thread_create(_dtapeTask, mainThread->_nstid, mainThread.get());
+
+		// notify listeners that we have exec'd (i.e. been replaced)
+		_notifyListeningKqchannels(NOTE_EXEC, 0);
+	} else {
+		// fork case
+
+		// notify the parent process (if we have one) that we've arrived
+		if (auto parent = _parentProcess.lock()) {
+			dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
+			parent->_notifyListeningKqchannels(NOTE_FORK, nsid());
+		}
 	}
 
 	_pendingReplacement = false;
-
-	// notify the parent process (if we have one) that we've arrived
-	if (auto parent = _parentProcess.lock()) {
-		dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
-	}
 };
 
 void DarlingServer::Process::setPendingReplacement() {
@@ -322,21 +338,40 @@ void DarlingServer::Process::setPendingReplacement() {
 void DarlingServer::Process::registerKqchan(std::shared_ptr<Kqchan> kqchan) {
 	std::unique_lock lock(_rwlock);
 
-	_kqchannels.push_back(kqchan);
+	_kqchannels[kqchan->_idForProcess()] = kqchan;
 };
 
 void DarlingServer::Process::unregisterKqchan(std::shared_ptr<Kqchan> kqchan) {
 	std::unique_lock lock(_rwlock);
 
-	for (size_t i = 0; i < _kqchannels.size(); ++i) {
-		if (_kqchannels[i]->_idForProcess() == kqchan->_idForProcess()) {
-			_kqchannels.erase(_kqchannels.begin() + i);
-			break;
-		}
-	}
+	_kqchannels.erase(kqchan->_idForProcess());
 };
 
 void DarlingServer::Process::waitForChildAfterFork() {
 	// this function is always called within a microthread
 	dtape_semaphore_down(_dtapeForkWaitSemaphore);
+};
+
+void DarlingServer::Process::registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan) {
+	uintptr_t id = static_cast<std::shared_ptr<Kqchan>>(kqchan)->_idForProcess();
+	_listeningKqchannels[id] = kqchan;
+};
+
+void DarlingServer::Process::unregisterListeningKqchan(uintptr_t kqchanID) {
+	_listeningKqchannels.erase(kqchanID);
+};
+
+/**
+ * @pre Must hold #_rwlock at least for reading.
+ */
+void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t data) {
+	for (auto& [id, maybeKqchan]: _listeningKqchannels) {
+		auto kqchan = maybeKqchan.lock();
+
+		if (!kqchan) {
+			continue;
+		}
+
+		kqchan->_notify(event, data);
+	}
 };

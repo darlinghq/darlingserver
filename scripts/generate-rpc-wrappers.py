@@ -122,6 +122,13 @@ calls = [
 		('socket', '@fd'),
 	]),
 
+	('kqchan_proc_open', [
+		('pid', 'int32_t'),
+		('flags', 'uint32_t'),
+	], [
+		('socket', '@fd'),
+	]),
+
 	#
 	# pthread cancelation
 	#
@@ -624,12 +631,13 @@ for call in calls:
 	internal_header.write(") { \\\n")
 
 	internal_header.write(textwrap.indent(textwrap.dedent("""\
-		Message reply(sizeof(dserver_rpc_reply_{0}_t), {1}); \\
+		Message reply(sizeof(dserver_rpc_reply_{0}_t), 0); \\
+		int fdIndex = 0; \\
 		reply.setAddress(_replyAddress); \\
 		auto replyStruct = reinterpret_cast<dserver_rpc_reply_{0}_t*>(reply.data().data()); \\
 		replyStruct->header.number = dserver_callnum_{0}; \\
 		replyStruct->header.code = resultCode; \\
-		"""), '\t\t\t').format(call_name, fd_count_in_reply))
+		"""), '\t\t\t').format(call_name))
 
 	fd_index = 0
 	for param in reply_parameters:
@@ -637,8 +645,10 @@ for call in calls:
 		val = param_name
 
 		if is_fd(param):
-			val = str(fd_index)
-			internal_header.write("\t\t\treply.pushDescriptor(" + param_name + "); \\\n")
+			val = "((" + param_name + " >= 0) ? (fdIndex++) : (-1))"
+			internal_header.write("\t\t\tif (" + param_name + " >= 0) { \\\n")
+			internal_header.write("\t\t\t\treply.pushDescriptor(" + param_name + "); \\\n")
+			internal_header.write("\t\t\t} \\\n")
 
 		internal_header.write("\t\t\treplyStruct->body." + param_name + " = " + val + "; \\\n")
 	internal_header.write("\t\t\t_replyQueue.push(std::move(reply)); \\\n")
@@ -893,24 +903,21 @@ for call in calls:
 	library_source.write("\tdserver_rpc_reply_" + call_name + "_t reply;\n")
 
 	if fd_count_in_call > 0 or fd_count_in_reply > 0:
-		library_source.write("\tint fds[" + str(max(fd_count_in_call, fd_count_in_reply)) + "]")
-		if fd_count_in_call > 0:
-			library_source.write(" = { ")
-			is_first = True
-			for param in call_parameters:
-				param_name = param[0]
-
-				if not is_fd(param):
-					continue
-
-				if is_first:
-					is_first = False
-				else:
-					library_source.write(", ")
-				library_source.write(param_name)
-			library_source.write(" }")
-		library_source.write(";\n")
+		library_source.write("\tint fds[" + str(max(fd_count_in_call, fd_count_in_reply)) + "];\n")
+		library_source.write("\tint valid_fd_count;\n")
 		library_source.write("\tchar controlbuf[DSERVER_RPC_HOOKS_CMSG_SPACE(sizeof(fds))];\n")
+
+	if fd_count_in_call > 0:
+		library_source.write("\tvalid_fd_count = 0;\n")
+		for param in call_parameters:
+			param_name = param[0]
+
+			if not is_fd(param):
+				continue
+
+			library_source.write("\tif (" + param_name + " >= 0) {\n")
+			library_source.write("\t\tfds[valid_fd_count++] = " + param_name + ";\n")
+			library_source.write("\t}\n")
 
 	library_source.write(textwrap.indent(textwrap.dedent("""\
 		dserver_rpc_hooks_iovec_t call_data = {
@@ -938,9 +945,9 @@ for call in calls:
 			dserver_rpc_hooks_cmsghdr_t* call_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&callmsg);
 			call_cmsg->cmsg_level = DSERVER_RPC_HOOKS_SOL_SOCKET;
 			call_cmsg->cmsg_type = DSERVER_RPC_HOOKS_SCM_RIGHTS;
-			call_cmsg->cmsg_len = DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * {0});
-			dserver_rpc_hooks_memcpy(DSERVER_RPC_HOOKS_CMSG_DATA(call_cmsg), fds, sizeof(int) * {0});
-			"""), '\t').format(fd_count_in_call))
+			call_cmsg->cmsg_len = DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * valid_fd_count);
+			dserver_rpc_hooks_memcpy(DSERVER_RPC_HOOKS_CMSG_DATA(call_cmsg), fds, sizeof(int) * valid_fd_count);
+			"""), '\t'))
 
 	library_source.write(textwrap.indent(textwrap.dedent("""\
 		dserver_rpc_hooks_iovec_t reply_data = {
@@ -985,21 +992,32 @@ for call in calls:
 	library_source.write("\t}\n\n")
 
 	if fd_count_in_reply != 0:
+		library_source.write("\tvalid_fd_count = 0;\n")
+		for param in reply_parameters:
+			param_name = param[0]
+
+			if not is_fd(param):
+				continue
+
+			library_source.write("\tif (reply.body." + param_name + " >= 0) {\n")
+			library_source.write("\t\t++valid_fd_count;\n")
+			library_source.write("\t}\n")
+
 		library_source.write(textwrap.indent(textwrap.dedent("""\
 			dserver_rpc_hooks_cmsghdr_t* reply_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&replymsg);
-			if (!reply_cmsg || reply_cmsg->cmsg_level != DSERVER_RPC_HOOKS_SOL_SOCKET || reply_cmsg->cmsg_type != DSERVER_RPC_HOOKS_SCM_RIGHTS || reply_cmsg->cmsg_len != DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * {0})) {{
+			if (!reply_cmsg || reply_cmsg->cmsg_level != DSERVER_RPC_HOOKS_SOL_SOCKET || reply_cmsg->cmsg_type != DSERVER_RPC_HOOKS_SCM_RIGHTS || reply_cmsg->cmsg_len != DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * valid_fd_count)) {
 				return dserver_rpc_hooks_get_bad_message_status();
-			}}
-			dserver_rpc_hooks_memcpy(fds, DSERVER_RPC_HOOKS_CMSG_DATA(reply_cmsg), sizeof(int) * {0});
-			"""), '\t').format(fd_count_in_reply))
+			}
+			dserver_rpc_hooks_memcpy(fds, DSERVER_RPC_HOOKS_CMSG_DATA(reply_cmsg), sizeof(int) * valid_fd_count);
+			"""), '\t'))
 
 	for param in reply_parameters:
 		param_name = param[0]
 
 		if is_fd(param):
 			library_source.write("\tif (out_" + param_name + ") {\n")
-			library_source.write("\t\t*out_" + param_name + " = fds[reply.body." + param_name + "];\n")
-			library_source.write("\t} else {\n")
+			library_source.write("\t\t*out_" + param_name + " = (reply.body." + param_name + " >= 0) ? fds[reply.body." + param_name + "] : -1;\n")
+			library_source.write("\t} else if (reply.body." + param_name + " >= 0) {\n")
 			library_source.write("\t\tdserver_rpc_hooks_close_fd(fds[reply.body." + param_name + "]);\n")
 			library_source.write("\t}\n")
 		else:

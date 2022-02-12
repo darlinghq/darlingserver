@@ -25,6 +25,7 @@
 #include <vector>
 #include <mutex>
 #include <shared_mutex>
+#include <unordered_map>
 
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/utility.hpp>
@@ -55,7 +56,8 @@ namespace DarlingServer {
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;
-		std::vector<std::shared_ptr<Kqchan>> _kqchannels;
+		std::unordered_map<uintptr_t, std::shared_ptr<Kqchan>> _kqchannels;
+		std::unordered_map<uintptr_t, std::weak_ptr<Kqchan::Process>> _listeningKqchannels;
 		dtape_semaphore_t* _dtapeForkWaitSemaphore;
 
 		void _unregisterThreads();
@@ -65,6 +67,8 @@ namespace DarlingServer {
 		friend struct ::DTapeHooks;
 
 		bool _readOrWriteMemory(bool isWrite, uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const;
+
+		void _notifyListeningKqchannels(uint32_t event, int64_t data);
 
 	public:
 		using ID = pid_t;
@@ -107,6 +111,9 @@ namespace DarlingServer {
 
 		void registerKqchan(std::shared_ptr<Kqchan> kqchan);
 		void unregisterKqchan(std::shared_ptr<Kqchan> kqchan);
+
+		void registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan);
+		void unregisterListeningKqchan(uintptr_t kqchanID);
 
 		void waitForChildAfterFork();
 

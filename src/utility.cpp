@@ -33,3 +33,13 @@ DarlingServer::FD& DarlingServer::FD::operator=(FD&& other) {
 int DarlingServer::FD::fd() const {
 	return _fd;
 };
+
+int DarlingServer::FD::extract() {
+	auto fd = _fd;
+	_fd = -1;
+	return fd;
+};
+
+DarlingServer::FD::operator bool() {
+	return _fd != -1;
+};

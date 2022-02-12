@@ -20,6 +20,9 @@ namespace DarlingServer {
 		FD& operator=(FD&& other);
 
 		int fd() const;
+		int extract();
+
+		explicit operator bool();
 	};
 };
 

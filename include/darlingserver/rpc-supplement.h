@@ -54,6 +54,16 @@ enum dserver_kqchan_msgnum {
 	 * A request to read the data for the most recent notification on this mach port kqueue channel.
 	 */
 	dserver_kqchan_msgnum_mach_port_read,
+
+	/**
+	 * A request to modify the server context for this proc kqueue channel.
+	 */
+	dserver_kqchan_msgnum_proc_modify,
+
+	/**
+	 * A request to read the data for the most recent notification on this proc kqueue channel.
+	 */
+	dserver_kqchan_msgnum_proc_read,
 };
 
 typedef enum dserver_kqchan_msgnum dserver_kqchan_msgnum_t;
@@ -104,5 +114,24 @@ typedef struct dserver_kqchan_reply_mach_port_read {
 		uint64_t ext[4];
 	} kev;
 } dserver_kqchan_reply_mach_port_read_t;
+
+typedef struct dserver_kqchan_call_proc_modify {
+	dserver_kqchan_callhdr_t header;
+	uint32_t flags;
+} dserver_kqchan_call_proc_modify_t;
+
+typedef struct dserver_kqchan_reply_proc_modify {
+	dserver_kqchan_replyhdr_t header;
+} dserver_kqchan_reply_proc_modify_t;
+
+typedef struct dserver_kqchan_call_proc_read {
+	dserver_kqchan_callhdr_t header;
+} dserver_kqchan_call_proc_read_t;
+
+typedef struct dserver_kqchan_reply_proc_read {
+	dserver_kqchan_replyhdr_t header;
+	uint32_t fflags;
+	int64_t data;
+} dserver_kqchan_reply_proc_read_t;
 
 #endif // _DARLINGSERVER_RPC_SUPPLEMENT_H_
