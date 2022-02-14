@@ -25,6 +25,7 @@
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/registry.hpp>
+#include <darlingserver/logging.hpp>
 
 #include <memory>
 
@@ -44,9 +45,12 @@ namespace DarlingServer {
 		std::weak_ptr<Thread> _thread;
 		MessageQueue& _replyQueue;
 		Address _replyAddress;
+		dserver_rpc_callhdr_t _header;
+
+		static DarlingServer::Log rpcReplyLog;
 
 	public:
-		Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress);
+		Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader);
 		virtual ~Call();
 
 		static std::shared_ptr<Call> callFromMessage(Message&& requestMessage, MessageQueue& replyQueue);

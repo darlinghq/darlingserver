@@ -56,6 +56,9 @@ namespace DarlingServer {
 		bool _terminating = false;
 		std::shared_ptr<Call> _activeSyscall = nullptr;
 		std::shared_ptr<Thread> _impersonating = nullptr;
+		int _pendingSignal = 0;
+		bool _processingSignal = false;
+		bool _pendingCallOverride = false;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
@@ -133,6 +136,22 @@ namespace DarlingServer {
 		 * The thread that this thread is impersonating.
 		 */
 		std::shared_ptr<Thread> impersonatingThread() const;
+
+		void loadStateFromUser(uint64_t threadState, uint64_t floatState);
+		void saveStateToUser(uint64_t threadState, uint64_t floatState);
+
+		int pendingSignal() const;
+
+		/**
+		 * Sets the new pending signal for this thread and returns the previous one.
+		 */
+		int setPendingSignal(int signal);
+
+		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
+
+		void handleSignal(int signal);
+
+		void setPendingCallOverride(bool pendingCallOverride);
 
 		static std::shared_ptr<Thread> currentThread();
 

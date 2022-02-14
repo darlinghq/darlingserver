@@ -1579,9 +1579,11 @@ VM_MAP_IS_ALIEN(
 	 * as it currently would on iOS.
 	 */
 #if XNU_TARGET_OS_OSX
+#ifndef __DARLING__
 	if (map->is_alien) {
 		return true;
 	}
+#endif
 	return false;
 #else /* XNU_TARGET_OS_OSX */
 	return true;

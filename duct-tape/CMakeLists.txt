@@ -12,6 +12,7 @@ include_directories(
 	xnu
 
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk
+	${CMAKE_CURRENT_BINARY_DIR}/../include
 )
 
 add_compile_definitions(
@@ -115,6 +116,7 @@ add_compile_definitions(
 	KERNEL_SERVER=1
 	KERNEL_USER=1
 	MACH_NOTIFY_SEND_POSSIBLE_EXPECTED
+	XNU_TARGET_OS_OSX=1
 
 	_CLOCK_T=1
 	NO_KDEBUG=1
@@ -266,6 +268,7 @@ add_library(darlingserver_duct_tape
 	xnu/osfmk/kern/sync_lock.c
 	xnu/osfmk/kern/syscall_emulation.c
 	xnu/osfmk/kern/ux_handler.c
+	xnu/osfmk/kern/exception.c
 
 	xnu/osfmk/ipc/ipc_entry.c
 	xnu/osfmk/ipc/ipc_hash.c

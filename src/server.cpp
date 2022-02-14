@@ -108,19 +108,25 @@ struct DTapeHooks {
 
 	static void dtape_hook_log(dtape_log_level_t level, const char* message) {
 		static const auto log = DarlingServer::Log("dtape");
+		auto process = DarlingServer::Process::currentProcess();
+		auto thread = DarlingServer::Thread::currentThread();
+		pid_t pid = process ? process->id() : -1;
+		pid_t nspid = process ? process->nsid() : -1;
+		pid_t tid = thread ? thread->id() : -1;
+		pid_t nstid = thread ? thread->nsid() : -1;
 		switch (level) {
 			case dtape_log_level_debug:
-				log.debug() << message << log.endLog;
+				log.debug() << pid << "(" << nspid << "):" << tid << "(" << nstid << "): " << message << log.endLog;
 				break;
 			case dtape_log_level_info:
-				log.info() << message << log.endLog;
+				log.info() << pid << "(" << nspid << "):" << tid << "(" << nstid << "): " << message << log.endLog;
 				break;
 			case dtape_log_level_warning:
-				log.warning() << message << log.endLog;
+				log.warning() << pid << "(" << nspid << "):" << tid << "(" << nstid << "): " << message << log.endLog;
 				break;
 			case dtape_log_level_error:
 			default:
-				log.error() << message << log.endLog;
+				log.error() << pid << "(" << nspid << "):" << tid << "(" << nstid << "): " << message << log.endLog;
 				break;
 		}
 	};
@@ -140,6 +146,14 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Thread*>(thread_context)->startKernelThread([=]() {
 			startupCallback(startupCallbackContext);
 		});
+	};
+
+	static void dtape_hook_thread_set_pending_signal(void* thread_context, int pending_signal) {
+		static_cast<DarlingServer::Thread*>(thread_context)->setPendingSignal(pending_signal);
+	};
+
+	static void dtape_hook_thread_set_pending_call_override(void* thread_context, bool pending_call_override) {
+		static_cast<DarlingServer::Thread*>(thread_context)->setPendingCallOverride(pending_call_override);
 	};
 
 	static void dtape_hook_current_thread_interrupt_disable(void) {
@@ -172,6 +186,8 @@ struct DTapeHooks {
 		.thread_terminate = dtape_hook_thread_terminate,
 		.thread_create_kernel = dtape_hook_thread_create_kernel,
 		.thread_start = dtape_hook_thread_start,
+		.thread_set_pending_signal = dtape_hook_thread_set_pending_signal,
+		.thread_set_pending_call_override = dtape_hook_thread_set_pending_call_override,
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
 		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,

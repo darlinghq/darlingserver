@@ -17,12 +17,26 @@ task_t kernel_task = NULL;
 
 void dtape_task_init(void) {
 	// this will assign to kernel_task
-	if (!dtape_task_create(NULL, 0, NULL)) {
+	dserver_rpc_architecture_t arch = dserver_rpc_architecture_invalid;
+
+#if __x86_64__
+	arch = dserver_rpc_architecture_x86_64;
+#elif __i386__
+	arch = dserver_rpc_architecture_i386;
+#elif __aarch64__
+	arch = dserver_rpc_architecture_arm64;
+#elif __arm__
+	arch = dserver_rpc_architecture_arm32;
+#else
+	#error Unknown architecture
+#endif
+
+	if (!dtape_task_create(NULL, 0, NULL, arch)) {
 		panic("Failed to create kernel task");
 	}
 };
 
-dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context) {
+dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context, dserver_rpc_architecture_t architecture) {
 	if (parent_task == NULL && nsid == 0 && kernel_task) {
 		dtape_task_t* task = dtape_task_for_xnu_task(kernel_task);
 
@@ -45,6 +59,8 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 
 	task->context = context;
 	task->saved_pid = nsid;
+	task->architecture = architecture;
+	task->has_sigexc = false;
 	memset(&task->xnu_task, 0, sizeof(task->xnu_task));
 
 	// this next section uses code adapted from XNU's task_create_internal() in osfmk/kern/task.c
@@ -68,6 +84,11 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	} else {
 		task->xnu_task.sec_token = KERNEL_SECURITY_TOKEN;
 		task->xnu_task.audit_token = KERNEL_AUDIT_TOKEN;
+	}
+
+	if (architecture == dserver_rpc_architecture_x86_64 || architecture == dserver_rpc_architecture_arm64) {
+		task_set_64Bit_addr(&task->xnu_task);
+		task_set_64Bit_data(&task->xnu_task);
 	}
 
 	ipc_task_enable(&task->xnu_task);

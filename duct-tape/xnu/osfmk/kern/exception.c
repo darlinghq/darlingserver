@@ -510,10 +510,12 @@ exception_triage_thread(
 	}
 
 out:
+#ifndef __DARLING__
 	if ((exception != EXC_CRASH) && (exception != EXC_RESOURCE) &&
 	    (exception != EXC_GUARD) && (exception != EXC_CORPSE_NOTIFY)) {
 		thread_exception_return();
 	}
+#endif // __DARLING__
 	return kr;
 }
 

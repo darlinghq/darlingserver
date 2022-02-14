@@ -28,9 +28,10 @@
 
 static DarlingServer::Log processLog("process");
 
-DarlingServer::Process::Process(ID id, NSID nsid):
+DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture):
 	_pid(id),
-	_nspid(nsid)
+	_nspid(nsid),
+	_architecture(architecture)
 {
 	int pidfd = syscall(SYS_pidfd_open, _pid, 0);
 	if (pidfd < 0) {
@@ -76,7 +77,7 @@ DarlingServer::Process::Process(ID id, NSID nsid):
 	}
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
-	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this);
+	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
 	_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 	processLog.info() << "New process created with ID " << _pid << " and NSID " << _nspid;
@@ -86,7 +87,18 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 	_pid(-1),
 	_nspid(0)
 {
-	_dtapeTask = dtape_task_create(nullptr, _nspid, this);
+#if __x86_64__
+	_architecture = Architecture::x86_64;
+#elif __i386__
+	_architecture = Architecture::i386;
+#elif __aarch64__
+	_architecture = Architecture::ARM64;
+#elif __arm__
+	_architecture = Architecture::ARM32;
+#else
+	#error Unknown architecture
+#endif
+	_dtapeTask = dtape_task_create(nullptr, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
 };
 
 DarlingServer::Process::~Process() {
@@ -265,7 +277,7 @@ bool DarlingServer::Process::writeMemory(uintptr_t remoteAddress, const void* lo
 	return _readOrWriteMemory(true, remoteAddress, const_cast<void*>(localBuffer), length, errorCode);
 };
 
-void DarlingServer::Process::notifyCheckin() {
+void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 	std::unique_lock lock(_rwlock);
 
 	if (_pendingReplacement) {
@@ -303,7 +315,8 @@ void DarlingServer::Process::notifyCheckin() {
 
 		// repace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;
-		_dtapeTask = dtape_task_create(oldTask, _nspid, this);
+		_architecture = architecture;
+		_dtapeTask = dtape_task_create(oldTask, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
 		dtape_task_destroy(oldTask);
 
 		// create a new fork-wait semaphore for the new task
@@ -316,6 +329,10 @@ void DarlingServer::Process::notifyCheckin() {
 		_notifyListeningKqchannels(NOTE_EXEC, 0);
 	} else {
 		// fork case
+
+		if (architecture != _architecture) {
+			throw std::runtime_error("Impossible: parent process architecture != child process architecture on fork");
+		}
 
 		// notify the parent process (if we have one) that we've arrived
 		if (auto parent = _parentProcess.lock()) {
@@ -374,4 +391,12 @@ void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t 
 
 		kqchan->_notify(event, data);
 	}
+};
+
+bool DarlingServer::Process::is64Bit() const {
+	return _architecture == Architecture::x86_64 || _architecture == Architecture::ARM64;
+};
+
+DarlingServer::Process::Architecture DarlingServer::Process::architecture() const {
+	return _architecture;
 };

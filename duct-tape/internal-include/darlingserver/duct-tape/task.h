@@ -3,12 +3,15 @@
 
 #include <kern/task.h>
 
+#include <darlingserver/rpc.h>
+
 typedef struct dtape_task dtape_task_t;
 
 struct dtape_task {
 	void* context;
 	uint32_t saved_pid;
-
+	dserver_rpc_architecture_t architecture;
+	bool has_sigexc;
 	struct task xnu_task;
 };
 

@@ -30,6 +30,7 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/utility.hpp>
 #include <darlingserver/kqchan.hpp>
+#include <darlingserver/rpc.h>
 
 struct DTapeHooks;
 
@@ -43,6 +44,15 @@ namespace DarlingServer {
 		friend class Server;
 		friend class Call; // HACK; see Call.cpp
 		friend class Kqchan;
+
+	public:
+		enum class Architecture {
+			Invalid = dserver_rpc_architecture_invalid,
+			i386 = dserver_rpc_architecture_i386,
+			x86_64 = dserver_rpc_architecture_x86_64,
+			ARM32 = dserver_rpc_architecture_arm32,
+			ARM64 = dserver_rpc_architecture_arm64,
+		};
 
 	private:
 		pid_t _pid;
@@ -59,6 +69,7 @@ namespace DarlingServer {
 		std::unordered_map<uintptr_t, std::shared_ptr<Kqchan>> _kqchannels;
 		std::unordered_map<uintptr_t, std::weak_ptr<Kqchan::Process>> _listeningKqchannels;
 		dtape_semaphore_t* _dtapeForkWaitSemaphore;
+		Architecture _architecture;
 
 		void _unregisterThreads();
 
@@ -74,7 +85,7 @@ namespace DarlingServer {
 		using ID = pid_t;
 		using NSID = ID;
 
-		Process(ID id, NSID nsid);
+		Process(ID id, NSID nsid, Architecture architecture);
 		Process(KernelProcessConstructorTag tag);
 		~Process();
 
@@ -106,7 +117,7 @@ namespace DarlingServer {
 		bool readMemory(uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode = nullptr) const;
 		bool writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode = nullptr) const;
 
-		void notifyCheckin();
+		void notifyCheckin(Architecture architecture);
 		void setPendingReplacement();
 
 		void registerKqchan(std::shared_ptr<Kqchan> kqchan);
@@ -116,6 +127,9 @@ namespace DarlingServer {
 		void unregisterListeningKqchan(uintptr_t kqchanID);
 
 		void waitForChildAfterFork();
+
+		bool is64Bit() const;
+		Architecture architecture() const;
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

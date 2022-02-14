@@ -164,6 +164,12 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 		throw std::runtime_error("Thread was not registered with Process");
 	}
 	process->_threads.erase(it);
+
+	if (process->_threads.empty()) {
+		// if this was the last thread in the process, it has died, so unregister it.
+		// this should already be handled by the process' pidfd monitor, but just in case, we also handle it here.
+		processRegistry().unregisterEntry(process);
+	}
 };
 
 DarlingServer::Thread::ID DarlingServer::Thread::id() const {
@@ -289,7 +295,10 @@ void DarlingServer::Thread::doWork() {
 			throw std::runtime_error("Thread has both a pending call and a pending continuation");
 		}
 
-		if (_suspended && !_pendingCall) {
+		if (_suspended && (_pendingCallOverride || !_pendingCall)) {
+			if (_pendingCallOverride) {
+				threadLog.info() << "Thread was suspended with a pending call override and is now resuming with a pending call" << threadLog.endLog;
+			}
 			// we were in the middle of processing a call and we need to resume now
 			_suspended = false;
 			_rwlock.unlock();
@@ -544,4 +553,68 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::threadForPort(uint
 	}
 
 	return thread->shared_from_this();
+};
+
+void DarlingServer::Thread::loadStateFromUser(uint64_t threadState, uint64_t floatState) {
+	int ret = dtape_thread_load_state_from_user(_dtapeThread, threadState, floatState);
+	if (ret != 0) {
+		throw std::system_error(-ret, std::generic_category());
+	}
+};
+
+void DarlingServer::Thread::saveStateToUser(uint64_t threadState, uint64_t floatState) {
+	int ret = dtape_thread_save_state_to_user(_dtapeThread, threadState, floatState);
+	if (ret != 0) {
+		throw std::system_error(-ret, std::generic_category());
+	}
+};
+
+int DarlingServer::Thread::pendingSignal() const {
+	std::shared_lock lock(_rwlock);
+	return _pendingSignal;
+};
+
+int DarlingServer::Thread::setPendingSignal(int signal) {
+	std::unique_lock lock(_rwlock);
+	auto pendingSignal = _pendingSignal;
+	_pendingSignal = signal;
+	return pendingSignal;
+};
+
+void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
+	loadStateFromUser(threadStateAddress, floatStateAddress);
+
+	{
+		std::unique_lock lock(_rwlock);
+		_pendingSignal = 0;
+		_processingSignal = true;
+	}
+
+	dtape_thread_process_signal(_dtapeThread, bsdSignalNumber, linuxSignalNumber, code, signalAddress);
+
+	// LLDB commonly suspends the thread upon reception of an exception and assumes
+	// that the thread will stay suspended after replying to the exception message,
+	// until thread_resume() is called.
+	dtape_thread_wait_while_user_suspended(_dtapeThread);
+
+	{
+		std::unique_lock lock(_rwlock);
+		_processingSignal = false;
+	}
+
+	saveStateToUser(threadStateAddress, floatStateAddress);
+};
+
+void DarlingServer::Thread::handleSignal(int signal) {
+	std::unique_lock lock(_rwlock);
+	if (_processingSignal) {
+		_pendingSignal = signal;
+	} else {
+		throw std::runtime_error("Attempt to handle signal while not processing signal");
+	}
+};
+
+void DarlingServer::Thread::setPendingCallOverride(bool pendingCallOverride) {
+	std::unique_lock lock(_rwlock);
+	_pendingCallOverride = pendingCallOverride;
 };

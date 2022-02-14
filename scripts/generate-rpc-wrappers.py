@@ -109,6 +109,20 @@ calls = [
 
 	('fork_wait_for_child', [], []),
 
+	('sigprocess', [
+		('bsd_signal_number', 'int32_t'),
+		('linux_signal_number', 'int32_t'),
+		('sender_pid', 'int32_t'),
+		('code', 'int32_t'),
+		('signal_address', 'uint64_t'),
+
+		# these are in/out pointers
+		('thread_state', 'uint64_t'),
+		('float_state', 'uint64_t'),
+	], [
+		('new_bsd_signal_number', 'int32_t'),
+	]),
+
 	#
 	# kqueue channels
 	#
@@ -455,10 +469,21 @@ public_header.write("""\
 
 typedef enum dserver_callnum dserver_callnum_t;
 
+enum dserver_rpc_architecture {
+	dserver_rpc_architecture_invalid,
+	dserver_rpc_architecture_i386,
+	dserver_rpc_architecture_x86_64,
+	dserver_rpc_architecture_arm32,
+	dserver_rpc_architecture_arm64,
+};
+
+typedef enum dserver_rpc_architecture dserver_rpc_architecture_t;
+
 typedef struct dserver_rpc_callhdr {
+	dserver_callnum_t number;
 	pid_t pid;
 	pid_t tid;
-	dserver_callnum_t number;
+	dserver_rpc_architecture_t architecture;
 } dserver_rpc_callhdr_t;
 
 typedef struct dserver_rpc_replyhdr {
@@ -481,6 +506,10 @@ DSERVER_RPC_HOOKS_ATTRIBUTE pid_t dserver_rpc_hooks_get_pid(void);
 
 #ifndef dserver_rpc_hooks_get_tid
 DSERVER_RPC_HOOKS_ATTRIBUTE pid_t dserver_rpc_hooks_get_tid(void);
+#endif
+
+#ifndef dserver_rpc_hooks_get_architecture
+DSERVER_RPC_HOOKS_ATTRIBUTE dserver_rpc_architecture_t dserver_rpc_hooks_get_architecture(void);
 #endif
 
 #ifndef dserver_rpc_hooks_get_server_address
@@ -579,7 +608,7 @@ for call in calls:
 			{2}
 		public: \\
 			{1}(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, dserver_rpc_call_{0}_t* data, Message&& requestMessage): \\
-				Call(replyQueue, thread, requestMessage.address()){3} \\
+				Call(replyQueue, thread, requestMessage.address(), reinterpret_cast<dserver_rpc_callhdr_t*>(data)){3} \\
 				{4}
 			{{ \\
 		"""), '\t').format(
@@ -629,6 +658,15 @@ for call in calls:
 
 		internal_header.write(", " + parse_type(param, False) + " " + param_name)
 	internal_header.write(") { \\\n")
+
+	internal_header.write("\t\t\trpcReplyLog.debug() << \"Replying to call #\" << dserver_callnum_" + call_name + " << \" (dserver_callnum_" + call_name + ") from PID \" << _header.pid << \", TID \" << _header.tid << \" with result code \" << resultCode ")
+
+	for param in reply_parameters:
+		param_name = param[0]
+
+		internal_header.write("<< \", " + param_name + "=\" << " + param_name + " ")
+
+	internal_header.write("<< rpcReplyLog.endLog; \\\n")
 
 	internal_header.write(textwrap.indent(textwrap.dedent("""\
 		Message reply(sizeof(dserver_rpc_reply_{0}_t), 0); \\
@@ -879,6 +917,7 @@ for call in calls:
 	library_source.write(textwrap.indent(textwrap.dedent("""\
 		dserver_rpc_call_{0}_t call = {{
 			.header = {{
+				.architecture = dserver_rpc_hooks_get_architecture(),
 				.pid = dserver_rpc_hooks_get_pid(),
 				.tid = dserver_rpc_hooks_get_tid(),
 				.number = dserver_callnum_{0},
@@ -971,7 +1010,7 @@ for call in calls:
 	library_source.write("\t};\n\n")
 
 	library_source.write("\tint socket = dserver_rpc_hooks_get_socket();\n")
-	library_source.write("\tif (socket < 0) {")
+	library_source.write("\tif (socket < 0) {\n")
 	library_source.write("\t\treturn dserver_rpc_hooks_get_broken_pipe_status();\n")
 	library_source.write("\t}\n\n")
 
@@ -1004,11 +1043,13 @@ for call in calls:
 			library_source.write("\t}\n")
 
 		library_source.write(textwrap.indent(textwrap.dedent("""\
-			dserver_rpc_hooks_cmsghdr_t* reply_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&replymsg);
-			if (!reply_cmsg || reply_cmsg->cmsg_level != DSERVER_RPC_HOOKS_SOL_SOCKET || reply_cmsg->cmsg_type != DSERVER_RPC_HOOKS_SCM_RIGHTS || reply_cmsg->cmsg_len != DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * valid_fd_count)) {
-				return dserver_rpc_hooks_get_bad_message_status();
+			if (valid_fd_count > 0) {
+				dserver_rpc_hooks_cmsghdr_t* reply_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&replymsg);
+				if (!reply_cmsg || reply_cmsg->cmsg_level != DSERVER_RPC_HOOKS_SOL_SOCKET || reply_cmsg->cmsg_type != DSERVER_RPC_HOOKS_SCM_RIGHTS || reply_cmsg->cmsg_len != DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * valid_fd_count)) {
+					return dserver_rpc_hooks_get_bad_message_status();
+				}
+				dserver_rpc_hooks_memcpy(fds, DSERVER_RPC_HOOKS_CMSG_DATA(reply_cmsg), sizeof(int) * valid_fd_count);
 			}
-			dserver_rpc_hooks_memcpy(fds, DSERVER_RPC_HOOKS_CMSG_DATA(reply_cmsg), sizeof(int) * valid_fd_count);
 			"""), '\t'))
 
 	for param in reply_parameters:

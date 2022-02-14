@@ -31,6 +31,8 @@
 
 static DarlingServer::Log callLog("calls");
 
+DarlingServer::Log DarlingServer::Call::rpcReplyLog("replies");
+
 std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Message&& requestMessage, MessageQueue& replyQueue) {
 	if (requestMessage.data().size() < sizeof(dserver_rpc_callhdr_t)) {
 		throw std::invalid_argument("Message buffer was too small for call header");
@@ -52,7 +54,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 	// now let's lookup (and possibly create) the process and thread making this call
 	process = processRegistry().registerIfAbsent(header->pid, [&]() {
-		auto tmp = std::make_shared<Process>(requestMessage.pid(), header->pid);
+		auto tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture));
 		Server::sharedInstance().monitorProcess(tmp);
 		return tmp;
 	});
@@ -93,10 +95,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	return result;
 };
 
-DarlingServer::Call::Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress):
+DarlingServer::Call::Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader):
 	_replyQueue(replyQueue),
 	_thread(thread),
-	_replyAddress(replyAddress)
+	_replyAddress(replyAddress),
+	_header(*callHeader)
 	{};
 
 DarlingServer::Call::~Call() {};
@@ -150,7 +153,7 @@ void DarlingServer::Call::Checkin::processCall() {
 		if (auto process = thread->process()) {
 			// the process needs to know when the checkin occurs, in case it has a pending replacement
 			// and also to notify its parent about when the fork is complete
-			process->notifyCheckin();
+			process->notifyCheckin(static_cast<Process::Architecture>(_header.architecture));
 		} else {
 			code = -ESRCH;
 		}
@@ -224,9 +227,7 @@ void DarlingServer::Call::Checkout::processCall() {
 			} else {
 				threadRegistry().unregisterEntry(thread);
 
-				if (thread->id() == process->id()) {
-					processRegistry().unregisterEntry(process);
-				}
+				// if this was the last thread in the process, it'll be automatically unregistered
 			}
 		} else {
 			code = -ESRCH;
@@ -584,6 +585,24 @@ void DarlingServer::Call::ForkWaitForChild::processCall() {
 	}
 
 	_sendReply(code);
+};
+
+void DarlingServer::Call::Sigprocess::processCall() {
+	int code = 0;
+	int newBSDSignal = 0;
+
+	if (auto thread = _thread.lock()) {
+		try {
+			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _body.thread_state, _body.float_state);
+			newBSDSignal = thread->pendingSignal();
+		} catch (std::system_error e) {
+			code = -e.code().value();
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, newBSDSignal);
 };
 
 DSERVER_CLASS_SOURCE_DEFS;

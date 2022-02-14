@@ -252,9 +252,15 @@ void spawnLaunchd(const char* prefix)
 
 	auto tmp = (std::string(prefix) + "/var/run/darlingserver.sock");
 
+	const char* initPath = getenv("DSERVER_INIT");
+
+	if (!initPath) {
+		initPath = DARLINGSERVER_INIT_PROCESS;
+	}
+
 	setenv("DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
-	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, DARLINGSERVER_INIT_PROCESS, NULL);
+	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, initPath, NULL);
 
 	fprintf(stderr, "Failed to exec launchd: %s\n", strerror(errno));
 	abort();

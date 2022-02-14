@@ -8,6 +8,7 @@
 #include <libsimple/lock.h>
 #include <darlingserver/rpc.internal.h>
 #include <darlingserver/rpc-supplement.h>
+#include <darlingserver/rpc.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +47,8 @@ typedef void (*dtape_hook_thread_terminate_f)(void* thread_context);
 
 typedef dtape_thread_t* (*dtape_hook_thread_create_kernel_f)(void);
 typedef void (*dtape_hook_thread_start_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
+typedef void (*dtape_hook_thread_set_pending_signal_f)(void* thread_context, int pending_signal);
+typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_context, bool pending_call_override);
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
 typedef void (*dtape_hook_current_thread_syscall_return_f)(int return_code);
@@ -62,6 +65,8 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_terminate_f thread_terminate;
 	dtape_hook_thread_create_kernel_f thread_create_kernel;
 	dtape_hook_thread_start_f thread_start;
+	dtape_hook_thread_set_pending_signal_f thread_set_pending_signal;
+	dtape_hook_thread_set_pending_call_override_f thread_set_pending_call_override;
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
 	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
@@ -102,7 +107,7 @@ typedef void (*dtape_kqchan_mach_port_notification_callback_f)(void* context);
  *
  * An @p nsid value of `0` indicates the task being created is the kernel task.
  */
-dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context);
+dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* context, dserver_rpc_architecture_t architecture);
 dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* context);
 dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context);
 dtape_semaphore_t* dtape_semaphore_create(dtape_task_t* owning_task, int initial_value);
@@ -128,6 +133,10 @@ void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, 
  */
 dtape_thread_t* dtape_thread_for_port(uint32_t thread_port);
 void* dtape_thread_context(dtape_thread_t* thread);
+int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
+int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
+void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, int linux_signal_number, int code, uintptr_t signal_address);
+void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
 
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 
