@@ -106,6 +106,29 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 		ipc_voucher_release(thread->xnu_thread.ith_voucher);
 	}
 
+	thread_lock(&thread->xnu_thread);
+
+	/*
+	 *	Cancel wait timer, and wait for
+	 *	concurrent expirations.
+	 */
+	if (thread->xnu_thread.wait_timer_is_set) {
+		thread->xnu_thread.wait_timer_is_set = FALSE;
+
+		if (timer_call_cancel(&thread->xnu_thread.wait_timer)) {
+			thread->xnu_thread.wait_timer_active--;
+		}
+	}
+
+	while (thread->xnu_thread.wait_timer_active > 0);
+
+	// pull the thread from any waitqs it might have been waiting on
+	thread->xnu_thread.state |= TH_TERMINATE;
+	thread->xnu_thread.state &= ~(TH_UNINT);
+	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+
+	thread_unlock(&thread->xnu_thread);
+
 	lck_mtx_destroy(&thread->xnu_thread.mutex, LCK_GRP_NULL);
 
 	task_deallocate(thread->xnu_thread.task);
@@ -114,11 +137,11 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 };
 
 void dtape_thread_entering(dtape_thread_t* thread) {
-	thread->xnu_thread.state = TH_RUN;
+	thread->xnu_thread.state |= TH_RUN;
 };
 
 void dtape_thread_exiting(dtape_thread_t* thread) {
-	// nothing for now
+	thread->xnu_thread.state &= ~TH_RUN;
 };
 
 void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, uintptr_t dispatch_qaddr) {
@@ -306,13 +329,21 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 	//
 	//       we can check `/proc/<pid>/task/<tid>/status` and look at `SigPnd`,
 	//       but this would require us checking periodically (i.e. polling).
-	//       not terrible, but not ideal.
-	//       additionally, we wouldn't do this for ALL threads, only threads currently
-	//       blocked here.
+	//       not terrible, but not ideal. additionally, we wouldn't do this for ALL threads,
+	//       only threads currently blocked here, so it's not so bad.
 	//
 	//       we could also use SA_NODEFER and immediately have the process notify us.
 	//       this requires a lot more work to implement properly, however.
 	//       but, it does mean that we avoid polling.
+	//
+	//       another possible approach is to take advantage of a strange epoll and signalfd interaction described here: https://stackoverflow.com/a/29751604/6620880
+	//       essentially, we send a thread our epoll descriptor along with some data (for us to identify the new context) and have it register a signalfd for itself.
+	//       when the thread receives a signal, our epoll context will be notified.
+	//       unfortunately, this has downsides either way it's done:
+	//         1. we can register the signalfd at the start of each thread, which saves us the delay of doing it on every signal,
+	//            but this means each thread will use yet another descriptor (in addition to their individual RPC sockets).
+	//         2. we can register the signalfd only when we receive a signal, since we only need to check for pending signals during sigprocess,
+	//            but this means signal processing incurs an additional delay.
 
 	while (thread->xnu_thread.suspend_count > 0) {
 		dtape_log_debug("sigexc: going to sleep");
@@ -355,15 +386,27 @@ static void thread_continuation_callback(void* context) {
 wait_result_t thread_block_parameter(thread_continue_t continuation, void* parameter) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
 
+	thread_lock(&thread->xnu_thread);
+
 	thread->xnu_thread.continuation = continuation;
 	thread->xnu_thread.parameter = parameter;
 
-	dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
+	bool waiting = thread->xnu_thread.state & TH_WAIT;
+
+	thread_unlock(&thread->xnu_thread);
+
+	if (waiting) {
+		dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
+	}
 
 	// this should only ever be reached if there is no continuation
 	assert(!continuation);
 
-	return thread->xnu_thread.wait_result;
+	thread_lock(&thread->xnu_thread);
+	wait_result_t wait_result = thread->xnu_thread.wait_result;
+	thread_unlock(&thread->xnu_thread);
+
+	return wait_result;
 };
 
 wait_result_t thread_block(thread_continue_t continuation) {
@@ -372,7 +415,9 @@ wait_result_t thread_block(thread_continue_t continuation) {
 
 boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	thread_lock(&thread->xnu_thread);
 	thread->xnu_thread.wait_result = wresult;
+	thread_unlock(&thread->xnu_thread);
 	dtape_hooks->thread_resume(thread->context);
 	return TRUE;
 };
@@ -383,8 +428,10 @@ kern_return_t thread_go(thread_t thread, wait_result_t wresult, waitq_options_t 
 
 wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interruptible_orig) {
 	dtape_stub();
+	thread_lock(thread);
 	thread->state = TH_WAIT;
 	thread->wait_result = THREAD_WAITING;
+	thread_unlock(thread);
 	return THREAD_WAITING;
 };
 
@@ -394,11 +441,32 @@ kern_return_t thread_terminate(thread_t xthread) {
 	return KERN_SUCCESS;
 };
 
+void thread_terminate_self(void) {
+	thread_terminate(current_thread());
+};
+
 void thread_sched_call(thread_t thread, sched_call_t call) {
 	thread->sched_call = call;
 };
 
-kern_return_t kernel_thread_start_priority(thread_continue_t continuation, void* parameter, integer_t priority, thread_t* new_thread) {
+static void kernel_thread_startup(void* context) {
+	dtape_thread_t* thread = context;
+	thread_continue_t continuation = thread->xnu_thread.continuation;
+	void* parameter = thread->xnu_thread.parameter;
+
+	thread->xnu_thread.continuation = NULL;
+	thread->xnu_thread.parameter = NULL;
+
+	wait_result_t wait_result = thread_block_parameter(continuation, parameter);
+
+	// if it returns, that means we weren't waiting;
+	// let's execute the continuation manually
+	continuation(parameter, wait_result);
+
+	thread_terminate_self();
+};
+
+kern_return_t kernel_thread_create(thread_continue_t continuation, void* parameter, integer_t priority, thread_t* new_thread) {
 	dtape_thread_t* thread = dtape_hooks->thread_create_kernel();
 	if (!thread) {
 		return KERN_FAILURE;
@@ -409,8 +477,9 @@ kern_return_t kernel_thread_start_priority(thread_continue_t continuation, void*
 
 	thread->xnu_thread.continuation = continuation;
 	thread->xnu_thread.parameter = parameter;
+	thread->xnu_thread.state = TH_WAIT | TH_UNINT;
 
-	dtape_hooks->thread_start(thread->context, thread_continuation_callback, thread);
+	dtape_hooks->thread_start(thread->context, kernel_thread_startup, thread);
 
 	return KERN_SUCCESS;
 };
@@ -1378,6 +1447,18 @@ thread_timer_expire(
 	splx(s);
 }
 
+/*
+ *	assert_wait_queue:
+ *
+ *	Return the global waitq for the specified event
+ */
+struct waitq *
+assert_wait_queue(
+	event_t                         event)
+{
+	return global_eventq(event);
+}
+
 // </copied>
 
 // <copied from="xnu://7195.141.2/osfmk/kern/thread.c">
@@ -1482,6 +1563,30 @@ thread_swap_mach_voucher(
 	return KERN_NOT_SUPPORTED;
 }
 
+kern_return_t
+kernel_thread_start_priority(
+	thread_continue_t       continuation,
+	void                            *parameter,
+	integer_t                       priority,
+	thread_t                        *new_thread)
+{
+	kern_return_t   result;
+	thread_t                thread;
+
+	result = kernel_thread_create(continuation, parameter, priority, &thread);
+	if (result != KERN_SUCCESS) {
+		return result;
+	}
+
+	*new_thread = thread;
+
+	thread_mtx_lock(thread);
+	thread_start(thread);
+	thread_mtx_unlock(thread);
+
+	return result;
+}
+
 // </copied>
 
 // <copied from="xnu://7195.141.2/osfmk/kern/syscall_subr.c">
@@ -1499,6 +1604,71 @@ wait_result_t
 thread_handoff_deallocate(thread_t thread, thread_handoff_option_t option)
 {
 	return thread_handoff_internal(thread, NULL, NULL, option);
+}
+
+// </copied>
+
+// <copied from="xnu://7195.141.2/osfmk/kern/thread_act.c">
+
+/*
+ * Internal routine to mark a thread as waiting
+ * right after it has been created.  The caller
+ * is responsible to call wakeup()/thread_wakeup()
+ * or thread_terminate() to get it going.
+ *
+ * Always called with the thread mutex locked.
+ *
+ * Task and task_threads mutexes also held
+ * (so nobody can set the thread running before
+ * this point)
+ *
+ * Converts TH_UNINT wait to THREAD_INTERRUPTIBLE
+ * to allow termination from this point forward.
+ */
+void
+thread_start_in_assert_wait(
+	thread_t                        thread,
+	event_t             event,
+	wait_interrupt_t    interruptible)
+{
+	struct waitq *waitq = assert_wait_queue(event);
+	wait_result_t wait_result;
+	spl_t spl;
+
+	spl = splsched();
+	waitq_lock(waitq);
+
+	/* clear out startup condition (safe because thread not started yet) */
+	thread_lock(thread);
+	assert(!thread->started);
+	assert((thread->state & (TH_WAIT | TH_UNINT)) == (TH_WAIT | TH_UNINT));
+	thread->state &= ~(TH_WAIT | TH_UNINT);
+	thread_unlock(thread);
+
+	/* assert wait interruptibly forever */
+	wait_result = waitq_assert_wait64_locked(waitq, CAST_EVENT64_T(event),
+	    interruptible,
+	    TIMEOUT_URGENCY_SYS_NORMAL,
+	    TIMEOUT_WAIT_FOREVER,
+	    TIMEOUT_NO_LEEWAY,
+	    thread);
+	assert(wait_result == THREAD_WAITING);
+
+	/* mark thread started while we still hold the waitq lock */
+	thread_lock(thread);
+	thread->started = TRUE;
+	thread_unlock(thread);
+
+	waitq_unlock(waitq);
+	splx(spl);
+}
+
+void
+thread_start(
+	thread_t                        thread)
+{
+	clear_wait(thread, THREAD_AWAKENED);
+	thread->started = TRUE;
 }
 
 // </copied>

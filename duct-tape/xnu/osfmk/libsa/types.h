@@ -80,9 +80,15 @@ typedef unsigned int    off_t;          /* another unsigned 32 */
 #endif
 
 
+#if !defined(__DARLING__) || !defined(major)
 #define major(i)        (((i) >> 8) & 0xFF)
+#endif
+#if !defined(__DARLING__) || !defined(minor)
 #define minor(i)        ((i) & 0xFF)
+#endif
+#if !defined(__DARLING__) || !defined(makedev)
 #define makedev(i, j)    ((((i) & 0xFF) << 8) | ((j) & 0xFF))
+#endif
 
 #ifndef NULL
 #define NULL            ((void *) 0)    /* the null pointer */

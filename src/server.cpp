@@ -156,6 +156,23 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Thread*>(thread_context)->setPendingCallOverride(pending_call_override);
 	};
 
+	static uintptr_t dtape_hook_thread_allocate_pages(void* thread_context, size_t page_count, int protection) {
+		try {
+			return static_cast<DarlingServer::Thread*>(thread_context)->allocatePages(page_count, protection);
+		} catch (...) {
+			return 0;
+		}
+	};
+
+	static int dtape_hook_thread_free_pages(void* thread_context, uintptr_t address, size_t page_count) {
+		try {
+			static_cast<DarlingServer::Thread*>(thread_context)->freePages(address, page_count);
+			return 0;
+		} catch (...) {
+			return -1;
+		}
+	};
+
 	static void dtape_hook_current_thread_interrupt_disable(void) {
 		DarlingServer::Thread::interruptDisable();
 	};
@@ -188,6 +205,8 @@ struct DTapeHooks {
 		.thread_start = dtape_hook_thread_start,
 		.thread_set_pending_signal = dtape_hook_thread_set_pending_signal,
 		.thread_set_pending_call_override = dtape_hook_thread_set_pending_call_override,
+		.thread_allocate_pages = dtape_hook_thread_allocate_pages,
+		.thread_free_pages = dtape_hook_thread_free_pages,
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
 		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,
@@ -198,7 +217,7 @@ struct DTapeHooks {
 
 DarlingServer::Server::Server(std::string prefix):
 	_prefix(prefix),
-	_socketPath(_prefix + "/var/run/darlingserver.sock"),
+	_socketPath(_prefix + ".darlingserver.sock"),
 	_workQueue(std::bind(&Server::_worker, this, std::placeholders::_1))
 {
 	sharedInstancePointer = this;
@@ -292,7 +311,9 @@ void DarlingServer::Server::start() {
 			while (auto msg = _inbox.pop()) {
 				// TODO: this could be done concurrently
 				auto call = DarlingServer::Call::callFromMessage(std::move(*msg), _outbox);
-				_workQueue.push(call->thread());
+				if (call) {
+					_workQueue.push(call->thread());
+				}
 			}
 		}
 
@@ -559,4 +580,8 @@ void DarlingServer::Monitor::disable() {
 	if (epoll_ctl(_server->_epollFD, EPOLL_CTL_MOD, _fd->fd(), &settings) < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to modify descriptor in epoll context");
 	}
+};
+
+void DarlingServer::Server::sendMessage(Message&& message) {
+	_outbox.push(std::move(message));
 };

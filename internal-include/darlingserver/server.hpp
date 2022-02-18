@@ -78,6 +78,8 @@ namespace DarlingServer {
 
 		void addMonitor(std::shared_ptr<Monitor> monitor);
 		void removeMonitor(std::shared_ptr<Monitor> monitor);
+
+		void sendMessage(Message&& message);
 	};
 };
 

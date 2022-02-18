@@ -128,6 +128,17 @@ add_compile_options(
 	-ffunction-sections
 	-fdata-sections
 	-Wno-incompatible-library-redeclaration
+
+	# DEBUGGING
+	#-fsanitize=address
+	#-fno-omit-frame-pointer
+	#-g
+	#-Og
+)
+
+add_link_options(
+	# DEBUGGING
+	#-fsanitize=address
 )
 
 set(MIG_USER_SOURCE_SUFFIX "User.c")

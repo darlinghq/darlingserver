@@ -16,11 +16,26 @@ struct _vm_map {
 
 #define VM_MAP_PAGE_SHIFT(map) ((map) ? (map)->dtape_page_shift : PAGE_SHIFT)
 
+struct vm_map_header {
+
+};
+
 struct vm_map_copy {
 	int type;
 	uint64_t offset;
 	uint64_t size;
+	union {
+		struct vm_map_header hdr;
+		vm_object_t object;
+		void* kdata;
+	} c_u;
+	char dtape_copy_data[];
 };
+
+#define cpy_hdr c_u.hdr
+
+#define cpy_object c_u.object
+#define cpy_kdata c_u.kdata
 
 #define VM_MAP_COPY_ENTRY_LIST 1
 #define VM_MAP_COPY_OBJECT 2

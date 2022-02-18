@@ -307,23 +307,38 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		}
 		_threads.push_back(mainThread);
 
-		// destroy the main thread's old duct-taped thread
-		dtape_thread_destroy(mainThread->_dtapeThread);
+		// replace the old task with a new task that inherits from it
+		auto oldTask = _dtapeTask;
+		auto newTask = dtape_task_create(oldTask, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
+		_dtapeTask = newTask;
+
+		// now replace the main thread's duct-taped thread with a new one
+		auto oldThread = mainThread->_dtapeThread;
+		auto newThread = dtape_thread_create(_dtapeTask, mainThread->_nstid, mainThread.get());
+		mainThread->_dtapeThread = newThread;
+
+		// destroy the main thread's old S2C semaphores
+		dtape_semaphore_destroy(mainThread->_s2cPerformSempahore);
+		mainThread->_s2cPerformSempahore = nullptr;
+		dtape_semaphore_destroy(mainThread->_s2cReplySempahore);
+		mainThread->_s2cReplySempahore = nullptr;
 
 		// destroy the fork-wait semaphore
 		dtape_semaphore_destroy(_dtapeForkWaitSemaphore);
+		_dtapeForkWaitSemaphore = nullptr;
 
-		// repace the old task with a new task that inherits from it
-		auto oldTask = _dtapeTask;
-		_architecture = architecture;
-		_dtapeTask = dtape_task_create(oldTask, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
+		// destroy the main thread's old duct-taped thread
+		dtape_thread_destroy(oldThread);
+
+		// destroy the old task
 		dtape_task_destroy(oldTask);
 
 		// create a new fork-wait semaphore for the new task
 		_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
-		// now replace the main thread's duct-taped thread with a new one
-		mainThread->_dtapeThread = dtape_thread_create(_dtapeTask, mainThread->_nstid, mainThread.get());
+		// create new S2C semaphores for the main thread
+		mainThread->_s2cPerformSempahore = dtape_semaphore_create(_dtapeTask, 1);
+		mainThread->_s2cReplySempahore = dtape_semaphore_create(_dtapeTask, 0);
 
 		// notify listeners that we have exec'd (i.e. been replaced)
 		_notifyListeningKqchannels(NOTE_EXEC, 0);

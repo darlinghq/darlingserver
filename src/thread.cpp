@@ -33,6 +33,7 @@
 
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
+#define USE_THREAD_GUARD_PAGES 1
 
 static thread_local std::shared_ptr<DarlingServer::Thread> currentThreadVar = nullptr;
 static thread_local bool returningToThreadTop = false;
@@ -52,6 +53,40 @@ static thread_local std::shared_ptr<DarlingServer::Call> currentCall = nullptr;
 static thread_local uint64_t interruptDisableCount = 0;
 
 static DarlingServer::Log threadLog("thread");
+
+static void* allocateStack(size_t stackSize) {
+	void* stack = NULL;
+
+#if USE_THREAD_GUARD_PAGES
+	stack = mmap(NULL, stackSize + 2048ULL, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+#else
+	stack = mmap(NULL, stackSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+#endif
+
+	if (stack == MAP_FAILED) {
+		throw std::system_error(errno, std::generic_category());
+	}
+
+#if USE_THREAD_GUARD_PAGES
+	mprotect(stack, 1024ULL, PROT_NONE);
+	stack = (char*)stack + 1024ULL;
+	mprotect((char*)stack + stackSize, 1024ULL, PROT_NONE);
+#endif
+
+	return stack;
+};
+
+static void freeStack(void* stack, size_t stackSize) {
+#if USE_THREAD_GUARD_PAGES
+	if (munmap((char*)stack - 1024ULL, stackSize + 2048ULL) < 0) {
+		throw std::system_error(errno, std::generic_category());
+	}
+#else
+	if (munmap(stack, stackSize) < 0) {
+		throw std::system_error(errno, std::generic_category());
+	}
+#endif
+};
 
 DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 	_nstid(nsid),
@@ -92,14 +127,12 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 	}
 
 	_stackSize = THREAD_STACK_SIZE;
-	_stack = mmap(NULL, _stackSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-
-	if (_stack == MAP_FAILED) {
-		throw std::system_error(errno, std::generic_category());
-	}
+	_stack = allocateStack(_stackSize);
 
 	// NOTE: it's okay to use raw `this` without a shared pointer because the duct-taped thread will always live for less time than this Thread instance
 	_dtapeThread = dtape_thread_create(process->_dtapeTask, _nstid, this);
+	_s2cPerformSempahore = dtape_semaphore_create(process->_dtapeTask, 1);
+	_s2cReplySempahore = dtape_semaphore_create(process->_dtapeTask, 0);
 
 	threadLog.info() << "New thread created with ID " << _tid << " and NSID " << _nstid << " for process with ID " << (process ? process->id() : -1) << " and NSID " << (process ? process->nsid() : -1);
 };
@@ -119,11 +152,7 @@ DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
 	idLock.unlock();
 
 	_stackSize = THREAD_STACK_SIZE;
-	_stack = mmap(NULL, _stackSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-
-	if (_stack == MAP_FAILED) {
-		throw std::system_error(errno, std::generic_category());
-	}
+	_stack = allocateStack(_stackSize);
 
 	_dtapeThread = dtape_thread_create(Process::kernelProcess()->_dtapeTask, _nstid, this);
 };
@@ -135,13 +164,13 @@ void DarlingServer::Thread::registerWithProcess() {
 };
 
 DarlingServer::Thread::~Thread() noexcept(false) {
-	if (munmap(_stack, _stackSize) < 0) {
-		throw std::system_error(errno, std::generic_category());
-	}
+	freeStack(_stack, _stackSize);
 
 	// schedule the duct-taped thread to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	kernelAsync([dtapeThread = _dtapeThread]() {
+	kernelAsync([dtapeThread = _dtapeThread, s2cPerformSemaphore = _s2cPerformSempahore, s2cReplySemaphore = _s2cReplySempahore]() {
+		dtape_semaphore_destroy(s2cPerformSemaphore);
+		dtape_semaphore_destroy(s2cReplySemaphore);
 		dtape_thread_destroy(dtapeThread);
 	});
 
@@ -224,6 +253,16 @@ void DarlingServer::Thread::setActiveSyscall(std::shared_ptr<DarlingServer::Call
 	_activeSyscall = activeSyscall;
 };
 
+bool DarlingServer::Thread::waitingForReply() const {
+	std::shared_lock lock(_rwlock);
+	return _waitingForReply;
+};
+
+void DarlingServer::Thread::setWaitingForReply(bool waitingForReply) {
+	std::unique_lock lock(_rwlock);
+	_waitingForReply = waitingForReply;
+};
+
 /*
  * IMPORTANT
  * ===
@@ -243,6 +282,7 @@ void DarlingServer::Thread::microthreadWorker() {
 	currentThreadVar->setPendingCall(nullptr);
 	currentCall->processCall();
 	currentCall = nullptr;
+	setcontext(&backToThreadTopContext);
 };
 
 void DarlingServer::Thread::microthreadContinuation() {
@@ -251,6 +291,7 @@ void DarlingServer::Thread::microthreadContinuation() {
 	currentThreadVar->_continuationCallback = nullptr;
 	currentContinuation();
 	currentContinuation = nullptr;
+	setcontext(&backToThreadTopContext);
 };
 
 void DarlingServer::Thread::doWork() {
@@ -262,7 +303,7 @@ void DarlingServer::Thread::doWork() {
 
 	if (_running) {
 		// this is probably an error
-		microthreadLog.warning() << "Attempt to re-run already running microthread on another thread" << microthreadLog.endLog;
+		microthreadLog.warning() << _tid << "(" << _nstid << "): attempt to re-run already running microthread on another thread" << microthreadLog.endLog;
 		_rwlock.unlock();
 		return;
 	}
@@ -284,6 +325,7 @@ void DarlingServer::Thread::doWork() {
 	if (returningToThreadTop) {
 		// someone jumped back to the top of the microthread
 		// (that means either the microthread has been suspended or it has finished)
+		//microthreadLog.debug() << _tid << "(" << _nstid << "): microthread returned to top" << microthreadLog.endLog;
 		goto doneWorking;
 	} else {
 		returningToThreadTop = true;
@@ -297,10 +339,11 @@ void DarlingServer::Thread::doWork() {
 
 		if (_suspended && (_pendingCallOverride || !_pendingCall)) {
 			if (_pendingCallOverride) {
-				threadLog.info() << "Thread was suspended with a pending call override and is now resuming with a pending call" << threadLog.endLog;
+				microthreadLog.info() << _tid << "(" << _nstid << "): thread was suspended with a pending call override and is now resuming with a pending call" << microthreadLog.endLog;
 			}
 			// we were in the middle of processing a call and we need to resume now
 			_suspended = false;
+			_resumeContext.uc_link = &backToThreadTopContext;
 			_rwlock.unlock();
 			setcontext(&_resumeContext);
 		} else {
@@ -538,6 +581,31 @@ void DarlingServer::Thread::kernelAsync(std::function<void()> fn) {
 	libsimple_lock_unlock(&kernelAsyncRunnerQueueLock);
 };
 
+void DarlingServer::Thread::kernelSync(std::function<void()> fn) {
+	std::mutex mutex;
+	std::condition_variable condvar;
+	bool done = false;
+
+	kernelAsync([&]() {
+		fn();
+
+		{
+			std::unique_lock lock2(mutex);
+			done = true;
+		}
+
+		// notify all, but there should only be one thread waiting
+		condvar.notify_all();
+	});
+
+	{
+		std::unique_lock lock(mutex);
+		condvar.wait(lock, [&]() {
+			return done;
+		});
+	}
+};
+
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::threadForPort(uint32_t thread_port) {
 	// prevent the target thread from dying by taking the global thread registry lock
 	auto registryLock = threadRegistry().scopedLock();
@@ -617,4 +685,170 @@ void DarlingServer::Thread::handleSignal(int signal) {
 void DarlingServer::Thread::setPendingCallOverride(bool pendingCallOverride) {
 	std::unique_lock lock(_rwlock);
 	_pendingCallOverride = pendingCallOverride;
+};
+
+/*
+ * server-to-client (S2C) calls are used by darlingserver to invoke certain functions within managed processes
+ * for which there is no in-server alterative.
+ *
+ * for example, memory allocation can only be done by the managed process itself; there is no Linux syscall to allocate memory in another process.
+ * therefore, we have to ask the process to do it for us.
+ *
+ * an alternative to this system is ptrace. we can attach to the managed process and execute any function we like.
+ * this is made even easier by the fact that we have our own code in the managed process, meaning we can help out the server by
+ * providing thunks for it to execute that already include a debug trap.
+ * the problem with this alternative is that there's no good way to tell when the child is done executing the function:
+ *   * we could block with waitpid, but then that would block the worker thread for an indeterminate amount of time (and we want to avoid that).
+ *   * we could have the main event loop poll periodically, but polling is undesirable.
+ * additionally, if someone else is already ptracing that process, we lose the ability to execute code with this approach.
+ * therefore, we have this RPC-based system instead.
+ *
+ * there is one major drawback to this approach, however: the process we want to execute an S2C call in
+ * MUST have at least one thread waiting for a message from the server. two possible solutions:
+ *   1. we use a real-time signal to ask the process to execute the S2C call.
+ *      note that with this approach we'd have to block the RT signal (or ignore it) while we're waiting for an RPC call
+ *      so that we don't accidentally receive a normal RPC reply in the signal handler.
+ *      this would probably be a bit tricky to implement correctly (without races).
+ *   2. we have each process create a dedicated thread for executing S2C calls.
+ * i'm currently leaning towards solution #1 because it avoids wasting extra resources unnecessarily.
+ */
+
+DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize) {
+	static Log s2cLog("s2c");
+
+	std::optional<Message> reply = std::nullopt;
+
+	// make sure we're the only one performing an S2C call on this thread
+	dtape_semaphore_down(_s2cPerformSempahore);
+
+	s2cLog.debug() << _tid << "(" << _nstid << "): Going to perform S2C call" << s2cLog.endLog;
+
+	// at least for now, S2C calls require the target thread to be waiting for an RPC reply
+	//
+	// TODO: allow threads to perform S2C calls at any time
+	{
+		std::shared_lock lock(_rwlock);
+
+		if (!_waitingForReply) {
+			dtape_semaphore_up(_s2cPerformSempahore);
+			throw std::runtime_error("Cannot perform S2C call if thread is not waiting for reply");
+		}
+
+		call.setAddress(_address);
+	}
+
+	// at least for now, in order to wait for the S2C reply, we need the calling thread to be a microthread,
+	// so that waiting on the duct-taped semaphore will work
+	if (!currentThread()) {
+		dtape_semaphore_up(_s2cPerformSempahore);
+		throw std::runtime_error("Must be in a microthread (any microthread) to wait for S2C reply");
+	}
+
+	s2cLog.debug() << _tid << "(" << _nstid << "): Going to send S2C message" << s2cLog.endLog;
+
+	// send the call
+	Server::sharedInstance().sendMessage(std::move(call));
+
+	// now let's wait for the reply
+	dtape_semaphore_down(_s2cReplySempahore);
+
+	s2cLog.debug() << _tid << "(" << _nstid << "): Received S2C reply" << s2cLog.endLog;
+
+	// extract the reply
+	{
+		std::unique_lock lock(_rwlock);
+
+		if (!_s2cReply) {
+			// impossible, but just in case
+			dtape_semaphore_up(_s2cPerformSempahore);
+			throw std::runtime_error("S2C reply semaphore incremented, but no reply present");
+		}
+
+		reply = std::move(_s2cReply);
+		_s2cReply = std::nullopt;
+	}
+
+	s2cLog.debug() << _tid << "(" << _nstid << "): Done performing S2C call" << s2cLog.endLog;
+
+	// we're done performing the call; allow others to have a chance at performing an S2C call on this thread
+	dtape_semaphore_up(_s2cPerformSempahore);
+
+	// partially validate the reply
+
+	if (_s2cReply->data().size() != expectedReplySize) {
+		throw std::runtime_error("Invalid S2C reply: unxpected size");
+	}
+
+	auto replyHeader = reinterpret_cast<dserver_s2c_replyhdr_t*>(_s2cReply->data().data());
+	if (replyHeader->s2c_number != expectedReplyNumber) {
+		throw std::runtime_error("Invalid S2C reply: unexpected S2C reply number");
+	}
+
+	return std::move(*_s2cReply);
+};
+
+uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno) {
+	// XXX: not sure if we want to force all allocations in 32-bit processes to be in the 32-bit address space.
+	//      for now, we leave it up to the caller.
+#if 0
+	auto process = _process.lock();
+
+	if (!process) {
+		throw std::runtime_error("Cannot perform mmap without valid process");
+	}
+
+	if (process->architecture() == Process::Architecture::i386 || process->architecture() == Process::Architecture::ARM32) {
+		flags |= MAP_32BIT;
+	}
+#endif
+
+	Message callMessage(sizeof(dserver_s2c_call_mmap_t), 0);
+	auto call = reinterpret_cast<dserver_s2c_call_mmap_t*>(callMessage.data().data());
+
+	call->header.call_number = dserver_callnum_s2c;
+	call->header.s2c_number = dserver_s2c_msgnum_mmap;
+	call->address = address;
+	call->length = length;
+	call->protection = protection;
+	call->flags = flags;
+	call->fd = fd;
+	call->offset = offset;
+
+	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t));
+	auto reply = reinterpret_cast<dserver_s2c_reply_mmap_t*>(replyMessage.data().data());
+
+	outErrno = reply->errno_result;
+	return reply->address;
+};
+
+int DarlingServer::Thread::_munmap(uintptr_t address, size_t length, int& outErrno) {
+	Message callMessage(sizeof(dserver_s2c_call_munmap_t), 0);
+	auto call = reinterpret_cast<dserver_s2c_call_munmap_t*>(callMessage.data().data());
+
+	call->header.call_number = dserver_callnum_s2c;
+	call->header.s2c_number = dserver_s2c_msgnum_munmap;
+	call->address = address;
+	call->length = length;
+
+	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_munmap, sizeof(dserver_s2c_reply_munmap_t));
+	auto reply = reinterpret_cast<dserver_s2c_reply_munmap_t*>(replyMessage.data().data());
+
+	outErrno = reply->errno_result;
+	return reply->return_value;
+};
+
+uintptr_t DarlingServer::Thread::allocatePages(size_t pageCount, int protection) {
+	int err = 0;
+	auto result = _mmap(0, pageCount * sysconf(_SC_PAGESIZE), protection, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, err);
+	if (result == (uintptr_t)MAP_FAILED) {
+		throw std::system_error(err, std::generic_category(), "S2C mmap call failed");
+	}
+	return result;
+};
+
+void DarlingServer::Thread::freePages(uintptr_t address, size_t pageCount) {
+	int err = 0;
+	if (_munmap(address, pageCount * sysconf(_SC_PAGESIZE), err) < 0) {
+		throw std::system_error(err, std::generic_category(), "S2C munmap call failed");
+	}
 };

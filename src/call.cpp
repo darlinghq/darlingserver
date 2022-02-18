@@ -45,6 +45,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 	// first, make sure we know this call number
 	switch (header->number) {
+		case dserver_callnum_s2c:
 		DSERVER_VALID_CALLNUM_CASES
 			break;
 
@@ -65,11 +66,31 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		return tmp;
 	});
 
+	thread->setAddress(requestMessage.address());
+
 	if (process->id() != requestMessage.pid()) {
 		throw std::runtime_error("System-reported message PID != darlingserver-recorded PID");
 	}
 
 	callLog.debug() << "Received call #" << header->number << " (" << dserver_callnum_to_string(header->number) << ") from PID " << process->id() << " (" << process->nsid() << "), TID " << thread->id() << " (" << thread->nsid() << ")" << callLog.endLog;
+
+	if (header->number == dserver_callnum_s2c) {
+		// this is an S2C reply
+
+		{
+			std::unique_lock lock(thread->_rwlock);
+
+			if (thread->_s2cReply) {
+				throw std::runtime_error("Received S2C reply but thread already had one pending");
+			}
+
+			thread->_s2cReply = std::move(requestMessage);
+		}
+
+		dtape_semaphore_up(thread->_s2cReplySempahore);
+
+		return nullptr;
+	}
 
 	// finally, let's construct the call class
 
@@ -91,6 +112,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	#undef CALL_CASE
 
 	thread->setPendingCall(result);
+	thread->setWaitingForReply(true);
 
 	return result;
 };

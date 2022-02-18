@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#if __cplusplus
+extern "C" {
+#endif
+
 //
 // kqueue channels
 //
@@ -133,5 +137,69 @@ typedef struct dserver_kqchan_reply_proc_read {
 	uint32_t fflags;
 	int64_t data;
 } dserver_kqchan_reply_proc_read_t;
+
+//
+// S2C
+//
+// server-to-client RPC calls
+//
+
+enum dserver_s2c_msgnum {
+	dserver_s2c_msgnum_invalid = 0,
+	dserver_s2c_msgnum_mmap,
+	dserver_s2c_msgnum_munmap,
+};
+
+typedef enum dserver_s2c_msgnum dserver_s2c_msgnum_t;
+
+typedef struct dserver_s2c_callhdr {
+	int call_number;
+	dserver_s2c_msgnum_t s2c_number;
+} dserver_s2c_callhdr_t;
+
+typedef struct dserver_s2c_replyhdr {
+	int call_number;
+	int pid;
+	int tid;
+	int architecture;
+	dserver_s2c_msgnum_t s2c_number;
+} dserver_s2c_replyhdr_t;
+
+typedef struct dserver_s2c_call_mmap {
+	dserver_s2c_callhdr_t header;
+	uint64_t address;
+	uint64_t length;
+	int32_t protection;
+	int32_t flags;
+	int32_t fd;
+	int64_t offset;
+} dserver_s2c_call_mmap_t;
+
+typedef struct dserver_s2c_reply_mmap {
+	dserver_s2c_replyhdr_t header;
+	uint64_t address;
+	int errno_result;
+} dserver_s2c_reply_mmap_t;
+
+typedef struct dserver_s2c_call_munmap {
+	dserver_s2c_callhdr_t header;
+	uint64_t address;
+	uint64_t length;
+} dserver_s2c_call_munmap_t;
+
+typedef struct dserver_s2c_reply_munmap {
+	dserver_s2c_replyhdr_t header;
+	int return_value;
+	int errno_result;
+} dserver_s2c_reply_munmap_t;
+
+typedef union dserver_s2c_call {
+	dserver_s2c_call_mmap_t mmap;
+	dserver_s2c_call_munmap_t munmap;
+} dserver_s2c_call_t;
+
+#if __cplusplus
+};
+#endif
 
 #endif // _DARLINGSERVER_RPC_SUPPLEMENT_H_

@@ -49,6 +49,8 @@ typedef dtape_thread_t* (*dtape_hook_thread_create_kernel_f)(void);
 typedef void (*dtape_hook_thread_start_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
 typedef void (*dtape_hook_thread_set_pending_signal_f)(void* thread_context, int pending_signal);
 typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_context, bool pending_call_override);
+typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection);
+typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t address, size_t page_count);
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
 typedef void (*dtape_hook_current_thread_syscall_return_f)(int return_code);
@@ -67,6 +69,8 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_start_f thread_start;
 	dtape_hook_thread_set_pending_signal_f thread_set_pending_signal;
 	dtape_hook_thread_set_pending_call_override_f thread_set_pending_call_override;
+	dtape_hook_thread_allocate_pages_f thread_allocate_pages;
+	dtape_hook_thread_free_pages_f thread_free_pages;
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
 	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
@@ -100,7 +104,7 @@ typedef void (*dtape_kqchan_mach_port_notification_callback_f)(void* context);
  *
  * This is used as the starting offset for thread IDs for kernelspace threads (which do not have a "real" managed Darling thread backing them).
  */
-#define DTAPE_KERNEL_THREAD_ID_THRESHOLD (1ULL << 44)
+#define DTAPE_KERNEL_THREAD_ID_THRESHOLD (1ULL << 22)
 
 /**
  * Creates a new duct-tape task. The caller receives a reference on the new task.

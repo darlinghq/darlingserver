@@ -250,7 +250,7 @@ void spawnLaunchd(const char* prefix)
 
 	// putenv("KQUEUE_DEBUG=1");
 
-	auto tmp = (std::string(prefix) + "/var/run/darlingserver.sock");
+	auto tmp = (std::string(prefix) + ".darlingserver.sock");
 
 	const char* initPath = getenv("DSERVER_INIT");
 
@@ -375,29 +375,30 @@ int main(int argc, char** argv) {
 	// read the default rlimit so we can restore it for our children
 	if (getrlimit(RLIMIT_NOFILE, &default_limit) != 0) {
 		fprintf(stderr, "Failed to read default FD rlimit: %s\n", strerror(errno));
-		exit(1);
-	}
+		//exit(1);
+	} else {
+		// read the system maximum
+		nr_open_file = fopen("/proc/sys/fs/nr_open", "r");
+		if (nr_open_file == NULL) {
+			fprintf(stderr, "Warning: failed to open /proc/sys/fs/nr_open: %s\n", strerror(errno));
+			//exit(1);
+		} else {
+			if (fscanf(nr_open_file, "%lu", &increased_limit.rlim_max) != 1) {
+				fprintf(stderr, "Failed to read /proc/sys/fs/nr_open: %s\n", strerror(errno));
+				exit(1);
+			}
+			increased_limit.rlim_cur = increased_limit.rlim_max;
+			if (fclose(nr_open_file) != 0) {
+				fprintf(stderr, "Failed to close /proc/sys/fs/nr_open: %s\n", strerror(errno));
+				exit(1);
+			}
 
-	// read the system maximum
-	nr_open_file = fopen("/proc/sys/fs/nr_open", "r");
-	if (nr_open_file == NULL) {
-		fprintf(stderr, "Failed to open /proc/sys/fs/nr_open: %s\n", strerror(errno));
-		exit(1);
-	}
-	if (fscanf(nr_open_file, "%lu", &increased_limit.rlim_max) != 1) {
-		fprintf(stderr, "Failed to read /proc/sys/fs/nr_open: %s\n", strerror(errno));
-		exit(1);
-	}
-	increased_limit.rlim_cur = increased_limit.rlim_max;
-	if (fclose(nr_open_file) != 0) {
-		fprintf(stderr, "Failed to close /proc/sys/fs/nr_open: %s\n", strerror(errno));
-		exit(1);
-	}
-
-	// now set our increased rlimit
-	if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
-		fprintf(stderr, "Failed to increase FD rlimit: %s\n", strerror(errno));
-		exit(1);
+			// now set our increased rlimit
+			if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
+				fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
+				//exit(1);
+			}
+		}
 	}
 
 	// Since overlay cannot be mounted inside user namespaces, we have to setup a new mount namespace
@@ -491,6 +492,15 @@ int main(int argc, char** argv) {
 	launchdCloneArgs.exit_signal = SIGCHLD;
 	launchdGlobalPID = syscall(SYS_clone3, &launchdCloneArgs, sizeof(launchdCloneArgs));
 
+	if (launchdGlobalPID < 0 && errno == ENOSYS) {
+		// try clone() instead
+#if __x86_64__ || __i386__
+		launchdGlobalPID = syscall(SYS_clone, CLONE_NEWPID | SIGCHLD, NULL, NULL, NULL, 0);
+#else
+		#error clone3 alternative not implemented for this architecture
+#endif
+	}
+
 	// drop privileges in both parent and child
 	perma_drop_privileges(originalUID, originalGID);
 	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
@@ -506,8 +516,8 @@ int main(int argc, char** argv) {
 
 		// decrease the FD limit back to the default
 		if (setrlimit(RLIMIT_NOFILE, &default_limit) != 0) {
-			fprintf(stderr, "Failed to decrease FD limit back down for launchd: %s\n", strerror(errno));
-			exit(1);
+			fprintf(stderr, "Warning: failed to decrease FD limit back down for launchd: %s\n", strerror(errno));
+			//exit(1);
 		}
 
 		// wait for the parent to give us the green light

@@ -2,6 +2,7 @@
 #include <darlingserver/duct-tape/memory.h>
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/thread.h>
 
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
@@ -123,10 +124,6 @@ void zone_require(zone_t zone, void* addr) {
 	dtape_stub_safe();
 };
 
-void vm_map_copy_discard(vm_map_copy_t copy) {
-	dtape_stub();
-};
-
 void (kheap_free)(kalloc_heap_t kheap, void* addr, vm_size_t size) {
 	free(addr);
 };
@@ -154,7 +151,7 @@ const char* zone_name(zone_t zone) {
 
 void* zalloc_permanent(vm_size_t size, vm_offset_t align_mask) {
 	size_t power_of_2 = (sizeof(long long) * 8) - __builtin_clzll(align_mask);
-	void* memory = aligned_alloc(power_of_2, size);
+	void* memory = aligned_alloc(1 << power_of_2, size);
 	if (!memory) {
 		return memory;
 	}
@@ -240,6 +237,156 @@ kern_return_t kmem_suballoc(vm_map_t parent, vm_offset_t* addr, vm_size_t size, 
 	return KERN_SUCCESS;
 };
 
+boolean_t vm_kernel_map_is_kernel(vm_map_t map) {
+	return map == kernel_map || map == ipc_kernel_map;
+};
+
+void vm_map_copy_discard(vm_map_copy_t copy) {
+	if (copy == VM_MAP_COPY_NULL) {
+		return;
+	}
+	free(copy);
+};
+
+kern_return_t vm_map_copyin_common(vm_map_t src_map, vm_map_address_t src_addr, vm_map_size_t len, boolean_t src_destroy, boolean_t src_volatile, vm_map_copy_t* copy_result, boolean_t use_maxprot) {
+	// XNU only performs a kernel buffer copy when the data is sufficiently small;
+	// however, we always perform a kernel buffer copy just to make it easier for ourselves
+
+	// this code has been adapted from vm_map_copyin_kernel_buffer() in osfmk/vm/vm_map.c
+
+	kern_return_t kr;
+
+	vm_map_copy_t copy = malloc(sizeof(struct vm_map_copy) + len);
+	if (copy == NULL) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+
+	copy->type = VM_MAP_COPY_KERNEL_BUFFER;
+	copy->size = len;
+	copy->offset = 0;
+	copy->cpy_kdata = copy->dtape_copy_data;
+
+	kr = copyinmap(src_map, src_addr, copy->cpy_kdata, (vm_size_t)len);
+	if (kr != KERN_SUCCESS) {
+		free(copy);
+		return kr;
+	}
+
+	if (src_destroy) {
+		vm_map_remove(src_map, vm_map_trunc_page(src_addr, VM_MAP_PAGE_MASK(src_map)), vm_map_round_page(src_addr + len, VM_MAP_PAGE_MASK(src_map)), 0);
+	}
+
+	*copy_result = copy;
+	return KERN_SUCCESS;
+};
+
+static kern_return_t vm_map_copyout_kernel_buffer(vm_map_t map, vm_map_address_t* addr, vm_map_copy_t copy, vm_map_size_t copy_size, boolean_t overwrite, boolean_t consume_on_success) {
+	kern_return_t kr = KERN_SUCCESS;
+
+	if (!overwrite) {
+		// we need to allocate memory for this copy
+
+		if (map == kernel_map) {
+			*addr = (uintptr_t)mmap(NULL, copy_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			if (*addr == (uintptr_t)MAP_FAILED) {
+				return KERN_RESOURCE_SHORTAGE;
+			}
+		} else if (map == current_map()) {
+			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, copy_size / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
+			if (*addr == 0) {
+				return KERN_RESOURCE_SHORTAGE;
+			}
+		} else {
+			dtape_stub_unsafe("vm_map_copyout_kernel_buffer: map is not current nor kernel");
+		}
+	}
+
+	if (copyoutmap(map, copy->cpy_kdata, *addr, (vm_size_t)copy_size)) {
+		kr = KERN_INVALID_ADDRESS;
+	}
+
+	if (kr != KERN_SUCCESS) {
+		if (!overwrite) {
+			// clean up the space we allocate earlier
+			vm_map_remove(map, vm_map_trunc_page(*addr, VM_MAP_PAGE_MASK(map)), vm_map_round_page((*addr + vm_map_round_page(copy_size, VM_MAP_PAGE_MASK(map))), VM_MAP_PAGE_MASK(map)), 0);
+			*addr = 0;
+		}
+	} else {
+		// copy was successful
+		if (consume_on_success) {
+			free(copy);
+		}
+	}
+
+	return kr;
+};
+
+kern_return_t vm_map_copy_overwrite(vm_map_t dst_map, vm_map_offset_t dst_addr, vm_map_copy_t copy, vm_map_size_t copy_size, boolean_t interruptible) {
+	if (copy == VM_MAP_COPY_NULL) {
+		return KERN_SUCCESS;
+	}
+
+	return vm_map_copyout_kernel_buffer(dst_map, &dst_addr, copy, copy->size, TRUE, TRUE);
+};
+
+kern_return_t vm_map_copyout_size(vm_map_t dst_map, vm_map_address_t* dst_addr, vm_map_copy_t copy, vm_map_size_t copy_size) {
+	if (copy == VM_MAP_COPY_NULL) {
+		*dst_addr = 0;
+		return KERN_SUCCESS;
+	}
+
+	if (copy->size != copy_size) {
+		*dst_addr = 0;
+		return KERN_FAILURE;
+	}
+
+	return vm_map_copyout_kernel_buffer(dst_map, dst_addr, copy, copy_size, FALSE, TRUE);
+};
+
+boolean_t vm_map_copy_validate_size(vm_map_t dst_map, vm_map_copy_t copy, vm_map_size_t* size) {
+	if (copy == VM_MAP_COPY_NULL) {
+		return FALSE;
+	}
+	return *size == copy->size;
+};
+
+kern_return_t vm_map_remove(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end, boolean_t flags) {
+	if (map == kernel_map) {
+		if (munmap((void*)start, end - start) < 0) {
+			return KERN_FAILURE;
+		}
+		return KERN_SUCCESS;
+	} else if (map == current_map()) {
+		if (dtape_hooks->thread_free_pages(dtape_thread_for_xnu_thread(current_thread())->context, start, (end - start) / sysconf(_SC_PAGESIZE)) < 0) {
+			return KERN_FAILURE;
+		}
+		return KERN_SUCCESS;
+	} else {
+		dtape_stub_unsafe("vm_map_remove: map is not current nor kernel");
+	}
+};
+
+kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach_vm_size_t size, int flags, vm_tag_t tag) {
+	if (map == kernel_map) {
+		vm_offset_t tmp;
+		kern_return_t kr = kernel_memory_allocate(map, &tmp, size, VM_MAP_PAGE_MASK(map), flags, tag);
+		if (kr == KERN_SUCCESS) {
+			*addr = tmp;
+		}
+		return kr;
+	} else if (map == current_map()) {
+		// mach_vm_allocate_kernel allocates with default protection, 
+		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, size, PROT_READ | PROT_WRITE);
+		if (tmp == 0) {
+			return KERN_RESOURCE_SHORTAGE;
+		}
+		*addr = tmp;
+		return KERN_SUCCESS;
+	} else {
+		dtape_stub_unsafe("mach_vm_allocate_kernel: map is not current nor kernel");
+	}
+};
+
 kern_return_t _mach_make_memory_entry(vm_map_t target_map, memory_object_size_t* size, memory_object_offset_t offset, vm_prot_t permission, ipc_port_t* object_handle, ipc_port_t parent_entry) {
 	dtape_stub_unsafe();
 };
@@ -300,14 +447,6 @@ kern_return_t mach_vm_behavior_set(vm_map_t map, mach_vm_offset_t start, mach_vm
 	dtape_stub_unsafe();
 };
 
-kern_return_t mach_vm_copy(vm_map_t map, mach_vm_address_t source_address, mach_vm_size_t size, mach_vm_address_t dest_address) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t mach_vm_deallocate(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size) {
-	dtape_stub_unsafe();
-};
-
 kern_return_t mach_vm_inherit(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, vm_inherit_t new_inheritance) {
 	dtape_stub_unsafe();
 };
@@ -344,15 +483,7 @@ kern_return_t mach_vm_purgable_control(vm_map_t map, mach_vm_offset_t address, v
 	dtape_stub_unsafe();
 };
 
-kern_return_t mach_vm_read(vm_map_t map, mach_vm_address_t addr, mach_vm_size_t size, pointer_t* data, mach_msg_type_number_t* data_size) {
-	dtape_stub_unsafe();
-};
-
 kern_return_t mach_vm_read_list(vm_map_t map, mach_vm_read_entry_t data_list, natural_t count) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t mach_vm_read_overwrite(vm_map_t map, mach_vm_address_t address, mach_vm_size_t size, mach_vm_address_t data, mach_vm_size_t* data_size) {
 	dtape_stub_unsafe();
 };
 
@@ -373,14 +504,6 @@ kern_return_t mach_vm_remap_new_external(vm_map_t target_map, mach_vm_offset_t* 
 };
 
 kern_return_t mach_vm_wire_external(host_priv_t host_priv, vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, vm_prot_t access) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t mach_vm_write(vm_map_t map, mach_vm_address_t address, pointer_t data, mach_msg_type_number_t size) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach_vm_size_t size, int flags, vm_tag_t tag) {
 	dtape_stub_unsafe();
 };
 
@@ -410,35 +533,11 @@ kern_return_t mach_zone_info_for_zone(host_priv_t host, mach_zone_name_t name, m
 	dtape_stub_unsafe();
 };
 
-boolean_t vm_kernel_map_is_kernel(vm_map_t map) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t vm_map_copyin_common(vm_map_t src_map, vm_map_address_t src_addr, vm_map_size_t len, boolean_t src_destroy, boolean_t src_volatile, vm_map_copy_t* copy_result, boolean_t use_maxprot) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t vm_map_copyout_size(vm_map_t dst_map, vm_map_address_t* dst_addr, vm_map_copy_t copy, vm_map_size_t copy_size) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t vm_map_copy_overwrite(vm_map_t dst_map, vm_map_offset_t dst_addr, vm_map_copy_t copy, vm_map_size_t copy_size, boolean_t interruptible) {
-	dtape_stub_unsafe();
-};
-
-boolean_t vm_map_copy_validate_size(vm_map_t dst_map, vm_map_copy_t copy, vm_map_size_t* size) {
-	dtape_stub_unsafe();
-};
-
 kern_return_t vm_map_page_query_internal(vm_map_t target_map, vm_map_offset_t offset, int* disposition, int* ref_count) {
 	dtape_stub_unsafe();
 };
 
 kern_return_t vm_map_purgable_control(vm_map_t map, vm_map_offset_t address, vm_purgable_t control, int* state) {
-	dtape_stub_unsafe();
-};
-
-void vm_map_read_deallocate(vm_map_read_t map) {
 	dtape_stub_unsafe();
 };
 
@@ -536,5 +635,192 @@ vm_wire(
 	return rc;
 }
 
+/*
+ *	mach_vm_deallocate -
+ *	deallocates the specified range of addresses in the
+ *	specified address map.
+ */
+kern_return_t
+mach_vm_deallocate(
+	vm_map_t                map,
+	mach_vm_offset_t        start,
+	mach_vm_size_t  size)
+{
+	if ((map == VM_MAP_NULL) || (start + size < start)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (size == (mach_vm_offset_t) 0) {
+		return KERN_SUCCESS;
+	}
+
+	return vm_map_remove(map,
+	           vm_map_trunc_page(start,
+	           VM_MAP_PAGE_MASK(map)),
+	           vm_map_round_page(start + size,
+	           VM_MAP_PAGE_MASK(map)),
+	           VM_MAP_REMOVE_NO_FLAGS);
+}
+
+/*
+ * mach_vm_copy -
+ * Overwrite one range of the specified map with the contents of
+ * another range within that same map (i.e. both address ranges
+ * are "over there").
+ */
+kern_return_t
+mach_vm_copy(
+	vm_map_t                map,
+	mach_vm_address_t       source_address,
+	mach_vm_size_t  size,
+	mach_vm_address_t       dest_address)
+{
+	vm_map_copy_t copy;
+	kern_return_t kr;
+
+	if (map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = vm_map_copyin(map, (vm_map_address_t)source_address,
+	    (vm_map_size_t)size, FALSE, &copy);
+
+	if (KERN_SUCCESS == kr) {
+		if (copy) {
+			assertf(copy->size == (vm_map_size_t) size, "Req size: 0x%llx, Copy size: 0x%llx\n", (uint64_t) size, (uint64_t) copy->size);
+		}
+
+		kr = vm_map_copy_overwrite(map,
+		    (vm_map_address_t)dest_address,
+		    copy, (vm_map_size_t) size, FALSE /* interruptible XXX */);
+
+		if (KERN_SUCCESS != kr) {
+			vm_map_copy_discard(copy);
+		}
+	}
+	return kr;
+}
+
+/*
+ * mach_vm_read -
+ * Read/copy a range from one address space and return it to the caller.
+ *
+ * It is assumed that the address for the returned memory is selected by
+ * the IPC implementation as part of receiving the reply to this call.
+ * If IPC isn't used, the caller must deal with the vm_map_copy_t object
+ * that gets returned.
+ *
+ * JMM - because of mach_msg_type_number_t, this call is limited to a
+ * single 4GB region at this time.
+ *
+ */
+kern_return_t
+mach_vm_read(
+	vm_map_t                map,
+	mach_vm_address_t       addr,
+	mach_vm_size_t  size,
+	pointer_t               *data,
+	mach_msg_type_number_t  *data_size)
+{
+	kern_return_t   error;
+	vm_map_copy_t   ipc_address;
+
+	if (map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if ((mach_msg_type_number_t) size != size) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	error = vm_map_copyin(map,
+	    (vm_map_address_t)addr,
+	    (vm_map_size_t)size,
+	    FALSE,              /* src_destroy */
+	    &ipc_address);
+
+	if (KERN_SUCCESS == error) {
+		*data = (pointer_t) ipc_address;
+		*data_size = (mach_msg_type_number_t) size;
+		assert(*data_size == size);
+	}
+	return error;
+}
+
+/*
+ * mach_vm_read_overwrite -
+ * Overwrite a range of the current map with data from the specified
+ * map/address range.
+ *
+ * In making an assumption that the current thread is local, it is
+ * no longer cluster-safe without a fully supportive local proxy
+ * thread/task (but we don't support cluster's anymore so this is moot).
+ */
+
+kern_return_t
+mach_vm_read_overwrite(
+	vm_map_t                map,
+	mach_vm_address_t       address,
+	mach_vm_size_t  size,
+	mach_vm_address_t       data,
+	mach_vm_size_t  *data_size)
+{
+	kern_return_t   error;
+	vm_map_copy_t   copy;
+
+	if (map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	error = vm_map_copyin(map, (vm_map_address_t)address,
+	    (vm_map_size_t)size, FALSE, &copy);
+
+	if (KERN_SUCCESS == error) {
+		if (copy) {
+			assertf(copy->size == (vm_map_size_t) size, "Req size: 0x%llx, Copy size: 0x%llx\n", (uint64_t) size, (uint64_t) copy->size);
+		}
+
+		error = vm_map_copy_overwrite(current_thread()->map,
+		    (vm_map_address_t)data,
+		    copy, (vm_map_size_t) size, FALSE);
+		if (KERN_SUCCESS == error) {
+			*data_size = size;
+			return error;
+		}
+		vm_map_copy_discard(copy);
+	}
+	return error;
+}
+
+/*
+ * mach_vm_write -
+ * Overwrite the specified address range with the data provided
+ * (from the current map).
+ */
+kern_return_t
+mach_vm_write(
+	vm_map_t                        map,
+	mach_vm_address_t               address,
+	pointer_t                       data,
+	mach_msg_type_number_t          size)
+{
+	if (map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	return vm_map_copy_overwrite(map, (vm_map_address_t)address,
+	           (vm_map_copy_t) data, size, FALSE /* interruptible XXX */);
+}
+
 // </copied>
- 
+
+// <copied from="xnu://7195.141.2/osfmk/vm/vm_map.c">
+
+void
+vm_map_read_deallocate(
+	vm_map_read_t      map)
+{
+	vm_map_deallocate((vm_map_t)map);
+}
+
+// </copied>

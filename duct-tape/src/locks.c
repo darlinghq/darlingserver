@@ -242,6 +242,8 @@ void lck_rw_lock_exclusive(lck_rw_t* lock) {
 	dtape_stub_unsafe();
 };
 
+#define LOCK_SNOOP_SPINS 100
+
 // <copied from="xnu://7195.141.2/osfmk/kern/locks.c">
 
 /*
@@ -311,6 +313,47 @@ mutex_pause(uint32_t collisions)
 
 	wait_result = thread_block(THREAD_CONTINUE_NULL);
 	assert(wait_result == THREAD_TIMED_OUT);
+}
+
+void *
+hw_wait_while_equals(void **address, void *current)
+{
+	void *v;
+	uint64_t end = 0;
+
+	for (;;) {
+		for (int i = 0; i < LOCK_SNOOP_SPINS; i++) {
+#ifdef __DARLING__
+#if __x86_64__ || __i386__
+			__builtin_ia32_pause();
+#else
+			#warning Missing CPU pause for this architecture
+#endif
+#else
+			cpu_pause();
+#endif
+#if OS_ATOMIC_HAS_LLSC
+			v = os_atomic_load_exclusive(address, relaxed);
+			if (__probable(v != current)) {
+				os_atomic_clear_exclusive();
+				return v;
+			}
+			wait_for_event();
+#else
+			v = os_atomic_load(address, relaxed);
+			if (__probable(v != current)) {
+				return v;
+			}
+#endif // OS_ATOMIC_HAS_LLSC
+		}
+#ifndef __DARLING__
+		if (end == 0) {
+			end = ml_get_timebase() + LOCK_PANIC_TIMEOUT;
+		} else if (ml_get_timebase() >= end) {
+			panic("Wait while equals timeout @ *%p == %p", address, v);
+		}
+#endif // __DARLING__
+	}
 }
 
 // </copied>

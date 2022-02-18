@@ -276,6 +276,9 @@ __enum_decl(startup_rank_t, uint32_t, {
 #endif
 
 
+#ifdef __DARLING__
+#define __STARTUP1(name, line, subsystem, rank, func, a, b)
+#else
 #define __STARTUP1(name, line, subsystem, rank, func, a, b) \
 	__PLACE_IN_SECTION(STARTUP_HOOK_SEGMENT "," STARTUP_HOOK_SECTION) \
 	static const struct startup_entry \
@@ -283,6 +286,7 @@ __enum_decl(startup_rank_t, uint32_t, {
 	    STARTUP_SUB_ ## subsystem, \
 	    rank, __STARTUP_FUNC_CAST(func, a), b, \
 	}
+#endif // __DARLING__
 
 #define __STARTUP(name, line, subsystem, rank, func) \
 	__STARTUP1(name, line, subsystem, rank, func, , NULL)

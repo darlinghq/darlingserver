@@ -155,9 +155,15 @@ makedev(__uint32_t _major, __uint32_t _minor)
 
 #else   /* !__cplusplus */
 
+#if !defined(__DARLING__) || !defined(major)
 #define major(x)        ((int32_t)(((u_int32_t)(x) >> 24) & 0xff))
+#endif
+#if !defined(__DARLING__) || !defined(minor)
 #define minor(x)        ((int32_t)((x) & 0xffffff))
+#endif
+#if !defined(__DARLING__) || !defined(makedev)
 #define makedev(x, y)    ((dev_t)(((x) << 24) | (y)))
+#endif
 
 #endif  /* !__cplusplus */
 #endif  /* !_POSIX_C_SOURCE */

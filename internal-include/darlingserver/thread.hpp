@@ -38,6 +38,7 @@ namespace DarlingServer {
 
 	class Thread: public std::enable_shared_from_this<Thread> {
 		friend class Process;
+		friend class Call; // HACK, see call.cpp
 
 	private:
 		pid_t _tid;
@@ -59,6 +60,10 @@ namespace DarlingServer {
 		int _pendingSignal = 0;
 		bool _processingSignal = false;
 		bool _pendingCallOverride = false;
+		bool _waitingForReply = false;
+		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
+		dtape_semaphore_t* _s2cReplySempahore = nullptr;
+		std::optional<Message> _s2cReply = std::nullopt;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
@@ -68,6 +73,11 @@ namespace DarlingServer {
 		static void interruptDisable();
 		static void interruptEnable();
 		static void syscallReturn(int resultCode);
+
+		Message _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
+
+		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
+		int _munmap(uintptr_t address, size_t length, int& outErrno);
 
 	public:
 		using ID = pid_t;
@@ -93,6 +103,9 @@ namespace DarlingServer {
 
 		std::shared_ptr<Call> activeSyscall() const;
 		void setActiveSyscall(std::shared_ptr<Call> activeSyscall);
+
+		bool waitingForReply() const;
+		void setWaitingForReply(bool waitingForReply);
 
 		/**
 		 * The TID of this Thread as seen from darlingserver's namespace.
@@ -153,6 +166,9 @@ namespace DarlingServer {
 
 		void setPendingCallOverride(bool pendingCallOverride);
 
+		uintptr_t allocatePages(size_t pageCount, int protection);
+		void freePages(uintptr_t address, size_t pageCount);
+
 		static std::shared_ptr<Thread> currentThread();
 
 		/**
@@ -166,6 +182,11 @@ namespace DarlingServer {
 		 * Schedules the given function to be called within a duct-taped kernel microthread.
 		 */
 		static void kernelAsync(std::function<void()> fn);
+
+		/**
+		 * Runs the given function on a duct-taped kernel microthread and waits for it to return.
+		 */
+		static void kernelSync(std::function<void()> fn);
 	};
 };
 

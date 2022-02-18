@@ -16,6 +16,7 @@
 #include <kern/host.h>
 #include <kern/sync_sema.h>
 #include <kern/ux_handler.h>
+#include <ipc/ipc_importance.h>
 
 #include <sys/types.h>
 
@@ -64,6 +65,9 @@ void ipc_voucher_init(void);
 void dtape_timer_init(void);
 
 extern zone_t semaphore_zone;
+extern lck_spin_t ipc_importance_lock_data;
+extern zone_t ipc_importance_task_zone;
+extern zone_t ipc_importance_inherit_zone;
 
 void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
 	char message[4096];
@@ -94,7 +98,11 @@ void dtape_init(const dtape_hooks_t* hooks) {
 	ipc_object_zones[IOT_PORT] = zone_create("ipc ports", sizeof(struct ipc_port), ZC_NOENCRYPT | ZC_CACHING | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
 	ipc_object_zones[IOT_PORT_SET] = zone_create("ipc port sets", sizeof(struct ipc_pset), ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM | ZC_NOSEQUESTER);
 
+	ipc_importance_task_zone = zone_create("ipc task importance", sizeof(struct ipc_importance_task), ZC_NOENCRYPT);
+	ipc_importance_inherit_zone = zone_create("ipc importance inherit", sizeof(struct ipc_importance_inherit), ZC_NOENCRYPT);
+
 	lck_mtx_init(&realhost.lock, LCK_GRP_NULL, LCK_ATTR_NULL);
+	lck_spin_init(&ipc_importance_lock_data, LCK_GRP_NULL, LCK_ATTR_NULL);
 
 	dtape_timer_init();
 
@@ -139,6 +147,9 @@ void dtape_init(const dtape_hooks_t* hooks) {
 
 	dtape_log_debug("clock_service_create");
 	clock_service_create();
+
+	dtape_log_debug("thread_deallocate_daemon_init");
+	thread_deallocate_daemon_init();
 
 	ux_handler_init();
 	ux_handler_setup();

@@ -59,8 +59,23 @@ target_link_libraries(darlingserver
 	cap
 )
 
-target_compile_options(darlingserver PRIVATE -pthread -std=c++17)
-target_link_options(darlingserver PRIVATE -pthread -Wl,--gc-sections)
+target_compile_options(darlingserver PRIVATE
+	-pthread
+	-std=c++17
+
+	# DEBUGGING
+	#-fsanitize=address
+	#-fno-omit-frame-pointer
+	#-g
+	#-Og
+)
+target_link_options(darlingserver PRIVATE
+	-pthread
+	-Wl,--gc-sections
+
+	# DEBUGGING
+	#-fsanitize=address
+)
 
 install(TARGETS darlingserver DESTINATION bin)
 

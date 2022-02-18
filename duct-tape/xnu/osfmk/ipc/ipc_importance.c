@@ -69,7 +69,11 @@ static boolean_t ipc_importance_delayed_drop_call_requested = FALSE;
 /*
  * Importance Voucher Attribute Manager
  */
+#ifdef __DARLING__
+lck_spin_t ipc_importance_lock_data;
+#else
 static LCK_SPIN_DECLARE_ATTR(ipc_importance_lock_data, &ipc_lck_grp, &ipc_lck_attr);
+#endif
 
 #define ipc_importance_lock() \
 	lck_spin_lock_grp(&ipc_importance_lock_data, &ipc_lck_grp)
@@ -148,11 +152,16 @@ static queue_head_t global_iit_alloc_queue =
     QUEUE_HEAD_INITIALIZER(global_iit_alloc_queue);
 #endif
 
+#ifdef __DARLING__
+zone_t ipc_importance_task_zone;
+zone_t ipc_importance_inherit_zone;
+#else
 static ZONE_DECLARE(ipc_importance_task_zone, "ipc task importance",
     sizeof(struct ipc_importance_task), ZC_NOENCRYPT);
 static ZONE_DECLARE(ipc_importance_inherit_zone, "ipc importance inherit",
     sizeof(struct ipc_importance_inherit), ZC_NOENCRYPT);
 static zone_t ipc_importance_inherit_zone;
+#endif // __DARLING__
 
 static ipc_voucher_attr_control_t ipc_importance_control;
 

@@ -78,6 +78,17 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 
 	ipc_task_init(&task->xnu_task, parent_task ? &parent_task->xnu_task : NULL);
 
+	if (parent_task) {
+		task_importance_init_from_parent(&task->xnu_task, &parent_task->xnu_task);
+	}
+
+	// this is a hack to force all tasks to have an IPC importance structure associated with them
+	// since i'm not sure where it's normally acquired in XNU.
+	// (this is necessary ipc_importance_send() needs the task to have a valid `task_imp_base`)
+	if (task->xnu_task.task_imp_base == IIT_NULL) {
+		ipc_importance_for_task(&task->xnu_task, false);
+	}
+
 	if (parent_task != NULL) {
 		task->xnu_task.sec_token = parent_task->xnu_task.sec_token;
 		task->xnu_task.audit_token = parent_task->xnu_task.audit_token;
@@ -85,6 +96,8 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 		task->xnu_task.sec_token = KERNEL_SECURITY_TOKEN;
 		task->xnu_task.audit_token = KERNEL_AUDIT_TOKEN;
 	}
+
+	task->xnu_task.audit_token.val[5] = task->saved_pid;
 
 	if (architecture == dserver_rpc_architecture_x86_64 || architecture == dserver_rpc_architecture_arm64) {
 		task_set_64Bit_addr(&task->xnu_task);
@@ -105,6 +118,10 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 };
 
 void dtape_task_destroy(dtape_task_t* task) {
+	if (IIT_NULL != task->xnu_task.task_imp_base) {
+		ipc_importance_disconnect_task(&task->xnu_task);
+	}
+
 	if (os_ref_release(&task->xnu_task.ref_count) != 0) {
 		panic("Duct-taped task over-retained or still in-use at destruction");
 	}
@@ -272,11 +289,12 @@ void task_policy_get_deallocate(task_policy_get_t task_policy_get) {
 };
 
 kern_return_t task_policy_set(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 void task_policy_set_deallocate(task_policy_set_t task_policy_set) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)task_policy_set);
 };
 
 kern_return_t task_purgable_info(task_t task, task_purgable_info_t* stats) {
@@ -363,6 +381,11 @@ kern_return_t pid_for_task(struct pid_for_task_args* args) {
 	dtape_stub_unsafe();
 };
 
+boolean_t task_is_exec_copy(task_t task) {
+	dtape_stub_safe();
+	return FALSE;
+};
+
 // <copied from="xnu://7195.141.2/osfmk/kern/task_policy.c">
 
 /*
@@ -397,6 +420,113 @@ task_policy(
 	__unused boolean_t                      change)
 {
 	return KERN_FAILURE;
+}
+
+/*
+ * Query the status of the task's donor mark.
+ */
+boolean_t
+task_is_marked_importance_donor(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL) {
+		return FALSE;
+	}
+	return ipc_importance_task_is_marked_donor(task->task_imp_base);
+}
+
+/*
+ * Query the status of the task's live donor and donor mark.
+ */
+boolean_t
+task_is_marked_live_importance_donor(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL) {
+		return FALSE;
+	}
+	return ipc_importance_task_is_marked_live_donor(task->task_imp_base);
+}
+
+/*
+ * Query the task's receiver mark.
+ */
+boolean_t
+task_is_marked_importance_receiver(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL) {
+		return FALSE;
+	}
+	return ipc_importance_task_is_marked_receiver(task->task_imp_base);
+}
+
+/*
+ * This routine may be called without holding task lock
+ * since the value of de-nap receiver can never be unset.
+ */
+boolean_t
+task_is_importance_denap_receiver(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL) {
+		return FALSE;
+	}
+	return ipc_importance_task_is_denap_receiver(task->task_imp_base);
+}
+
+/*
+ * Query the task's de-nap receiver mark.
+ */
+boolean_t
+task_is_marked_importance_denap_receiver(task_t task)
+{
+	if (task->task_imp_base == IIT_NULL) {
+		return FALSE;
+	}
+	return ipc_importance_task_is_marked_denap_receiver(task->task_imp_base);
+}
+
+void
+task_importance_init_from_parent(task_t new_task, task_t parent_task)
+{
+#if IMPORTANCE_INHERITANCE
+	ipc_importance_task_t new_task_imp = IIT_NULL;
+
+	new_task->task_imp_base = NULL;
+	if (!parent_task) {
+		return;
+	}
+
+	if (task_is_marked_importance_donor(parent_task)) {
+		new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_donor(new_task_imp, TRUE);
+	}
+	if (task_is_marked_live_importance_donor(parent_task)) {
+		if (IIT_NULL == new_task_imp) {
+			new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		}
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_live_donor(new_task_imp, TRUE);
+	}
+	/* Do not inherit 'receiver' on fork, vfexec or true spawn */
+	if (task_is_exec_copy(new_task) &&
+	    task_is_marked_importance_receiver(parent_task)) {
+		if (IIT_NULL == new_task_imp) {
+			new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		}
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_receiver(new_task_imp, TRUE);
+	}
+	if (task_is_marked_importance_denap_receiver(parent_task)) {
+		if (IIT_NULL == new_task_imp) {
+			new_task_imp = ipc_importance_for_task(new_task, FALSE);
+		}
+		assert(IIT_NULL != new_task_imp);
+		ipc_importance_task_mark_denap_receiver(new_task_imp, TRUE);
+	}
+	if (IIT_NULL != new_task_imp) {
+		assert(new_task->task_imp_base == new_task_imp);
+		ipc_importance_task_release(new_task_imp);
+	}
+#endif /* IMPORTANCE_INHERITANCE */
 }
 
 // </copied>

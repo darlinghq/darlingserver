@@ -35,9 +35,11 @@
 # error "KASAN selected, but not enabled in compiler"
 #endif
 
+#ifndef __DARLING__
 #if !KASAN && __has_feature(address_sanitizer)
 # error "ASAN enabled in compiler, but kernel is not configured for KASAN"
 #endif
+#endif // __DARLING__
 
 #define KASAN_GLOBAL_SEGNAME  "__DATA"
 #define KASAN_GLOBAL_SECTNAME "__asan_globals"

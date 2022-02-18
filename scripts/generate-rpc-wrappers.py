@@ -456,7 +456,9 @@ extern "C" {
 """)
 
 public_header.write("enum dserver_callnum {\n")
-public_header.write("\tdserver_callnum_invalid,\n")
+# "52ccall" -> "s2c call"
+public_header.write("\tdserver_callnum_s2c = 0x52cca11,\n")
+public_header.write("\tdserver_callnum_invalid = 0,\n")
 for call in calls:
 	call_name = call[0]
 	call_parameters = call[1]
@@ -469,6 +471,8 @@ public_header.write("""\
 
 typedef enum dserver_callnum dserver_callnum_t;
 
+#ifndef DSERVER_RPC_HOOKS_ARCHITECTURE
+#define DSERVER_RPC_HOOKS_ARCHITECTURE 1
 enum dserver_rpc_architecture {
 	dserver_rpc_architecture_invalid,
 	dserver_rpc_architecture_i386,
@@ -478,6 +482,7 @@ enum dserver_rpc_architecture {
 };
 
 typedef enum dserver_rpc_architecture dserver_rpc_architecture_t;
+#endif
 
 typedef struct dserver_rpc_callhdr {
 	dserver_callnum_t number;
@@ -495,6 +500,7 @@ typedef struct dserver_rpc_replyhdr {
 
 library_source.write("""\
 #include {}
+#include <darlingserver/rpc-supplement.h>
 
 #if !defined(dserver_rpc_hooks_msghdr_t) || !defined(dserver_rpc_hooks_iovec_t) || !defined(dserver_rpc_hooks_cmsghdr_t) || !defined(DSERVER_RPC_HOOKS_CMSG_SPACE) || !defined(DSERVER_RPC_HOOKS_CMSG_FIRSTHDR) || !defined(DSERVER_RPC_HOOKS_SOL_SOCKET) || !defined(DSERVER_RPC_HOOKS_SCM_RIGHTS) || !defined(DSERVER_RPC_HOOKS_CMSG_LEN) || !defined(DSERVER_RPC_HOOKS_CMSG_DATA) || !defined(DSERVER_RPC_HOOKS_ATTRIBUTE)
 	#error Missing definitions
@@ -689,6 +695,9 @@ for call in calls:
 			internal_header.write("\t\t\t} \\\n")
 
 		internal_header.write("\t\t\treplyStruct->body." + param_name + " = " + val + "; \\\n")
+	internal_header.write("\t\t\tif (auto thread = _thread.lock()) { \\\n")
+	internal_header.write("\t\t\t\tthread->setWaitingForReply(false); \\\n")
+	internal_header.write("\t\t\t} \\\n")
 	internal_header.write("\t\t\t_replyQueue.push(std::move(reply)); \\\n")
 	internal_header.write("\t\t}; \\\n")
 
@@ -821,9 +830,10 @@ internal_header.write("\n")
 
 public_header.write("__attribute__((always_inline)) static const char* dserver_callnum_to_string(dserver_callnum_t callnum) {\n")
 public_header.write("\tswitch (callnum) {\n")
+public_header.write("\t\tcase dserver_callnum_s2c: return \"dserver_callnum_s2c\";\n")
 for call in calls:
 	call_name = call[0]
-	public_header.write("\t\t case dserver_callnum_" + call_name + ": return \"dserver_callnum_" + call_name + "\";\n")
+	public_header.write("\t\tcase dserver_callnum_" + call_name + ": return \"dserver_callnum_" + call_name + "\";\n")
 public_header.write("\t\tdefault: return (const char*)0;\n")
 public_header.write("\t}\n")
 public_header.write("};\n\n")
@@ -939,7 +949,10 @@ for call in calls:
 		library_source.write("\t\t},\n")
 
 	library_source.write("\t};\n")
-	library_source.write("\tdserver_rpc_reply_" + call_name + "_t reply;\n")
+	library_source.write("\tunion {\n")
+	library_source.write("\t\tdserver_rpc_reply_" + call_name + "_t reply;\n")
+	library_source.write("\t\tdserver_s2c_call_t s2c;\n")
+	library_source.write("\t} reply_msg;\n")
 
 	if fd_count_in_call > 0 or fd_count_in_reply > 0:
 		library_source.write("\tint fds[" + str(max(fd_count_in_call, fd_count_in_reply)) + "];\n")
@@ -990,8 +1003,8 @@ for call in calls:
 
 	library_source.write(textwrap.indent(textwrap.dedent("""\
 		dserver_rpc_hooks_iovec_t reply_data = {
-			.iov_base = &reply,
-			.iov_len = sizeof(reply),
+			.iov_base = &reply_msg,
+			.iov_len = sizeof(reply_msg),
 		};
 		dserver_rpc_hooks_msghdr_t replymsg = {
 			.msg_name = NULL,
@@ -1026,7 +1039,7 @@ for call in calls:
 	library_source.write("\tif (long_status < 0) {\n")
 	library_source.write("\t\treturn (int)long_status;\n")
 	library_source.write("\t}\n\n")
-	library_source.write("\tif (long_status != sizeof(reply)) {\n")
+	library_source.write("\tif (long_status != sizeof(reply_msg.reply)) {\n")
 	library_source.write("\t\treturn dserver_rpc_hooks_get_communication_error_status();\n")
 	library_source.write("\t}\n\n")
 
@@ -1038,7 +1051,7 @@ for call in calls:
 			if not is_fd(param):
 				continue
 
-			library_source.write("\tif (reply.body." + param_name + " >= 0) {\n")
+			library_source.write("\tif (reply_msg.reply.body." + param_name + " >= 0) {\n")
 			library_source.write("\t\t++valid_fd_count;\n")
 			library_source.write("\t}\n")
 
@@ -1057,16 +1070,16 @@ for call in calls:
 
 		if is_fd(param):
 			library_source.write("\tif (out_" + param_name + ") {\n")
-			library_source.write("\t\t*out_" + param_name + " = (reply.body." + param_name + " >= 0) ? fds[reply.body." + param_name + "] : -1;\n")
-			library_source.write("\t} else if (reply.body." + param_name + " >= 0) {\n")
-			library_source.write("\t\tdserver_rpc_hooks_close_fd(fds[reply.body." + param_name + "]);\n")
+			library_source.write("\t\t*out_" + param_name + " = (reply_msg.reply.body." + param_name + " >= 0) ? fds[reply_msg.reply.body." + param_name + "] : -1;\n")
+			library_source.write("\t} else if (reply_msg.reply.body." + param_name + " >= 0) {\n")
+			library_source.write("\t\tdserver_rpc_hooks_close_fd(fds[reply_msg.reply.body." + param_name + "]);\n")
 			library_source.write("\t}\n")
 		else:
 			library_source.write("\tif (out_" + param_name + ") {\n")
-			library_source.write("\t\t*out_" + param_name + " = reply.body." + param_name + ";\n")
+			library_source.write("\t\t*out_" + param_name + " = reply_msg.reply.body." + param_name + ";\n")
 			library_source.write("\t}\n")
 
-	library_source.write("\treturn reply.header.code;\n")
+	library_source.write("\treturn reply_msg.reply.header.code;\n")
 
 	library_source.write("};\n\n")
 
