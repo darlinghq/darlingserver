@@ -123,6 +123,12 @@ calls = [
 		('new_bsd_signal_number', 'int32_t'),
 	]),
 
+	('task_is_64_bit', [
+		('id', 'int32_t'),
+	], [
+		('is_64_bit', 'bool'),
+	]),
+
 	#
 	# kqueue channels
 	#

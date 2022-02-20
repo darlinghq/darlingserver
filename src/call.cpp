@@ -627,4 +627,18 @@ void DarlingServer::Call::Sigprocess::processCall() {
 	_sendReply(code, newBSDSignal);
 };
 
+void DarlingServer::Call::TaskIs64Bit::processCall() {
+	int code = 0;
+	bool is64Bit = false;
+
+	if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.id)) {
+		auto targetProcess = *maybeTargetProcess;
+		is64Bit = targetProcess->is64Bit();
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, is64Bit);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;
