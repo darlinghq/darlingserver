@@ -10,6 +10,7 @@
 #include <kern/policy_internal.h>
 #include <mach/thread_act.h>
 #include <sys/systm.h>
+#include <sys/ux_exception.h>
 
 #include <stdlib.h>
 
@@ -242,6 +243,8 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 	mach_exception_data_type_t codes[EXCEPTION_CODE_MAX] = { 0, 0 };
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
+	thread->processing_signal = true;
+
 	if (code == LINUX_SI_USER) {
 		if (task->has_sigexc) {
 			codes[0] = EXC_SOFT_SIGNAL;
@@ -319,7 +322,24 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 	dtape_log_debug("exception_triage_thread returned");
 
 out:
-	return;
+	thread->processing_signal = false;
+};
+
+extern int ux_exception(int exception, mach_exception_code_t code, mach_exception_subcode_t subcode);
+
+kern_return_t handle_ux_exception(thread_t xthread, int exception, mach_exception_code_t code, mach_exception_subcode_t subcode) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+
+	// translate exception and code to signal type
+	int ux_signal = ux_exception(exception, code, subcode);
+
+	if (thread->processing_signal) {
+		dtape_hooks->thread_set_pending_signal(thread->context, ux_signal);
+	} else {
+		dtape_stub_unsafe("handle_ux_exception(): TODO: introduce signal into thread");
+	}
+
+	return KERN_SUCCESS;
 };
 
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
@@ -1663,6 +1683,74 @@ thread_start(
 {
 	clear_wait(thread, THREAD_AWAKENED);
 	thread->started = TRUE;
+}
+
+// </copied>
+
+// <copied from="xnu://7195.141.2/bsd/uxkern/ux_exception.c">
+
+/*
+ * Translate Mach exceptions to UNIX signals.
+ *
+ * ux_exception translates a mach exception, code and subcode to
+ * a signal.  Calls machine_exception (machine dependent)
+ * to attempt translation first.
+ */
+#ifdef __DARLING__
+int
+#else
+static int
+#endif
+ux_exception(int                        exception,
+    mach_exception_code_t      code,
+    mach_exception_subcode_t   subcode)
+{
+	int machine_signal = 0;
+
+#ifndef __DARLING__
+	/* Try machine-dependent translation first. */
+	if ((machine_signal = machine_exception(exception, code, subcode)) != 0) {
+		return machine_signal;
+	}
+#endif
+
+	switch (exception) {
+	case EXC_BAD_ACCESS:
+		if (code == KERN_INVALID_ADDRESS) {
+			return SIGSEGV;
+		} else {
+			return SIGBUS;
+		}
+
+	case EXC_BAD_INSTRUCTION:
+		return SIGILL;
+
+	case EXC_ARITHMETIC:
+		return SIGFPE;
+
+#ifndef __DARLING__
+	case EXC_EMULATION:
+		return SIGEMT;
+#endif
+
+	case EXC_SOFTWARE:
+		switch (code) {
+		case EXC_UNIX_BAD_SYSCALL:
+			return SIGSYS;
+		case EXC_UNIX_BAD_PIPE:
+			return SIGPIPE;
+		case EXC_UNIX_ABORT:
+			return SIGABRT;
+		case EXC_SOFT_SIGNAL:
+			return SIGKILL;
+		}
+		break;
+
+	case EXC_BREAKPOINT:
+		return SIGTRAP;
+	}
+
+	return 0;
 }
 
 // </copied>

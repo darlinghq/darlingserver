@@ -20,6 +20,7 @@ struct dtape_thread {
 	x86_thread_state_t thread_state;
 	x86_float_state_t float_state;
 #endif
+	bool processing_signal;
 	struct thread xnu_thread;
 };
 

@@ -229,7 +229,3 @@ bool work_interval_port_type_render_server(mach_port_name_t port_name) {
 ipc_port_t convert_suid_cred_to_port(suid_cred_t sc) {
 	dtape_stub_unsafe();
 };
-
-kern_return_t handle_ux_exception(thread_t thread, int exception, mach_exception_code_t code, mach_exception_subcode_t subcode) {
-	dtape_stub_unsafe();
-};
