@@ -250,7 +250,7 @@ void spawnLaunchd(const char* prefix)
 
 	// putenv("KQUEUE_DEBUG=1");
 
-	auto tmp = (std::string(prefix) + ".darlingserver.sock");
+	auto tmp = (std::string(prefix) + "/.darlingserver.sock");
 
 	const char* initPath = getenv("DSERVER_INIT");
 

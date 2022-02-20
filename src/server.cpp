@@ -217,7 +217,7 @@ struct DTapeHooks {
 
 DarlingServer::Server::Server(std::string prefix):
 	_prefix(prefix),
-	_socketPath(_prefix + ".darlingserver.sock"),
+	_socketPath(_prefix + "/.darlingserver.sock"),
 	_workQueue(std::bind(&Server::_worker, this, std::placeholders::_1))
 {
 	sharedInstancePointer = this;

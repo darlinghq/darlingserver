@@ -503,6 +503,11 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 				break;
 			} else if (errno == EINTR) {
 				ret = 0;
+			} else if (errno == EPIPE) {
+				// this means that peer of the first message we tried to send has died.
+				// we'll just drop that message and try the others.
+				_messages.pop_front();
+				ret = 0;
 			} else {
 				throw std::system_error(errno, std::generic_category(), "Failed to send messages through socket");
 			}

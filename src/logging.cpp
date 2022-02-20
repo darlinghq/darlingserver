@@ -23,13 +23,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#ifndef LOG_TO_STDOUT
-	//#define LOG_TO_STDOUT 0
-
-	// FOR DARLINGSERVER TESTING:
-	#define LOG_TO_STDOUT 1
-#endif
-
 DarlingServer::Log::Log(std::string category):
 	_category(category)
 	{};
@@ -89,9 +82,14 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 	// NOTE: we use POSIX file APIs because we want to append each message to the log file atomically,
 	//       and as far as i can tell, C++ fstreams provide no such guarantee (that they won't write in chunks).
 	static int logFile = []() {
-		std::filesystem::path path(Server::sharedInstance().prefix() + "/private/var/log/");
+		std::filesystem::path path(Server::sharedInstance().prefix() + "/private/var/log/dserver.log");
 		std::filesystem::create_directories(path.parent_path());
-		return open(path.c_str(), O_WRONLY | O_APPEND);
+		return open(path.c_str(), O_WRONLY | O_APPEND | O_CREAT);
+	}();
+
+	static bool logToStderr = []() {
+		auto val = getenv("DSERVER_LOG_STDERR");
+		return val && strlen(val) >= 1 && (val[0] == 't' || val[0] == 'T' || val[0] == '1');
 	}();
 
 	struct timespec time;
@@ -101,7 +99,7 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 
 	write(logFile, messageToLog.c_str(), messageToLog.size());
 
-#if LOG_TO_STDOUT
-	write(STDOUT_FILENO, messageToLog.c_str(), messageToLog.size());
-#endif
+	if (logToStderr) {
+		write(STDERR_FILENO, messageToLog.c_str(), messageToLog.size());
+	}
 };
