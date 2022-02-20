@@ -316,12 +316,21 @@ void DarlingServer::Thread::doWork() {
 		goto doneWorking;
 	}
 
+	if (_deferralState != DeferralState::NotDeferred) {
+		microthreadLog.debug() << _tid << "(" << _nstid << "): execution was deferred" << microthreadLog.endLog;
+		_deferralState = DeferralState::DeferredPending;
+		_rwlock.unlock();
+		return;
+	}
+
 	_running = true;
 	currentThreadVar = shared_from_this();
 	dtape_thread_entering(_dtapeThread);
 
 	returningToThreadTop = false;
 	_rwlock.unlock();
+
+	_runningCondvar.notify_all();
 
 	getcontext(&backToThreadTopContext);
 
@@ -391,6 +400,7 @@ doneWorking:
 		libsimple_lock_unlock(unlockMeWhenSuspending);
 		unlockMeWhenSuspending = nullptr;
 	}
+	_runningCondvar.notify_all();
 	return;
 };
 
@@ -498,8 +508,24 @@ void DarlingServer::Thread::startKernelThread(std::function<void()> startupCallb
 };
 
 void DarlingServer::Thread::impersonate(std::shared_ptr<Thread> thread) {
-	std::unique_lock lock(_rwlock);
-	_impersonating = thread;
+	std::shared_ptr<Thread> oldThread;
+
+	if (thread) {
+		// prevent the thread from running while we're impersonating it
+		// FIXME: this may lead to blocking natively while we're on a microthread.
+		//        we would prefer to block using duct-taped facilities instead.
+		thread->defer(true);
+	}
+
+	{
+		std::unique_lock lock(_rwlock);
+		oldThread = _impersonating;
+		_impersonating = thread;
+	}
+
+	if (oldThread) {
+		oldThread->undefer();
+	}
 };
 
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::impersonatingThread() const {
@@ -855,4 +881,36 @@ void DarlingServer::Thread::freePages(uintptr_t address, size_t pageCount) {
 	if (_munmap(address, pageCount * sysconf(_SC_PAGESIZE), err) < 0) {
 		throw std::system_error(err, std::generic_category(), "S2C munmap call failed");
 	}
+};
+
+void DarlingServer::Thread::waitUntilRunning() {
+	std::shared_lock lock(_rwlock);
+	_runningCondvar.wait(lock, [&]() {
+		return _running;
+	});
+};
+
+void DarlingServer::Thread::waitUntilNotRunning() {
+	std::shared_lock lock(_rwlock);
+	_runningCondvar.wait(lock, [&]() {
+		return !_running;
+	});
+};
+
+void DarlingServer::Thread::defer(bool wait) {
+	std::unique_lock lock(_rwlock);
+	_deferralState = DeferralState::DeferredNotPending;
+	if (wait) {
+		_runningCondvar.wait(lock, [&]() {
+			return !_running;
+		});
+	}
+};
+
+void DarlingServer::Thread::undefer() {
+	std::unique_lock lock(_rwlock);
+	if (_deferralState == DeferralState::DeferredPending) {
+		Server::sharedInstance().scheduleThread(shared_from_this());
+	}
+	_deferralState = DeferralState::NotDeferred;
 };

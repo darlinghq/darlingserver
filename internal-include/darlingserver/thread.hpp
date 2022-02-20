@@ -24,6 +24,7 @@
 #include <sys/types.h>
 #include <mutex>
 #include <shared_mutex>
+#include <condition_variable>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -41,6 +42,21 @@ namespace DarlingServer {
 		friend class Call; // HACK, see call.cpp
 
 	private:
+		enum class DeferralState: uint8_t {
+			/**
+			 * The thread has not been told to defer execution.
+			 */
+			NotDeferred,
+			/**
+			 * The thread has been told to defer execution, but no executions have actually been deferred yet.
+			 */
+			DeferredNotPending,
+			/**
+			 * The thread has been told to defer execution and there are one or more executions that have actually been deferred.
+			 */
+			DeferredPending,
+		};
+
 		pid_t _tid;
 		pid_t _nstid;
 		std::weak_ptr<Process> _process;
@@ -64,6 +80,8 @@ namespace DarlingServer {
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
 		dtape_semaphore_t* _s2cReplySempahore = nullptr;
 		std::optional<Message> _s2cReply = std::nullopt;
+		std::condition_variable_any _runningCondvar;
+		DeferralState _deferralState = DeferralState::NotDeferred;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
@@ -169,6 +187,11 @@ namespace DarlingServer {
 
 		uintptr_t allocatePages(size_t pageCount, int protection);
 		void freePages(uintptr_t address, size_t pageCount);
+
+		void defer(bool wait = false);
+		void undefer();
+		void waitUntilNotRunning();
+		void waitUntilRunning();
 
 		static std::shared_ptr<Thread> currentThread();
 
