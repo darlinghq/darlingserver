@@ -46,7 +46,7 @@ typedef void (*dtape_hook_log_f)(dtape_log_level_t level, const char* message);
 typedef void (*dtape_hook_thread_terminate_f)(void* thread_context);
 
 typedef dtape_thread_t* (*dtape_hook_thread_create_kernel_f)(void);
-typedef void (*dtape_hook_thread_start_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
+typedef void (*dtape_hook_thread_setup_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
 typedef void (*dtape_hook_thread_set_pending_signal_f)(void* thread_context, int pending_signal);
 typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_context, bool pending_call_override);
 typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection);
@@ -66,7 +66,7 @@ typedef struct dtape_hooks {
 	dtape_hook_log_f log;
 	dtape_hook_thread_terminate_f thread_terminate;
 	dtape_hook_thread_create_kernel_f thread_create_kernel;
-	dtape_hook_thread_start_f thread_start;
+	dtape_hook_thread_setup_f thread_setup;
 	dtape_hook_thread_set_pending_signal_f thread_set_pending_signal;
 	dtape_hook_thread_set_pending_call_override_f thread_set_pending_call_override;
 	dtape_hook_thread_allocate_pages_f thread_allocate_pages;
@@ -79,6 +79,7 @@ typedef struct dtape_hooks {
 } dtape_hooks_t;
 
 void dtape_init(const dtape_hooks_t* hooks);
+void dtape_init_in_thread(void);
 void dtape_deinit(void);
 
 uint32_t dtape_task_self_trap(void);

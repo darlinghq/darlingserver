@@ -137,6 +137,8 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 };
 
 void dtape_thread_entering(dtape_thread_t* thread) {
+	// if the thread is entering, it cannot be waiting
+	thread->xnu_thread.state &= ~(TH_WAIT | TH_UNINT);
 	thread->xnu_thread.state |= TH_RUN;
 };
 
@@ -427,7 +429,7 @@ kern_return_t thread_go(thread_t thread, wait_result_t wresult, waitq_options_t 
 };
 
 wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interruptible_orig) {
-	dtape_stub();
+	dtape_stub_safe();
 	thread_lock(thread);
 	thread->state = TH_WAIT;
 	thread->wait_result = THREAD_WAITING;
@@ -449,23 +451,6 @@ void thread_sched_call(thread_t thread, sched_call_t call) {
 	thread->sched_call = call;
 };
 
-static void kernel_thread_startup(void* context) {
-	dtape_thread_t* thread = context;
-	thread_continue_t continuation = thread->xnu_thread.continuation;
-	void* parameter = thread->xnu_thread.parameter;
-
-	thread->xnu_thread.continuation = NULL;
-	thread->xnu_thread.parameter = NULL;
-
-	wait_result_t wait_result = thread_block_parameter(continuation, parameter);
-
-	// if it returns, that means we weren't waiting;
-	// let's execute the continuation manually
-	continuation(parameter, wait_result);
-
-	thread_terminate_self();
-};
-
 kern_return_t kernel_thread_create(thread_continue_t continuation, void* parameter, integer_t priority, thread_t* new_thread) {
 	dtape_thread_t* thread = dtape_hooks->thread_create_kernel();
 	if (!thread) {
@@ -479,7 +464,7 @@ kern_return_t kernel_thread_create(thread_continue_t continuation, void* paramet
 	thread->xnu_thread.parameter = parameter;
 	thread->xnu_thread.state = TH_WAIT | TH_UNINT;
 
-	dtape_hooks->thread_start(thread->context, kernel_thread_startup, thread);
+	dtape_hooks->thread_setup(thread->context, thread_continuation_callback, thread);
 
 	return KERN_SUCCESS;
 };
@@ -1585,6 +1570,15 @@ kernel_thread_start_priority(
 	thread_mtx_unlock(thread);
 
 	return result;
+}
+
+kern_return_t
+kernel_thread_start(
+	thread_continue_t       continuation,
+	void                            *parameter,
+	thread_t                        *new_thread)
+{
+	return kernel_thread_start_priority(continuation, parameter, -1, new_thread);
 }
 
 // </copied>

@@ -133,6 +133,7 @@ namespace DarlingServer {
 		void setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress);
 
 		void startKernelThread(std::function<void()> startupCallback);
+		void setupKernelThread(std::function<void()> startupCallback);
 
 		/**
 		 * Pretend to be another thread for the purpose of running duct-taped code.

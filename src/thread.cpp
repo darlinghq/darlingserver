@@ -480,19 +480,20 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::currentThread() {
 	return currentThreadVar;
 };
 
-void DarlingServer::Thread::startKernelThread(std::function<void()> startupCallback) {
-	{
-		std::unique_lock lock(_rwlock);
-		_continuationCallback = startupCallback;
-		_suspended = true;
-		getcontext(&_resumeContext);
-		_resumeContext.uc_stack.ss_sp = _stack;
-		_resumeContext.uc_stack.ss_size = _stackSize;
-		_resumeContext.uc_stack.ss_flags = 0;
-		_resumeContext.uc_link = &backToThreadTopContext;
-		makecontext(&_resumeContext, microthreadContinuation, 0);
-	}
+void DarlingServer::Thread::setupKernelThread(std::function<void()> startupCallback) {
+	std::unique_lock lock(_rwlock);
+	_continuationCallback = startupCallback;
+	_suspended = true;
+	getcontext(&_resumeContext);
+	_resumeContext.uc_stack.ss_sp = _stack;
+	_resumeContext.uc_stack.ss_size = _stackSize;
+	_resumeContext.uc_stack.ss_flags = 0;
+	_resumeContext.uc_link = &backToThreadTopContext;
+	makecontext(&_resumeContext, microthreadContinuation, 0);
+};
 
+void DarlingServer::Thread::startKernelThread(std::function<void()> startupCallback) {
+	setupKernelThread(startupCallback);
 	resume();
 };
 

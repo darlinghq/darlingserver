@@ -138,7 +138,9 @@ void dtape_init(const dtape_hooks_t* hooks) {
 
 	dtape_log_debug("turnstiles_init");
 	turnstiles_init();
+};
 
+void dtape_init_in_thread(void) {
 	dtape_log_debug("thread_call_initialize");
 	thread_call_initialize();
 

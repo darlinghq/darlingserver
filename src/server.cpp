@@ -142,8 +142,8 @@ struct DTapeHooks {
 		return thread->_dtapeThread;
 	};
 
-	static void dtape_hook_thread_start(void* thread_context, dtape_thread_continuation_callback_f startupCallback, void* startupCallbackContext) {
-		static_cast<DarlingServer::Thread*>(thread_context)->startKernelThread([=]() {
+	static void dtape_hook_thread_setup(void* thread_context, dtape_thread_continuation_callback_f startupCallback, void* startupCallbackContext) {
+		static_cast<DarlingServer::Thread*>(thread_context)->setupKernelThread([=]() {
 			startupCallback(startupCallbackContext);
 		});
 	};
@@ -202,7 +202,7 @@ struct DTapeHooks {
 		.log = dtape_hook_log,
 		.thread_terminate = dtape_hook_thread_terminate,
 		.thread_create_kernel = dtape_hook_thread_create_kernel,
-		.thread_start = dtape_hook_thread_start,
+		.thread_setup = dtape_hook_thread_setup,
 		.thread_set_pending_signal = dtape_hook_thread_set_pending_signal,
 		.thread_set_pending_call_override = dtape_hook_thread_set_pending_call_override,
 		.thread_allocate_pages = dtape_hook_thread_allocate_pages,
@@ -303,6 +303,9 @@ void DarlingServer::Server::start() {
 
 	// force the kernel process to be created now
 	Process::kernelProcess();
+
+	// perform dtape initialization that requires a microthread context
+	Thread::kernelSync(dtape_init_in_thread);
 
 	while (true) {
 		if (_canRead) {
