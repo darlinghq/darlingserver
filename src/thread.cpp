@@ -743,9 +743,9 @@ void DarlingServer::Thread::setPendingCallOverride(bool pendingCallOverride) {
  * i'm currently leaning towards solution #1 because it avoids wasting extra resources unnecessarily.
  */
 
-DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize) {
-	static Log s2cLog("s2c");
+static DarlingServer::Log s2cLog("s2c");
 
+DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize) {
 	std::optional<Message> reply = std::nullopt;
 
 	// make sure we're the only one performing an S2C call on this thread
@@ -805,16 +805,16 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 
 	// partially validate the reply
 
-	if (_s2cReply->data().size() != expectedReplySize) {
+	if (reply->data().size() != expectedReplySize) {
 		throw std::runtime_error("Invalid S2C reply: unxpected size");
 	}
 
-	auto replyHeader = reinterpret_cast<dserver_s2c_replyhdr_t*>(_s2cReply->data().data());
+	auto replyHeader = reinterpret_cast<dserver_s2c_replyhdr_t*>(reply->data().data());
 	if (replyHeader->s2c_number != expectedReplyNumber) {
 		throw std::runtime_error("Invalid S2C reply: unexpected S2C reply number");
 	}
 
-	return std::move(*_s2cReply);
+	return std::move(*reply);
 };
 
 uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno) {
@@ -844,8 +844,12 @@ uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int pro
 	call->fd = fd;
 	call->offset = offset;
 
+	s2cLog.debug() << "Performing _mmap with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << ", flags=" << call->flags << ", fd=" << call->fd << ", offset=" << call->offset << s2cLog.endLog;
+
 	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t));
 	auto reply = reinterpret_cast<dserver_s2c_reply_mmap_t*>(replyMessage.data().data());
+
+	s2cLog.debug() << "_mmap returned address=" << reply->address << ", errno_result=" << reply->errno_result << s2cLog.endLog;
 
 	outErrno = reply->errno_result;
 	return reply->address;
@@ -860,8 +864,12 @@ int DarlingServer::Thread::_munmap(uintptr_t address, size_t length, int& outErr
 	call->address = address;
 	call->length = length;
 
+	s2cLog.debug() << "Performing _munmap with address=" << call->address << ", length=" << call->length << s2cLog.endLog;
+
 	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_munmap, sizeof(dserver_s2c_reply_munmap_t));
 	auto reply = reinterpret_cast<dserver_s2c_reply_munmap_t*>(replyMessage.data().data());
+
+	s2cLog.debug() << "_munmap returned return_value=" << reply->return_value << ", errno_result=" << reply->errno_result << s2cLog.endLog;
 
 	outErrno = reply->errno_result;
 	return reply->return_value;

@@ -159,7 +159,7 @@ struct DTapeHooks {
 	static uintptr_t dtape_hook_thread_allocate_pages(void* thread_context, size_t page_count, int protection) {
 		try {
 			return static_cast<DarlingServer::Thread*>(thread_context)->allocatePages(page_count, protection);
-		} catch (...) {
+		} catch (std::system_error e) {
 			return 0;
 		}
 	};
@@ -168,7 +168,7 @@ struct DTapeHooks {
 		try {
 			static_cast<DarlingServer::Thread*>(thread_context)->freePages(address, page_count);
 			return 0;
-		} catch (...) {
+		} catch (std::system_error e) {
 			return -1;
 		}
 	};

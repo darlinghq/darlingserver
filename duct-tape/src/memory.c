@@ -197,7 +197,7 @@ void kmem_free(vm_map_t map, vm_offset_t addr, vm_size_t size) {
 
 kern_return_t copyoutmap(vm_map_t map, void* fromdata, vm_map_address_t toaddr, vm_size_t length) {
 	if (map == kernel_map) {
-		memmove(fromdata, (void*)toaddr, length);
+		memmove((void*)toaddr, fromdata, length);
 		return KERN_SUCCESS;
 	} else {
 		return dtape_hooks->task_write_memory(map->dtape_task->context, toaddr, fromdata, length) ? KERN_SUCCESS : KERN_FAILURE;
@@ -206,7 +206,7 @@ kern_return_t copyoutmap(vm_map_t map, void* fromdata, vm_map_address_t toaddr, 
 
 kern_return_t copyinmap(vm_map_t map, vm_map_offset_t fromaddr, void* todata, vm_size_t length) {
 	if (map == kernel_map) {
-		memmove((void*)fromaddr, todata, length);
+		memmove(todata, (const void*)fromaddr, length);
 		return KERN_SUCCESS;
 	} else {
 		return dtape_hooks->task_read_memory(map->dtape_task->context, fromaddr, todata, length) ? KERN_SUCCESS : KERN_FAILURE;
@@ -292,7 +292,7 @@ static kern_return_t vm_map_copyout_kernel_buffer(vm_map_t map, vm_map_address_t
 				return KERN_RESOURCE_SHORTAGE;
 			}
 		} else if (map == current_map()) {
-			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, copy_size / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
+			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (copy_size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
 			if (*addr == 0) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
@@ -375,8 +375,8 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
 		}
 		return kr;
 	} else if (map == current_map()) {
-		// mach_vm_allocate_kernel allocates with default protection, 
-		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, size, PROT_READ | PROT_WRITE);
+		// mach_vm_allocate_kernel allocates with default protection
+		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
 		if (tmp == 0) {
 			return KERN_RESOURCE_SHORTAGE;
 		}
@@ -550,15 +550,18 @@ kern_return_t vm_map_region_recurse_64(vm_map_t map, vm_map_offset_t* address, v
 };
 
 kern_return_t vm_map_unwire(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end, boolean_t user_wire) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t vm_map_wire_kernel(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end, vm_prot_t caller_prot, vm_tag_t tag, boolean_t user_wire) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t vm32__task_wire(vm_map_t map, boolean_t must_wire) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t vm32__map_exec_lockdown(vm_map_t map) {
