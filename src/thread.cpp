@@ -160,7 +160,7 @@ DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
 void DarlingServer::Thread::registerWithProcess() {
 	auto process = _process.lock();
 	std::unique_lock lock(process->_rwlock);
-	process->_threads.push_back(shared_from_this());
+	process->_threads[_nstid] = shared_from_this();
 };
 
 DarlingServer::Thread::~Thread() noexcept(false) {
@@ -169,8 +169,12 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 	// schedule the duct-taped thread to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
 	kernelAsync([dtapeThread = _dtapeThread, s2cPerformSemaphore = _s2cPerformSempahore, s2cReplySemaphore = _s2cReplySempahore]() {
-		dtape_semaphore_destroy(s2cPerformSemaphore);
-		dtape_semaphore_destroy(s2cReplySemaphore);
+		if (s2cPerformSemaphore) {
+			dtape_semaphore_destroy(s2cPerformSemaphore);
+		}
+		if (s2cReplySemaphore) {
+			dtape_semaphore_destroy(s2cReplySemaphore);
+		}
 		dtape_thread_destroy(dtapeThread);
 	});
 
@@ -183,11 +187,10 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 	std::unique_lock lock(process->_rwlock);
 	auto it = process->_threads.begin();
 	while (it != process->_threads.end()) {
-		if (auto thread = it->lock()) {
-			if (thread.get() == this) {
-				break;
-			}
+		if (it->first == _nstid) {
+			break;
 		}
+		++it;
 	}
 	if (it == process->_threads.end()) {
 		throw std::runtime_error("Thread was not registered with Process");

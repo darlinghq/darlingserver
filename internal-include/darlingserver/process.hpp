@@ -59,7 +59,7 @@ namespace DarlingServer {
 		pid_t _nspid;
 		std::shared_ptr<FD> _pidfd;
 		mutable std::shared_mutex _rwlock;
-		std::vector<std::weak_ptr<Thread>> _threads;
+		std::unordered_map<uint64_t, std::weak_ptr<Thread>> _threads;
 		std::string _cachedVchrootPath;
 		std::shared_ptr<FD> _vchrootDescriptor;
 		dtape_task_t* _dtapeTask;

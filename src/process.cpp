@@ -126,14 +126,15 @@ DarlingServer::Process::~Process() {
 void DarlingServer::Process::_unregisterThreads() {
 	std::unique_lock lock(_rwlock);
 	while (!_threads.empty()) {
-		auto thread = _threads.back().lock();
+		auto it = _threads.begin();
+		auto thread = it->second.lock();
 		lock.unlock();
 		if (thread) {
 			thread->_process = std::weak_ptr<Process>();
 			threadRegistry().unregisterEntry(thread);
 		}
 		lock.lock();
-		_threads.pop_back();
+		_threads.erase(it);
 	}
 };
 
@@ -149,7 +150,7 @@ std::vector<std::shared_ptr<DarlingServer::Thread>> DarlingServer::Process::thre
 	std::vector<std::shared_ptr<DarlingServer::Thread>> result;
 	std::shared_lock lock(_rwlock);
 
-	for (auto& maybeThread: _threads) {
+	for (auto& [nsid, maybeThread]: _threads) {
 		if (auto thread = maybeThread.lock()) {
 			result.push_back(thread);
 		}
@@ -289,7 +290,8 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		// (see _unregisterThreads)
 		std::shared_ptr<Thread> mainThread = nullptr;
 		while (!_threads.empty()) {
-			auto thread = _threads.back().lock();
+			auto it = _threads.begin();
+			auto thread = it->second.lock();
 			lock.unlock();
 			if (thread) {
 				if (thread->_nstid == _nspid) {
@@ -300,12 +302,12 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 				}
 			}
 			lock.lock();
-			_threads.pop_back();
+			_threads.erase(it);
 		}
 		if (!mainThread) {
 			throw std::runtime_error("Main thread for process died?");
 		}
-		_threads.push_back(mainThread);
+		_threads[mainThread->nsid()] = mainThread;
 
 		// replace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;
