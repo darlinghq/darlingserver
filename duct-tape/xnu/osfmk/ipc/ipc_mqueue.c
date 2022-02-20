@@ -808,10 +808,6 @@ ipc_mqueue_post(
 				if (ipc_kmsg_enqueue_qos(&mqueue->imq_messages, kmsg)) {
 					/* if the space is dead there is no point calling KNOTE */
 					ipc_object_t object = imq_to_object(mqueue);
-#ifdef __DARLING__
-					// to simplify our kqueue handling, we use klists for both ports and portsets
-					if (io_otype(object) == IOT_PORT) {
-#endif // __DARLING__
 					assert(io_otype(object) == IOT_PORT);
 					ipc_port_t port = ip_object_to_port(object);
 					if (ip_active(port) &&
@@ -820,15 +816,6 @@ ipc_mqueue_post(
 					    ipc_mqueue_has_klist(mqueue)) {
 						KNOTE(&mqueue->imq_klist, 0);
 					}
-#ifdef __DARLING__
-					} else {
-						ipc_pset_t pset = ips_object_to_pset(object);
-
-						if (ips_active(pset) && ipc_mqueue_has_klist(mqueue)) {
-							KNOTE(&mqueue->imq_klist, 0);
-						}
-					}
-#endif // __DARLING__
 				}
 				break;
 			}

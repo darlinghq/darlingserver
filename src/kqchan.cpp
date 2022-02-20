@@ -337,7 +337,9 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 		reply->header.number = dserver_kqchan_msgnum_mach_port_read;
 
 		Thread::currentThread()->impersonate(thread);
-		dtape_kqchan_mach_port_fill(self->_dtapeKqchan, reply, defaultBuffer, defaultBufferSize);
+		if (!dtape_kqchan_mach_port_fill(self->_dtapeKqchan, reply, defaultBuffer, defaultBufferSize)) {
+			reply->header.code = 0xdead;
+		}
 		Thread::currentThread()->impersonate(nullptr);
 
 		self->_outbox.push(std::move(msg));

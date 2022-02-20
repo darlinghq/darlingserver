@@ -6,6 +6,7 @@
 #include <os/refcnt.h>
 #include <sys/event.h>
 #include <sys/eventvar.h>
+#include <kern/waitq.h>
 
 #include <darlingserver/duct-tape.h>
 
@@ -18,6 +19,10 @@ struct dtape_kqchan_mach_port {
 	struct knote knote;
 	dtape_kqchan_mach_port_notification_callback_f callback;
 	void* context;
+	thread_t waiter_thread;
+	struct waitq* waitq;
+	dtape_semaphore_t* waiter_death_semaphore;
+	dtape_semaphore_t* waiter_read_semaphore;
 };
 
 #endif // _DARLINGSERVER_DUCT_TAPE_KQCHAN_H_

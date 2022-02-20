@@ -2,6 +2,7 @@
 #include <darlingserver/duct-tape/kqchan.h>
 #include <darlingserver/duct-tape/stubs.h>
 #include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/log.h>
 
 #include <kern/debug.h>
 #include <stdlib.h>
@@ -68,7 +69,7 @@ void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqch
 	kqchan->context = NULL;
 };
 
-void dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size) {
+bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size) {
 	struct kevent_qos_s kev;
 	bool maybe_used_default_buffer = false;
 	thread_t xthread = current_thread();
@@ -78,11 +79,19 @@ void dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 	thread->kevent_ctx.kec_data_size = thread->kevent_ctx.kec_data_resid = default_buffer_size;
 	thread->kevent_ctx.kec_process_flags = 0;
 
-	filt_machportprocess(&kqchan->knote, (void*)&reply->kev);
+	bool result = (filt_machportprocess(&kqchan->knote, (void*)&reply->kev) & FILTER_ACTIVE) ? true : false;
+	if (kqchan->waiter_read_semaphore) {
+		dtape_semaphore_up(kqchan->waiter_read_semaphore);
+	}
+	return result;
 };
 
 bool dtape_kqchan_mach_port_has_events(dtape_kqchan_mach_port_t* kqchan) {
-	return filt_machportpeek(&kqchan->knote) & FILTER_ACTIVE;
+	if (imq_is_set(kqchan->knote.kn_mqueue)) {
+		return ipc_mqueue_peek(kqchan->knote.kn_mqueue, NULL, NULL, NULL, NULL, NULL);
+	} else {
+		return ipc_mqueue_set_peek(kqchan->knote.kn_mqueue);
+	}
 };
 
 kevent_ctx_t kevent_get_context(thread_t xthread) {
@@ -90,25 +99,25 @@ kevent_ctx_t kevent_get_context(thread_t xthread) {
 	return &thread->kevent_ctx;
 };
 
+static void knote_post(struct knote* kn, long hint) {
+	dtape_kqchan_mach_port_t* kqchan = __container_of(kn, dtape_kqchan_mach_port_t, knote);
+
+	if (!kqchan->callback) {
+		return;
+	}
+
+	if (dtape_kqchan_mach_port_has_events(kqchan)) {
+		return;
+	}
+
+	kqchan->callback(kqchan->context);
+};
+
 void knote(struct klist* list, long hint) {
 	struct knote *kn;
 
 	SLIST_FOREACH(kn, list, kn_selnext) {
-		dtape_kqchan_mach_port_t* kqchan = __container_of(kn, dtape_kqchan_mach_port_t, knote);
-
-		if (!kqchan->callback) {
-			continue;
-		}
-
-		imq_lock(kqchan->knote.kn_mqueue);
-
-		if ((filt_machportevent(&kqchan->knote, hint) & FILTER_ACTIVE) == 0) {
-			continue;
-		}
-
-		imq_unlock(kqchan->knote.kn_mqueue);
-
-		kqchan->callback(kqchan->context);
+		knote_post(kn, hint);
 	}
 };
 
@@ -116,13 +125,86 @@ void knote_vanish(struct klist* list, bool make_active) {
 	dtape_stub();
 };
 
+static void kqchan_waitq_waiter_entry(void* context, wait_result_t wait_result) {
+	dtape_kqchan_mach_port_t* kqchan = context;
+	struct waitq* wq = NULL;
+
+	dtape_log_debug("kqchan waitq waiter thread entering");
+
+	while ((wq = kqchan->waitq) != NULL) {
+		if ((wait_result = waitq_assert_wait64(wq, IPC_MQUEUE_RECEIVE, THREAD_INTERRUPTIBLE, 0)) == THREAD_WAITING) {
+			wait_result = thread_block(NULL);
+		}
+
+		dtape_log_debug("kqchan waitq waiter thread unblocked with wait result: %d", wait_result);
+
+		if (wait_result == THREAD_INTERRUPTED) {
+			// a wakeup with "THREAD_INTERRUPTED" indicates we should die
+			break;
+		} else {
+			if (filt_machportpeek(&kqchan->knote) & FILTER_ACTIVE) {
+				kqchan->callback(kqchan->context);
+			}
+			// wait until it's read
+			dtape_semaphore_down(kqchan->waiter_read_semaphore);
+		}
+	}
+
+	dtape_log_debug("kqchan waitq waiter thread exiting");
+
+	// to prevent us from racing with the kqchan's death/deallocation, we have a death semaphore that the kqchan waits for before dying
+	dtape_semaphore_up(kqchan->waiter_death_semaphore);
+
+	thread_terminate_self();
+	__builtin_unreachable();
+};
+
 int knote_link_waitq(struct knote *kn, struct waitq *wq, uint64_t *reserved_link) {
-	dtape_stub();
+	dtape_kqchan_mach_port_t* kqchan = __container_of(kn, dtape_kqchan_mach_port_t, knote);
+
+	if (kqchan->waitq) {
+		dtape_log_warning("Attempt to link kqchan to %p while it was already linked to %p", wq, kqchan->waitq);
+		return 1;
+	}
+
+	kqchan->waitq = wq;
+	kqchan->waiter_death_semaphore = dtape_semaphore_create(dtape_task_for_xnu_task(kernel_task), 0);
+	kqchan->waiter_read_semaphore = dtape_semaphore_create(dtape_task_for_xnu_task(kernel_task), 0);
+
+	if (kernel_thread_start(kqchan_waitq_waiter_entry, kqchan, &kqchan->waiter_thread) != KERN_SUCCESS) {
+		return 1;
+	}
+
 	return 0;
 };
 
 int knote_unlink_waitq(struct knote *kn, struct waitq *wq) {
-	dtape_stub();
+	dtape_kqchan_mach_port_t* kqchan = __container_of(kn, dtape_kqchan_mach_port_t, knote);
+
+	if (kqchan->waitq != wq) {
+		panic("Attempt to unlink kqchan from %p while it was linked to %p", wq, kqchan->waitq);
+	}
+
+	// the kernel thread will see this and terminate if it's not currently blocked waiting
+	kqchan->waitq = NULL;
+
+	// if the kernel thread *is* currently blocked waiting, wake it up with THREAD_INTERRUPTED (it will know it needs to terminate)
+	clear_wait(kqchan->waiter_thread, THREAD_INTERRUPTED);
+
+	// now release our reference on the kernel thread
+	thread_deallocate(kqchan->waiter_thread);
+	kqchan->waiter_thread = NULL;
+
+	// wait for the waiter thread to die
+	dtape_semaphore_down(kqchan->waiter_death_semaphore);
+
+	// now destroy the waiter thread death semaphore
+	dtape_semaphore_destroy(kqchan->waiter_death_semaphore);
+	kqchan->waiter_death_semaphore = NULL;
+
+	dtape_semaphore_destroy(kqchan->waiter_read_semaphore);
+	kqchan->waiter_read_semaphore = NULL;
+
 	return 0;
 };
 
