@@ -134,6 +134,18 @@ void DarlingServer::Call::sendBasicReply(int resultCode) {
 	throw std::runtime_error("This call cannot send a basic reply");
 };
 
+void DarlingServer::Call::sendBSDReply(int resultCode, uint32_t returnValue) {
+	throw std::runtime_error("This call cannot send a BSD reply");
+};
+
+bool DarlingServer::Call::isXNUTrap() const {
+	return false;
+};
+
+bool DarlingServer::Call::isBSDTrap() const {
+	return false;
+};
+
 //
 // call processing
 //

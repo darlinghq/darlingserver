@@ -121,6 +121,9 @@ add_compile_definitions(
 	_CLOCK_T=1
 	NO_KDEBUG=1
 	CONFIG_IPC_KERNEL_MAP_SIZE=64
+
+	__DARWIN_LITTLE_ENDIAN=1234
+	__DARWIN_BYTE_ORDER=__DARWIN_LITTLE_ENDIAN
 )
 
 add_compile_options(
@@ -252,6 +255,7 @@ add_library(darlingserver_duct_tape
 	src/processor.c
 	src/kqchan.c
 	src/semaphore.c
+	src/psynch.c
 
 	xnu/libkern/os/refcnt.c
 	xnu/libkern/gen/OSAtomicOperations.c
@@ -334,6 +338,12 @@ add_library(darlingserver_duct_tape
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/mach/vm32_map_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/device/device_server.c
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/UserNotification/UNDReplyServer.c
+
+	pthread/kern_synch.c
+)
+
+set_source_files_properties(pthread/kern_synch.c PROPERTIES
+	COMPILE_FLAGS "-I${CMAKE_CURRENT_SOURCE_DIR}/pthread"
 )
 
 target_include_directories(darlingserver_duct_tape PRIVATE

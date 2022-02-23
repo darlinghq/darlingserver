@@ -4,6 +4,7 @@
 #include <darlingserver/duct-tape/thread.h>
 #include <darlingserver/duct-tape/hooks.h>
 #include <darlingserver/duct-tape/log.h>
+#include <darlingserver/duct-tape/psynch.h>
 
 #include <kern/thread.h>
 #include <kern/ipc_tt.h>
@@ -87,6 +88,8 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 
 	timer_call_setup(&thread->xnu_thread.wait_timer, thread_timer_expire, &thread->xnu_thread);
 
+	dtape_psynch_thread_init(thread);
+
 	return thread;
 };
 
@@ -94,6 +97,8 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 	if (os_ref_release(&thread->xnu_thread.ref_count) != 0) {
 		panic("Duct-taped thread over-retained or still in-use at destruction");
 	}
+
+	dtape_psynch_thread_destroy(thread);
 
 	// this next section uses code adapted from XNU's thread_deallocate_complete() in osfmk/kern/thread.c
 
@@ -1145,6 +1150,11 @@ kern_return_t thread_setstatus_from_user(thread_t thread, int flavor, thread_sta
 	dtape_stub_unsafe();
 };
 
+boolean_t thread_should_abort(thread_t thread) {
+	dtape_stub();
+	return FALSE;
+};
+
 static wait_result_t thread_handoff_internal(thread_t thread, thread_continue_t continuation, void* parameter, thread_handoff_option_t option) {
 	if (thread != THREAD_NULL) {
 		if (continuation == NULL || (option & THREAD_HANDOFF_SETRUN_NEEDED)) {
@@ -1599,6 +1609,13 @@ kernel_thread_start(
 	thread_t                        *new_thread)
 {
 	return kernel_thread_start_priority(continuation, parameter, -1, new_thread);
+}
+
+uint64_t
+thread_tid(
+	thread_t        thread)
+{
+	return thread != THREAD_NULL? thread->thread_id: 0;
 }
 
 // </copied>

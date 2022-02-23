@@ -561,7 +561,11 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 		if (!call) {
 			throw std::runtime_error("Attempt to return from syscall on thread with no active syscall");
 		}
-		call->sendBasicReply(resultCode);
+		if (call->isBSDTrap()) {
+			call->sendBSDReply(resultCode, currentThreadVar->_bsdReturnValue);
+		} else {
+			call->sendBasicReply(resultCode);
+		}
 	}
 
 	currentThreadVar->setActiveSyscall(nullptr);
@@ -921,4 +925,8 @@ void DarlingServer::Thread::undefer() {
 		Server::sharedInstance().scheduleThread(shared_from_this());
 	}
 	_deferralState = DeferralState::NotDeferred;
+};
+
+uint32_t* DarlingServer::Thread::bsdReturnValuePointer() {
+	return &_bsdReturnValue;
 };

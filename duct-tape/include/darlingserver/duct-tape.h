@@ -54,6 +54,7 @@ typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t ad
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
 typedef void (*dtape_hook_current_thread_syscall_return_f)(int return_code);
+typedef void (*dtape_hook_current_thread_set_bsd_retval_f)(uint32_t retval);
 typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
 
@@ -74,6 +75,7 @@ typedef struct dtape_hooks {
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
 	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
+	dtape_hook_current_thread_set_bsd_retval_f current_thread_set_bsd_retval;
 	dtape_hook_task_read_memory_f task_read_memory;
 	dtape_hook_task_write_memory_f task_write_memory;
 } dtape_hooks_t;

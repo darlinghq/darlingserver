@@ -82,6 +82,7 @@ namespace DarlingServer {
 		std::optional<Message> _s2cReply = std::nullopt;
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
+		uint32_t _bsdReturnValue = 0;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
@@ -90,7 +91,6 @@ namespace DarlingServer {
 
 		static void interruptDisable();
 		static void interruptEnable();
-		static void syscallReturn(int resultCode);
 
 		Message _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
 
@@ -192,6 +192,17 @@ namespace DarlingServer {
 		void undefer();
 		void waitUntilNotRunning();
 		void waitUntilRunning();
+
+		/**
+		 * @note Only to be used for BSD syscalls and only for the current thread!
+		 */
+		uint32_t* bsdReturnValuePointer();
+
+		/**
+		 * @note Only to be used by direct XNU traps! (e.g. Mach IPC, psynch, etc.)
+		 */
+		[[noreturn]]
+		static void syscallReturn(int resultCode);
 
 		static std::shared_ptr<Thread> currentThread();
 

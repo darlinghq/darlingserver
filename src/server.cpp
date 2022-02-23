@@ -185,6 +185,10 @@ struct DTapeHooks {
 		DarlingServer::Thread::syscallReturn(result_code);
 	};
 
+	static void dtape_hook_current_thread_set_bsd_retval(uint32_t retval) {
+		DarlingServer::Thread::currentThread()->_bsdReturnValue = retval;
+	};
+
 	static bool dtape_hook_task_read_memory(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length) {
 		return static_cast<DarlingServer::Process*>(task_context)->readMemory(remote_address, local_buffer, length);
 	};
@@ -210,6 +214,7 @@ struct DTapeHooks {
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
 		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,
+		.current_thread_set_bsd_retval = dtape_hook_current_thread_set_bsd_retval,
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
 	};

@@ -4,6 +4,7 @@
 #include <darlingserver/duct-tape/processor.h>
 #include <darlingserver/duct-tape/memory.h>
 #include <darlingserver/duct-tape/task.h>
+#include <darlingserver/duct-tape/psynch.h>
 
 #include <kern/waitq.h>
 #include <kern/clock.h>
@@ -155,6 +156,8 @@ void dtape_init_in_thread(void) {
 
 	ux_handler_init();
 	ux_handler_setup();
+
+	dtape_psynch_init();
 };
 
 void dtape_deinit(void) {
@@ -183,3 +186,28 @@ int scnprintf(char* buffer, size_t buffer_size, const char* format, ...) {
 		return strnlen(buffer, buffer_size);
 	}
 };
+
+#if __x86_64__
+
+//
+// <copied from="xnu://7195.141.2/osfmk/x86_64/loose_ends.c">
+//
+
+/*
+ * Find last bit set in bit string.
+ */
+int
+fls(unsigned int mask)
+{
+	if (mask == 0) {
+		return 0;
+	}
+
+	return (sizeof(mask) << 3) - __builtin_clz(mask);
+}
+
+//
+// </copied>
+//
+
+#endif

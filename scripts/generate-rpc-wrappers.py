@@ -10,6 +10,9 @@ XNU_TRAP_CALL          = 1 << 0
 XNU_TRAP_NOPREFIX      = 1 << 1
 XNU_TRAP_NOSUFFIX      = 1 << 2
 XNU_TRAP_NOSUFFIX_ARGS = 1 << 3
+XNU_TRAP_BSD           = 1 << 4
+XNU_TRAP_NO_DTAPE_DEF  = 1 << 5
+XNU_BSD_TRAP_CALL      = XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX | XNU_TRAP_NOSUFFIX_ARGS | XNU_TRAP_BSD
 
 # NOTE: in Python 3.7+, we can rely on dictionaries having their items in insertion order.
 #       unfortunately, we can't expect everyone building Darling to have Python 3.7+ installed.
@@ -388,6 +391,110 @@ calls = [
 		('name', 'uint32_t'),
 		('result_time', 'uint64_t*', 'uint64_t'),
 	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX),
+
+	#
+	# psynch calls
+	#
+
+	('psynch_cvbroad', [
+		('cv', 'uint64_t'),
+		('cvlsgen', 'uint64_t'),
+		('cvudgen', 'uint64_t'),
+		('flags', 'uint32_t'),
+		('mutex', 'uint64_t'),
+		('mugen', 'uint64_t'),
+		('tid', 'uint64_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_cvclrprepost', [
+		('cv', 'uint64_t'),
+		('cvgen', 'uint32_t'),
+		('cvugen', 'uint32_t'),
+		('cvsgen', 'uint32_t'),
+		('prepocnt', 'uint32_t'),
+		('preposeq', 'uint32_t'),
+		('flags', 'uint32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_cvsignal', [
+		('cv', 'uint64_t'),
+		('cvlsgen', 'uint64_t'),
+		('cvugen', 'uint32_t'),
+		('threadport', 'int32_t'),
+		('mutex', 'uint64_t'),
+		('mugen', 'uint64_t'),
+		('tid', 'uint64_t'),
+		('flags', 'uint32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_cvwait', [
+		('cv', 'uint64_t'),
+		('cvlsgen', 'uint64_t'),
+		('cvugen', 'uint32_t'),
+		('mutex', 'uint64_t'),
+		('mugen', 'uint64_t'),
+		('flags', 'uint32_t'),
+		('sec', 'int64_t'),
+		('nsec', 'uint32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_mutexdrop', [
+		('mutex', 'uint64_t'),
+		('mgen', 'uint32_t'),
+		('ugen', 'uint32_t'),
+		('tid', 'uint64_t'),
+		('flags', 'uint32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_mutexwait', [
+		('mutex', 'uint64_t'),
+		('mgen', 'uint32_t'),
+		('ugen', 'uint32_t'),
+		('tid', 'uint64_t'),
+		('flags', 'uint32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_rw_rdlock', [
+		('rwlock', 'uint64_t'),
+		('lgenval', 'uint32_t'),
+		('ugenval', 'uint32_t'),
+		('rw_wc', 'uint32_t'),
+		('flags', 'int32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_rw_unlock', [
+		('rwlock', 'uint64_t'),
+		('lgenval', 'uint32_t'),
+		('ugenval', 'uint32_t'),
+		('rw_wc', 'uint32_t'),
+		('flags', 'int32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('psynch_rw_wrlock', [
+		('rwlock', 'uint64_t'),
+		('lgenval', 'uint32_t'),
+		('ugenval', 'uint32_t'),
+		('rw_wc', 'uint32_t'),
+		('flags', 'int32_t'),
+	], [
+		('retval', 'uint32_t'),
+	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
 ]
 
 def parse_type(param_tuple, is_public):
@@ -610,6 +717,7 @@ for call in calls:
 	call_name = call[0]
 	call_parameters = call[1]
 	reply_parameters = call[2]
+	flags = call[3] if len(call) >= 4 else 0
 	camel_name = to_camel_case(call_name)
 	fd_count_in_reply = 0
 
@@ -654,10 +762,10 @@ for call in calls:
 
 	internal_header.write(textwrap.indent(textwrap.dedent("""\
 			}}; \\
-			virtual Call::Number number() const {{ \\
+			virtual Call::Number number() const override {{ \\
 				return Call::Number::{0}; \\
 			}}; \\
-			virtual void processCall(); \\
+			virtual void processCall() override; \\
 		private: \\
 		"""), '\t').format(camel_name))
 
@@ -709,8 +817,21 @@ for call in calls:
 
 	if len(reply_parameters) == 0:
 		internal_header.write("\tpublic: \\\n")
-		internal_header.write("\t\tvoid sendBasicReply(int resultCode) { \\\n")
+		internal_header.write("\t\tvoid sendBasicReply(int resultCode) override { \\\n")
 		internal_header.write("\t\t\t_sendReply(resultCode); \\\n")
+		internal_header.write("\t\t}; \\\n")
+
+	if (flags & XNU_TRAP_CALL) != 0:
+		internal_header.write("\t\tbool isXNUTrap() const override { \\\n")
+		internal_header.write("\t\t\treturn true; \\\n")
+		internal_header.write("\t\t}; \\\n")
+
+	if (flags & XNU_TRAP_BSD) != 0:
+		internal_header.write("\t\tbool isBSDTrap() const override { \\\n")
+		internal_header.write("\t\t\treturn true; \\\n")
+		internal_header.write("\t\t}; \\\n")
+		internal_header.write("\t\tvoid sendBSDReply(int resultCode, uint32_t returnValue) override { \\\n")
+		internal_header.write("\t\t\t_sendReply(resultCode, returnValue); \\\n")
 		internal_header.write("\t\t}; \\\n")
 
 	internal_header.write("\t}; \\\n")
@@ -728,17 +849,29 @@ for call in calls:
 		continue
 
 	# XNU traps return values by writing directly to the calling process's memory at the addresses given as regular call parameters
-	if len(reply_parameters) > 0:
+	if (flags & XNU_TRAP_BSD) != 0:
+		if len(reply_parameters) != 1:
+			raise RuntimeError("Call marked as a BSD trap does not have exactly 1 reply parameter")
+	elif len(reply_parameters) > 0:
 		raise RuntimeError("Call marked as an XNU trap has reply parameters")
 
 	internal_header.write("\tvoid DarlingServer::Call::{0}::processCall() {{ \\\n".format(camel_name))
+
+	if (flags & XNU_TRAP_BSD) != 0:
+		internal_header.write("\t\tuint32_t* retvalPointer = nullptr; \\\n")
+
 	internal_header.write("\t\t{ \\\n")
 	internal_header.write("\t\t\tauto thread = _thread.lock(); \\\n")
 	internal_header.write("\t\t\tif (thread) { \\\n")
 	internal_header.write("\t\t\t\tthread->setActiveSyscall(shared_from_this()); \\\n")
 	internal_header.write("\t\t\t} \\\n")
+
+	if (flags & XNU_TRAP_BSD) != 0:
+		internal_header.write("\t\t\tretvalPointer = thread->bsdReturnValuePointer(); \\\n")
+
 	internal_header.write("\t\t}; \\\n")
-	internal_header.write("\t\t_sendReply(dtape_{0}(".format(call_name))
+
+	internal_header.write("\t\tThread::syscallReturn(dtape_{0}(".format(call_name))
 
 	is_first = True
 	for param in call_parameters:
@@ -751,13 +884,12 @@ for call in calls:
 
 		internal_header.write("_body.{0}".format(param_name))
 
+	if (flags & XNU_TRAP_BSD) != 0:
+		if not is_first:
+			internal_header.write(", ")
+		internal_header.write("retvalPointer")
+
 	internal_header.write(")); \\\n")
-	internal_header.write("\t\t{ \\\n")
-	internal_header.write("\t\t\tauto thread = _thread.lock(); \\\n")
-	internal_header.write("\t\t\tif (thread) { \\\n")
-	internal_header.write("\t\t\t\tthread->setActiveSyscall(nullptr); \\\n")
-	internal_header.write("\t\t\t} \\\n")
-	internal_header.write("\t\t}; \\\n")
 	internal_header.write("\t}; \\\n")
 internal_header.write("\n")
 
@@ -784,6 +916,11 @@ for call in calls:
 
 		internal_header.write("{0} {1}".format(parse_type(param, False), param_name))
 
+	if (flags & XNU_TRAP_BSD) != 0:
+		if not is_first:
+			internal_header.write(", ")
+		internal_header.write("uint32_t* retval")
+
 	internal_header.write("); \\\n")
 internal_header.write("\n")
 
@@ -794,7 +931,7 @@ for call in calls:
 	flags = call[3] if len(call) >= 4 else 0
 	camel_name = to_camel_case(call_name)
 
-	if (flags & XNU_TRAP_CALL) == 0:
+	if (flags & XNU_TRAP_CALL) == 0 or (flags & XNU_TRAP_NO_DTAPE_DEF) != 0:
 		continue
 
 	trap_name = call_name

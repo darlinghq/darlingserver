@@ -12,6 +12,7 @@ struct dtape_task {
 	uint32_t saved_pid;
 	dserver_rpc_architecture_t architecture;
 	bool has_sigexc;
+	void* p_pthhash;
 	struct task xnu_task;
 };
 

@@ -9,6 +9,11 @@
 
 typedef struct dtape_thread dtape_thread_t;
 
+struct dtape_opaque_ksyn_waitq_element {
+	// more than enough for the actual structure (should be a max of 56 bytes)
+	char opaque[64];
+};
+
 struct dtape_thread {
 	void* context;
 	dtape_mutex_link_t mutex_link;
@@ -21,6 +26,17 @@ struct dtape_thread {
 	x86_float_state_t float_state;
 #endif
 	bool processing_signal;
+
+	//
+	// uthread stuff for psynch
+	//
+	struct dtape_opaque_ksyn_waitq_element kwe;
+	lck_mtx_t  *uu_mtx;
+	uint16_t uu_pri;
+	caddr_t uu_wchan;
+	int (*uu_continuation)(int);
+	const char* uu_wmesg;
+
 	struct thread xnu_thread;
 };
 

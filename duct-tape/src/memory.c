@@ -124,8 +124,16 @@ void zone_require(zone_t zone, void* addr) {
 	dtape_stub_safe();
 };
 
+zone_t zinit(vm_size_t size, vm_size_t max, vm_size_t alloc, const char* name) {
+	return zone_create(name, size, 0);
+};
+
 void (kheap_free)(kalloc_heap_t kheap, void* addr, vm_size_t size) {
 	free(addr);
+};
+
+void (kheap_free_addr)(kalloc_heap_t kheap, void* addr) {
+	kheap_free(kheap, addr, 0);
 };
 
 void (kfree)(void* addr, vm_size_t size) {

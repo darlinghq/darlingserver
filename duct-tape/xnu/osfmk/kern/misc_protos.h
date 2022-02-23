@@ -55,6 +55,7 @@
 #define MAX(a, b) (((a)>(b))?(a):(b))
 #endif  /* MAX */
 
+#ifndef __DARLING__
 /* Set a bit in a bit array */
 extern void setbit(
 	int             which,
@@ -64,6 +65,7 @@ extern void setbit(
 extern void clrbit(
 	int             which,
 	int             *bitmap);
+#endif
 
 /* Find the first set bit in a bit array */
 extern int ffsbit(
@@ -175,7 +177,11 @@ extern int kdb_printf_unbuffered(const char *format, ...) __printflike(1, 2);
 extern int snprintf(char *, size_t, const char *, ...) __printflike(3, 4);
 extern int scnprintf(char *, size_t, const char *, ...) __printflike(3, 4);
 
+#ifdef __DARLING__
+extern void log(int level, const char *fmt, ...) __printflike(2, 3);
+#else
 extern void log(int level, char *fmt, ...) __printflike(2, 3);
+#endif
 
 void
 _doprnt(

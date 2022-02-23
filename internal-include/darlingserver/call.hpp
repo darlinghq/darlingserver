@@ -61,6 +61,11 @@ namespace DarlingServer {
 		virtual void processCall() = 0;
 
 		virtual void sendBasicReply(int resultCode);
+		// FIXME: this should actually be in a "BSD" subclass with BSD traps inheriting from it
+		virtual void sendBSDReply(int resultCode, uint32_t returnValue);
+
+		virtual bool isXNUTrap() const;
+		virtual bool isBSDTrap() const;
 
 		DSERVER_CLASS_DECLS;
 	};

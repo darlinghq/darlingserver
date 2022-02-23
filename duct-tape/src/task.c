@@ -2,6 +2,7 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/memory.h>
+#include <darlingserver/duct-tape/psynch.h>
 
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
@@ -106,6 +107,8 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 
 	ipc_task_enable(&task->xnu_task);
 
+	dtape_psynch_task_init(task);
+
 	if (parent_task == NULL && nsid == 0) {
 		if (kernel_task) {
 			panic("Another kernel task has been created");
@@ -125,6 +128,8 @@ void dtape_task_destroy(dtape_task_t* task) {
 	if (os_ref_release(&task->xnu_task.ref_count) != 0) {
 		panic("Duct-taped task over-retained or still in-use at destruction");
 	}
+
+	dtape_psynch_task_destroy(task);
 
 	// this next section uses code adapted from XNU's task_deallocate() in osfmk/kern/task.c
 
@@ -711,6 +716,46 @@ task_set_ras_pc(
 	__unused vm_offset_t    endpc)
 {
 	return KERN_FAILURE;
+}
+
+/*
+ * This routine finds a thread in a task by its unique id
+ * Returns a referenced thread or THREAD_NULL if the thread was not found
+ *
+ * TODO: This is super inefficient - it's an O(threads in task) list walk!
+ *       We should make a tid hash, or transition all tid clients to thread ports
+ *
+ * Precondition: No locks held (will take task lock)
+ */
+thread_t
+task_findtid(task_t task, uint64_t tid)
+{
+	thread_t self           = current_thread();
+	thread_t found_thread   = THREAD_NULL;
+	thread_t iter_thread    = THREAD_NULL;
+
+	/* Short-circuit the lookup if we're looking up ourselves */
+	if (tid == self->thread_id || tid == TID_NULL) {
+		assert(self->task == task);
+
+		thread_reference(self);
+
+		return self;
+	}
+
+	task_lock(task);
+
+	queue_iterate(&task->threads, iter_thread, thread_t, task_threads) {
+		if (iter_thread->thread_id == tid) {
+			found_thread = iter_thread;
+			thread_reference(found_thread);
+			break;
+		}
+	}
+
+	task_unlock(task);
+
+	return found_thread;
 }
 
 // </copied>
