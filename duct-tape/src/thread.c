@@ -102,6 +102,7 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 
 	// this next section uses code adapted from XNU's thread_deallocate_complete() in osfmk/kern/thread.c
 
+	ipc_thread_disable(&thread->xnu_thread);
 	ipc_thread_terminate(&thread->xnu_thread);
 
 	if (thread->xnu_thread.turnstile) {
@@ -153,8 +154,10 @@ void dtape_thread_exiting(dtape_thread_t* thread) {
 };
 
 void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, uintptr_t dispatch_qaddr) {
+	thread_lock(&thread->xnu_thread);
 	thread->pthread_handle = pthread_handle;
 	thread->dispatch_qaddr = dispatch_qaddr;
+	thread_unlock(&thread->xnu_thread);
 };
 
 dtape_thread_t* dtape_thread_for_port(uint32_t thread_port) {
@@ -289,7 +292,7 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 #if 0
 				codes[1] = thread->triggered_watchpoint_address;
 #else
-				printf("TODO: handle LINUX_TRAP_HWBKPT\n");
+				dtape_stub("LINUX_TRAP_HWBKPT");
 				codes[1] = 0;
 #endif
 			}
@@ -399,15 +402,23 @@ void thread_deallocate_safe(thread_t thread) {
 
 static void thread_continuation_callback(void* context) {
 	dtape_thread_t* thread = context;
-	thread_continue_t continuation = thread->xnu_thread.continuation;
-	void* parameter = thread->xnu_thread.parameter;
+	thread_continue_t continuation;
+	void* parameter;
+	wait_result_t wait_result;
 
+	thread_lock(&thread->xnu_thread);
+	continuation = thread->xnu_thread.continuation;
 	thread->xnu_thread.continuation = NULL;
+
+	parameter = thread->xnu_thread.parameter;
 	thread->xnu_thread.parameter = NULL;
 
-	continuation(parameter, thread->xnu_thread.wait_result);
+	wait_result = thread->xnu_thread.wait_result;
+	thread_unlock(&thread->xnu_thread);
 
-	thread_terminate(&thread->xnu_thread);
+	continuation(parameter, wait_result);
+
+	thread_terminate_self();
 };
 
 wait_result_t thread_block_parameter(thread_continue_t continuation, void* parameter) {
@@ -440,25 +451,23 @@ wait_result_t thread_block(thread_continue_t continuation) {
 	return thread_block_parameter(continuation, NULL);
 };
 
+// thread locked
 boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
-	thread_lock(&thread->xnu_thread);
 	thread->xnu_thread.wait_result = wresult;
-	thread_unlock(&thread->xnu_thread);
 	dtape_hooks->thread_resume(thread->context);
 	return TRUE;
 };
 
+// thread locked
 kern_return_t thread_go(thread_t thread, wait_result_t wresult, waitq_options_t option) {
 	return thread_unblock(thread, wresult) ? KERN_SUCCESS : KERN_FAILURE;
 };
 
 wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interruptible_orig) {
 	dtape_stub_safe();
-	thread_lock(thread);
 	thread->state = TH_WAIT;
 	thread->wait_result = THREAD_WAITING;
-	thread_unlock(thread);
 	return THREAD_WAITING;
 };
 

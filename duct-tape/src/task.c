@@ -135,6 +135,7 @@ void dtape_task_destroy(dtape_task_t* task) {
 
 	semaphore_destroy_all(&task->xnu_task);
 
+	ipc_task_disable(&task->xnu_task);
 	ipc_task_terminate(&task->xnu_task);
 
 	dtape_vm_map_destroy(task->xnu_task.map);
