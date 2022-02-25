@@ -48,7 +48,11 @@
 /* default VA space for link tables (zone allocated) */
 #define DEFAULT_MAX_TABLE_SIZE  P2ROUNDUP(8 * 1024 * 1024, PAGE_SIZE)
 
+#ifdef __DARLING__
+TUNABLE(vm_size_t, g_lt_max_tbl_size, "lt_tbl_size", DEFAULT_MAX_TABLE_SIZE);
+#else
 TUNABLE(vm_size_t, g_lt_max_tbl_size, "lt_tbl_size", 0);
+#endif
 LCK_GRP_DECLARE(g_lt_lck_grp, "link_table_locks");
 
 #if DEVELOPMENT || DEBUG

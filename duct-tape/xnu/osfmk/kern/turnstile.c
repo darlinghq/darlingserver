@@ -957,7 +957,9 @@ turnstile_destroy(struct turnstile *turnstile)
 
 	assert(turnstile->ts_inheritor == TURNSTILE_INHERITOR_NULL);
 	assert(SLIST_EMPTY(&turnstile->ts_free_turnstiles));
+#ifndef __DARLING__
 	assert(turnstile->ts_state & TURNSTILE_STATE_THREAD);
+#endif // __DARLING__
 #if DEVELOPMENT || DEBUG
 	/* Remove turnstile from global list */
 	global_turnstiles_lock();

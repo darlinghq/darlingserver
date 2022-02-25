@@ -88,7 +88,7 @@ __END_DECLS
 #define APPLE_KEXT_ASSERTIONS   0
 #endif
 
-#if     MACH_ASSERT
+#if     MACH_ASSERT || defined(__DARLING__)
 
 #define assert(ex)  \
 	(__builtin_expect(!!((ex)), 1L) ? (void)0 : Assert(__FILE__, __LINE__, # ex))

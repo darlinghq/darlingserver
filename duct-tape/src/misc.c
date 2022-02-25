@@ -187,6 +187,30 @@ int scnprintf(char* buffer, size_t buffer_size, const char* format, ...) {
 	}
 };
 
+void (ipc_kmsg_trace_send)(ipc_kmsg_t kmsg, mach_msg_option_t option) {
+	pid_t dest_pid = -1;
+	ipc_port_t dest = kmsg->ikm_header->msgh_remote_port;
+
+	ip_lock(dest);
+	if (dest && ip_active(dest)) {
+		ipc_space_t space = dest->ip_receiver;
+		if (space && is_active(space)) {
+			dest_pid = task_pid(space->is_task);
+		}
+	}
+	ip_unlock(dest);
+
+	dtape_log_debug("sending kmsg %p to pid %d", kmsg, dest_pid);
+};
+
+void Assert(const char* file, int line, const char* expression) {
+	panic("%s:%d Assertion failed: %s", file, line, expression);
+};
+
+unsigned int waitq_held(struct waitq* wq) {
+	return wq->dtape_waitq_interlock.dtape_interlock.dtape_interlock.dtape_mutex->dtape_owner == (uintptr_t)current_thread();
+};
+
 #if __x86_64__
 
 //
