@@ -8,6 +8,7 @@
 #include <darlingserver/monitor.hpp>
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
+#include <darlingserver/logging.hpp>
 
 #define NOTE_EXIT        0x80000000U
 #define NOTE_FORK        0x40000000U
@@ -26,7 +27,7 @@ namespace DarlingServer {
 	class Process;
 	class Thread;
 
-	class Kqchan {
+	class Kqchan: public Loggable {
 		friend class DarlingServer::Process;
 
 	protected:
@@ -40,6 +41,7 @@ namespace DarlingServer {
 		std::mutex _notificationMutex;
 		bool _canSendNotification = true;
 		std::mutex _sendingMutex;
+		uint64_t _notificationCount = 0;
 
 		Kqchan(std::shared_ptr<DarlingServer::Process> process);
 
@@ -55,6 +57,8 @@ namespace DarlingServer {
 		virtual ~Kqchan();
 
 		virtual int setup();
+
+		void logToStream(Log::Stream& stream) const;
 
 		class MachPort;
 		class Process;

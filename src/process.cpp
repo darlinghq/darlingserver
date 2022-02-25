@@ -417,3 +417,7 @@ bool DarlingServer::Process::is64Bit() const {
 DarlingServer::Process::Architecture DarlingServer::Process::architecture() const {
 	return _architecture;
 };
+
+void DarlingServer::Process::logToStream(Log::Stream& stream) const {
+	stream << "[P:" << _pid << "(" << _nspid << ")]";
+};

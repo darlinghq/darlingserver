@@ -23,8 +23,12 @@
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <memory>
 
 namespace DarlingServer {
+	class Thread;
+	class Process;
+
 	class Log {
 	private:
 		std::string _category;
@@ -58,6 +62,11 @@ namespace DarlingServer {
 		Stream error() const;
 	};
 
+	class Loggable {
+	public:
+		virtual void logToStream(Log::Stream& stream) const = 0;
+	};
+
 	class Log::Stream {
 		friend class Log;
 
@@ -76,14 +85,14 @@ namespace DarlingServer {
 		Stream(Stream&&) = delete;
 		Stream& operator=(Stream&&) = delete;
 
+		Stream& operator<<(EndLog value);
+		Stream& operator<<(const Loggable& loggable);
+
 		template<class T>
-		Stream& operator<<(T value) {
+		std::enable_if_t<!std::is_base_of_v<Loggable, T>, Stream&> operator<<(const T& value) {
 			_buffer << value;
 			return *this;
 		};
-
-		template<>
-		Stream& operator<<<EndLog>(EndLog value);
 	};
 };
 

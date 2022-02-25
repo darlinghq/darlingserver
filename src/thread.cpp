@@ -940,3 +940,7 @@ void DarlingServer::Thread::undefer() {
 uint32_t* DarlingServer::Thread::bsdReturnValuePointer() {
 	return &_bsdReturnValue;
 };
+
+void DarlingServer::Thread::logToStream(Log::Stream& stream) const {
+	stream << "[T:" << _tid << "(" << _nstid << ")]";
+};

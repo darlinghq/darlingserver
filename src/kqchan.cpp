@@ -21,11 +21,11 @@ DarlingServer::Kqchan::Kqchan(std::shared_ptr<DarlingServer::Process> process):
 	_debugID(kqchanDebugIDCounter++),
 	_process(process)
 {
-	kqchanLog.debug() << "Constructing kqchan with ID " << _debugID << kqchanLog.endLog;
+	kqchanLog.debug() << *this << ": Constructing kqchan" << kqchanLog.endLog;
 };
 
 DarlingServer::Kqchan::~Kqchan() {
-	kqchanLog.debug() << "Destroying kqchan with ID " << _debugID << kqchanLog.endLog;
+	kqchanLog.debug() << *this << ": Destroying kqchan" << kqchanLog.endLog;
 };
 
 uintptr_t DarlingServer::Kqchan::_idForProcess() const {
@@ -43,7 +43,7 @@ std::shared_ptr<DarlingServer::Kqchan> DarlingServer::Kqchan::sharedFromRoot() {
 int DarlingServer::Kqchan::setup() {
 	int fds[2];
 
-	kqchanLog.debug() << "Setting up kqchan with ID " << _debugID << kqchanLog.endLog;
+	kqchanLog.debug() << *this << ": Setting up kqchan" << kqchanLog.endLog;
 
 	if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds) < 0) {
 		int ret = errno;
@@ -54,7 +54,7 @@ int DarlingServer::Kqchan::setup() {
 	// we'll keep fds[0] and give fds[1] away
 	_socket = std::make_shared<FD>(fds[0]);
 
-	kqchanLog.debug() << _debugID << ": Keeping socket " << fds[0] << " and giving away " << fds[1] << kqchanLog.endLog;
+	kqchanLog.debug() << *this << ": Keeping socket " << fds[0] << " and giving away " << fds[1] << kqchanLog.endLog;
 
 	// set O_NONBLOCK on our socket
 	int flags = fcntl(_socket->fd(), F_GETFL);
@@ -78,7 +78,7 @@ int DarlingServer::Kqchan::setup() {
 
 		std::unique_lock lock(self->_sendingMutex);
 
-		kqchanLog.debug() << self->_debugID << ": Got messages to send, attempting to send them" << kqchanLog.endLog;
+		kqchanLog.debug() << *self << ": Got messages to send, attempting to send them" << kqchanLog.endLog;
 
 		// we probably won't be sending very many messages at once;
 		// we can send all the messages in the same context that they were pushed
@@ -94,12 +94,12 @@ int DarlingServer::Kqchan::setup() {
 			return;
 		}
 
-		kqchanLog.debug() << self->_debugID << ": Got event(s) on socket: " << static_cast<uint64_t>(event) << kqchanLog.endLog;
+		kqchanLog.debug() << *self << ": Got event(s) on socket: " << static_cast<uint64_t>(event) << kqchanLog.endLog;
 
 		if (static_cast<uint64_t>(event & Monitor::Event::HangUp) != 0) {
 			// socket hangup (peer closed their socket)
 
-			kqchanLog.debug() << self->_debugID << ": Peer hung up their socket; cleaning up monitor and kqchan" << kqchanLog.endLog;
+			kqchanLog.debug() << *self << ": Peer hung up their socket; cleaning up monitor and kqchan" << kqchanLog.endLog;
 
 			// stop monitoring the socket (we're not gonna get any more events out of it)
 			Server::sharedInstance().removeMonitor(monitor);
@@ -117,7 +117,7 @@ int DarlingServer::Kqchan::setup() {
 		if (static_cast<uint64_t>(event & Monitor::Event::Readable) != 0) {
 			// incoming messages
 
-			kqchanLog.debug() << self->_debugID << ": socket has pending incoming messages" << kqchanLog.endLog;
+			kqchanLog.debug() << *self << ": socket has pending incoming messages" << kqchanLog.endLog;
 
 			// receive them all
 			while (self->_inbox.receiveMany(self->_socket->fd()));
@@ -132,7 +132,7 @@ int DarlingServer::Kqchan::setup() {
 
 			std::unique_lock lock(self->_sendingMutex);
 
-			kqchanLog.debug() << self->_debugID << ": socket is now writable; sending all pending outgoing messages" << kqchanLog.endLog;
+			kqchanLog.debug() << *self << ": socket is now writable; sending all pending outgoing messages" << kqchanLog.endLog;
 			do {
 				self->_canSend = self->_outbox.sendMany(self->_socket->fd());
 			} while (self->_canSend  && !self->_outbox.empty());
@@ -147,16 +147,16 @@ int DarlingServer::Kqchan::setup() {
 void DarlingServer::Kqchan::_sendNotification() {
 	std::unique_lock lock(_notificationMutex);
 
-	kqchanLog.debug() << _debugID << ": received request to send notification" << kqchanLog.endLog;
+	kqchanLog.debug() << *this << ": received request to send notification" << kqchanLog.endLog;
 
 	if (!_canSendNotification) {
 		// we've already sent our peer a notification that they haven't acknowledged yet;
 		// let's not send another and needlessly clog up the socket
-		kqchanLog.debug() << _debugID << ": earlier notification has not yet been acknowledged; not sending another notification" << kqchanLog.endLog;
+		kqchanLog.debug() << *this << ": earlier notification has not yet been acknowledged; not sending another notification" << kqchanLog.endLog;
 		return;
 	}
 
-	kqchanLog.debug() << _debugID << ": sending notification" << kqchanLog.endLog;
+	kqchanLog.debug() << *this << ": sending notification " << _notificationCount << kqchanLog.endLog;
 
 	// now that we're sending the notification, we shouldn't send another one until our peer acknowledges this one
 	_canSendNotification = false;
@@ -171,6 +171,17 @@ void DarlingServer::Kqchan::_sendNotification() {
 	_outbox.push(std::move(msg));
 };
 
+void DarlingServer::Kqchan::logToStream(Log::Stream& stream) const {
+	auto proc = _process.lock();
+	stream << "[KQ:" << _debugID << ":";
+	if (proc) {
+		stream << *proc;
+	} else {
+		stream << "<null>";
+	}
+	stream << "]";
+};
+
 //
 // mach port
 //
@@ -182,11 +193,11 @@ DarlingServer::Kqchan::MachPort::MachPort(std::shared_ptr<DarlingServer::Process
 	_receiveBufferSize(receiveBufferSize),
 	_savedFilterFlags(savedFilterFlags)
 {
-	kqchanMachPortLog.debug() << "Constructing Mach port kqchan with ID " << _debugID << kqchanMachPortLog.endLog;
+	kqchanMachPortLog.debug() << *this << ": Constructing Mach port kqchan" << kqchanMachPortLog.endLog;
 };
 
 DarlingServer::Kqchan::MachPort::~MachPort() {
-	kqchanMachPortLog.debug() << "Destroying Mach port kqchan with ID " << _debugID << kqchanMachPortLog.endLog;
+	kqchanMachPortLog.debug() << *this << ": Destroying Mach port kqchan" << kqchanMachPortLog.endLog;
 
 	if (_dtapeKqchan) {
 		auto kqchan = _dtapeKqchan;
@@ -212,7 +223,7 @@ std::shared_ptr<DarlingServer::Kqchan> DarlingServer::Kqchan::MachPort::sharedFr
 };
 
 int DarlingServer::Kqchan::MachPort::setup() {
-	kqchanMachPortLog.debug() << "Setting up Mach port kqchan with ID " << _debugID << kqchanMachPortLog.endLog;
+	kqchanMachPortLog.debug() << *this << ": Setting up Mach port kqchan" << kqchanMachPortLog.endLog;
 
 	// NOTE: the duct-taped kqchan will never notify us after we die
 	//       since we disable notifications upon destruction,
@@ -222,7 +233,7 @@ int DarlingServer::Kqchan::MachPort::setup() {
 		self->_notify();
 	}, this);
 	if (!_dtapeKqchan) {
-		kqchanMachPortLog.debug() << "Failed to create duct-taped Mach port kqchan with ID " << _debugID << " for port " << _port << kqchanMachPortLog.endLog;
+		kqchanMachPortLog.debug() << *this << ": Failed to create duct-taped Mach port kqchan for port " << _port << kqchanMachPortLog.endLog;
 		throw std::system_error(ESRCH, std::generic_category());
 	}
 
@@ -275,7 +286,7 @@ void DarlingServer::Kqchan::MachPort::_processMessages() {
 };
 
 void DarlingServer::Kqchan::MachPort::_modify(uint64_t receiveBuffer, uint64_t receiveBufferSize, uint64_t savedFilterFlags, pid_t nstid) {
-	kqchanMachPortLog.debug() << _debugID << ": Received modification request with {receiveBuffer=" << receiveBuffer << ",receiveBufferSize=" << receiveBufferSize << ",savedFilterFlags=" << savedFilterFlags << "}" << kqchanMachPortLog.endLog;
+	kqchanMachPortLog.debug() << *this << ": Received modification request with {receiveBuffer=" << receiveBuffer << ",receiveBufferSize=" << receiveBufferSize << ",savedFilterFlags=" << savedFilterFlags << "}" << kqchanMachPortLog.endLog;
 
 	auto maybeThread = threadRegistry().lookupEntryByNSID(nstid);
 
@@ -286,8 +297,8 @@ void DarlingServer::Kqchan::MachPort::_modify(uint64_t receiveBuffer, uint64_t r
 	auto thread = *maybeThread;
 
 	auto self = shared_from_this();
-	Thread::kernelAsync([=]() {
-		kqchanMachPortLog.debug() << self->_debugID << ": Handling modification request in microthread" << kqchanMachPortLog.endLog;
+	Thread::kernelAsync([self, thread, receiveBuffer, receiveBufferSize, savedFilterFlags]() {
+		kqchanMachPortLog.debug() << *self << ": Handling modification request in microthread" << kqchanMachPortLog.endLog;
 
 		Thread::currentThread()->impersonate(thread);
 		dtape_kqchan_mach_port_modify(self->_dtapeKqchan, receiveBuffer, receiveBufferSize, savedFilterFlags);
@@ -300,20 +311,20 @@ void DarlingServer::Kqchan::MachPort::_modify(uint64_t receiveBuffer, uint64_t r
 		reply->header.number = dserver_kqchan_msgnum_mach_port_modify;
 		reply->header.code = 0;
 
-		kqchanMachPortLog.debug() << _debugID << ": Sending modification reply/acknowledgement" << kqchanMachPortLog.endLog;
+		kqchanMachPortLog.debug() << *self << ": Sending modification reply/acknowledgement" << kqchanMachPortLog.endLog;
 
 		self->_outbox.push(std::move(msg));
 	});
 };
 
 void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid) {
-	kqchanMachPortLog.debug() << _debugID << ": received read request with {defaultBuffer=" << defaultBuffer << ",defaultBufferSize=" << defaultBufferSize << "}" << kqchanMachPortLog.endLog;
+	kqchanMachPortLog.debug() << *this << ": received read request with {defaultBuffer=" << defaultBuffer << ",defaultBufferSize=" << defaultBufferSize << "}" << kqchanMachPortLog.endLog;
 
 	{
 		// our peer has acknowledged our notification by asking for the pending messages;
 		// we can now send a notification again if we receive more data
 		std::unique_lock lock(_notificationMutex);
-		kqchanMachPortLog.debug() << _debugID << ": received acknowledgement (implicitly via read); notifications may now be sent" << kqchanMachPortLog.endLog;
+		kqchanMachPortLog.debug() << *this << ": received acknowledgement (implicitly via read) for notification " << _notificationCount++ << "; notifications may now be sent" << kqchanMachPortLog.endLog;
 		_canSendNotification = true;
 	}
 
@@ -326,10 +337,10 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 	auto thread = *maybeThread;
 
 	auto self = shared_from_this();
-	Thread::kernelAsync([=]() {
+	Thread::kernelAsync([self, thread, defaultBuffer, defaultBufferSize]() {
 		Message msg(sizeof(dserver_kqchan_reply_mach_port_read_t), 0);
 
-		kqchanMachPortLog.debug() << self->_debugID << ": handling read request in microthread" << kqchanMachPortLog.endLog;
+		kqchanMachPortLog.debug() << *self << ": handling read request in microthread" << kqchanMachPortLog.endLog;
 
 		auto reply = reinterpret_cast<dserver_kqchan_reply_mach_port_read_t*>(msg.data().data());
 
@@ -338,6 +349,7 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 
 		Thread::currentThread()->impersonate(thread);
 		if (!dtape_kqchan_mach_port_fill(self->_dtapeKqchan, reply, defaultBuffer, defaultBufferSize)) {
+			kqchanMachPortLog.debug() << *self << ": no events to read" << kqchanMachPortLog.endLog;
 			reply->header.code = 0xdead;
 		}
 		Thread::currentThread()->impersonate(nullptr);
@@ -361,11 +373,11 @@ DarlingServer::Kqchan::Process::Process(std::shared_ptr<DarlingServer::Process> 
 	_nspid(nspid),
 	_flags(flags)
 {
-	kqchanProcLog.debug() << "Constructing process kqchan with ID " << _debugID << kqchanProcLog.endLog;
+	kqchanProcLog.debug() << *this << ": Constructing process kqchan" << kqchanProcLog.endLog;
 };
 
 DarlingServer::Kqchan::Process::~Process() {
-	kqchanProcLog.debug() << "Destroying process kqchan with ID " << _debugID << kqchanProcLog.endLog;
+	kqchanProcLog.debug() << *this << ": Destroying process kqchan" << kqchanProcLog.endLog;
 
 	if (auto targetProcess = _targetProcess.lock()) {
 		targetProcess->unregisterListeningKqchan(_idForProcess());
@@ -381,11 +393,11 @@ std::shared_ptr<DarlingServer::Kqchan> DarlingServer::Kqchan::Process::sharedFro
 };
 
 int DarlingServer::Kqchan::Process::setup() {
-	kqchanProcLog.debug() << "Setting up process kqchan with ID " << _debugID << kqchanProcLog.endLog;
+	kqchanProcLog.debug() << *this << ": Setting up process kqchan" << kqchanProcLog.endLog;
 
 	auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_nspid);
 	if (!maybeTargetProcess) {
-		kqchanProcLog.debug() << "Failed to create process kqchan with ID " << _debugID << " for PID " << _nspid << kqchanProcLog.endLog;
+		kqchanProcLog.debug() << *this << ": Failed to create process kqchan for PID " << _nspid << kqchanProcLog.endLog;
 		throw std::system_error(ESRCH, std::generic_category());
 	}
 
@@ -456,7 +468,7 @@ void DarlingServer::Kqchan::Process::_modify(uint32_t flags) {
 	reply->header.number = dserver_kqchan_msgnum_proc_modify;
 	reply->header.code = 0;
 
-	kqchanProcLog.debug() << _debugID << ": Sending modification reply/acknowledgement" << kqchanProcLog.endLog;
+	kqchanProcLog.debug() << *this << ": Sending modification reply/acknowledgement" << kqchanProcLog.endLog;
 
 	_outbox.push(std::move(msg));
 };
@@ -466,17 +478,17 @@ void DarlingServer::Kqchan::Process::_read() {
 
 	if (!listeningProcess) {
 		// if the listening process is dead, log it and ignore the request (no one's listening for the reply anyways)
-		kqchanProcLog.warning() << _debugID << ": received read request after listening process died" << kqchanProcLog.endLog;
+		kqchanProcLog.warning() << *this << ": received read request after listening process died" << kqchanProcLog.endLog;
 		return;
 	}
 
-	kqchanProcLog.debug() << _debugID << ": received read request" << kqchanProcLog.endLog;
+	kqchanProcLog.debug() << *this << ": received read request" << kqchanProcLog.endLog;
 
 	{
 		// our peer has acknowledged our notification by asking for the pending messages;
 		// we can now send a notification again if we receive more data
 		std::unique_lock lock(_notificationMutex);
-		kqchanProcLog.debug() << _debugID << ": received acknowledgement (implicitly via read); notifications may now be sent" << kqchanProcLog.endLog;
+		kqchanProcLog.debug() << *this << ": received acknowledgement (implicitly via read) for notification " << _notificationCount++ << "; notifications may now be sent" << kqchanProcLog.endLog;
 		_canSendNotification = true;
 	}
 
@@ -492,7 +504,7 @@ void DarlingServer::Kqchan::Process::_read() {
 	while (true) {
 		if (_events.empty()) {
 			// if we don't have any events, tell our peer
-			kqchanProcLog.debug() << _debugID << ": no events to read" << kqchanProcLog.endLog;
+			kqchanProcLog.debug() << *this << ": no events to read" << kqchanProcLog.endLog;
 
 			reply->header.code = 0xdead;
 			break;
@@ -505,7 +517,7 @@ void DarlingServer::Kqchan::Process::_read() {
 
 			if (reply->fflags == 0) {
 				// if this event contains no events that the user is interested in, drop it
-				kqchanProcLog.debug() << _debugID << ": event does not contain any events the user is interested in; dropping event" << kqchanProcLog.endLog;
+				kqchanProcLog.debug() << *this << ": event does not contain any events the user is interested in; dropping event" << kqchanProcLog.endLog;
 				continue;
 			}
 
@@ -530,20 +542,20 @@ void DarlingServer::Kqchan::Process::_read() {
 						listeningProcess->registerKqchan(event.newKqchan);
 						msg.pushDescriptor(newKqchanSocket.extract());
 
-						kqchanProcLog.debug() << _debugID << ": new process kqchan (with ID " << event.newKqchan->_debugID << ") setup for child process and being returned" << kqchanProcLog.endLog;
+						kqchanProcLog.debug() << *this << ": new process kqchan setup for child process and being returned" << kqchanProcLog.endLog;
 					} catch (...) {
-						kqchanProcLog.error() << _debugID << ": failed to setup new kqchan for child process" << kqchanProcLog.endLog;
+						kqchanProcLog.error() << *this << ": failed to setup new kqchan for child process" << kqchanProcLog.endLog;
 						reply->fflags |= NOTE_TRACKERR;
 					}
 
 					// reacquire the lock; we need to check `_events` before we exit
 					lock.lock();
 				} else if (event.events & NOTE_FORK) {
-					kqchanProcLog.error() << _debugID << ": read NOTE_FORK event and user has requested NOTE_TRACK, but no new kqchan was associated with event" << kqchanProcLog.endLog;
+					kqchanProcLog.error() << *this << ": read NOTE_FORK event and user has requested NOTE_TRACK, but no new kqchan was associated with event" << kqchanProcLog.endLog;
 					reply->fflags |= NOTE_TRACKERR;
 				}
 			} else if (event.newKqchan) {
-				kqchanProcLog.info() << _debugID << ": event contains new kqchan, but user has not requested NOTE_TRACK; dropping new kqchan" << kqchanProcLog.endLog;
+				kqchanProcLog.info() << *this << ": event contains new kqchan, but user has not requested NOTE_TRACK; dropping new kqchan" << kqchanProcLog.endLog;
 			}
 
 			break;
@@ -561,7 +573,7 @@ void DarlingServer::Kqchan::Process::_read() {
 void DarlingServer::Kqchan::Process::_notify(uint32_t event, int64_t data) {
 	Event newEvent;
 
-	kqchanProcLog.debug() << _debugID << ": notified with {event=" << event << ",data=" << data << "}" << kqchanProcLog.endLog;
+	kqchanProcLog.debug() << *this << ": notified with {event=" << event << ",data=" << data << "}" << kqchanProcLog.endLog;
 
 	newEvent.data = data;
 	newEvent.events = event;
@@ -580,7 +592,7 @@ void DarlingServer::Kqchan::Process::_notify(uint32_t event, int64_t data) {
 		auto maybeChild = processRegistry().lookupEntryByNSID(data & NOTE_PDATAMASK);
 
 		if (!maybeChild) {
-			kqchanProcLog.debug() << _debugID << ": notified with NOTE_FORK (and wanted NOTE_TRACK), but couldn't find child" << kqchanProcLog.endLog;
+			kqchanProcLog.debug() << *this << ": notified with NOTE_FORK (and wanted NOTE_TRACK), but couldn't find child" << kqchanProcLog.endLog;
 		} else {
 			auto child = *maybeChild;
 

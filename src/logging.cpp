@@ -19,6 +19,8 @@
 
 #include <darlingserver/logging.hpp>
 #include <darlingserver/server.hpp>
+#include <darlingserver/thread.hpp>
+#include <darlingserver/process.hpp>
 #include <filesystem>
 #include <fcntl.h>
 #include <unistd.h>
@@ -36,14 +38,18 @@ DarlingServer::Log::Stream::~Stream() {
 	*this << endLog;
 };
 
-template<>
-DarlingServer::Log::Stream& DarlingServer::Log::Stream::operator<<<EndLog>(EndLog value) {
+DarlingServer::Log::Stream& DarlingServer::Log::Stream::operator<<(EndLog value) {
 	auto str = _buffer.str();
 	if (!str.empty()) {
 		_log._log(_type, str);
 		_buffer.str(std::string());
 		_buffer.clear();
 	}
+	return *this;
+};
+
+DarlingServer::Log::Stream& DarlingServer::Log::Stream::operator<<(const Loggable& loggable) {
+	loggable.logToStream(*this);
 	return *this;
 };
 
@@ -95,7 +101,11 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 	struct timespec time;
 	clock_gettime(CLOCK_REALTIME, &time);
 	double secs = (double)time.tv_sec + ((double)time.tv_nsec / 1.0e9);
-	std::string messageToLog = "[" + std::to_string(secs) + "](" + _category + ", " + _typeToString(type) + ") " + message + "\n";
+	auto currentProcess = Process::currentProcess();
+	auto currentThread = Thread::currentThread();
+	std::string pid = currentProcess ? (std::string("[P:") + std::to_string(currentProcess->id()) + "(" + std::to_string(currentProcess->nsid()) + ")]") : "";
+	std::string tid = currentThread ? (std::string("[T:") + std::to_string(currentThread->id()) + "(" + std::to_string(currentThread->nsid()) + ")]") : "";
+	std::string messageToLog = "[" + std::to_string(secs) + "](" + _category + ", " + _typeToString(type) + ")" + pid + tid + " " + message + "\n";
 
 	write(logFile, messageToLog.c_str(), messageToLog.size());
 

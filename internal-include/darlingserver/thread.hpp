@@ -28,6 +28,7 @@
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
+#include <darlingserver/logging.hpp>
 
 #include <ucontext.h>
 
@@ -37,7 +38,7 @@ namespace DarlingServer {
 	class Process;
 	class Call;
 
-	class Thread: public std::enable_shared_from_this<Thread> {
+	class Thread: public std::enable_shared_from_this<Thread>, public Loggable {
 		friend class Process;
 		friend class Call; // HACK, see call.cpp
 
@@ -222,6 +223,8 @@ namespace DarlingServer {
 		 * Runs the given function on a duct-taped kernel microthread and waits for it to return.
 		 */
 		static void kernelSync(std::function<void()> fn);
+
+		void logToStream(Log::Stream& stream) const;
 	};
 };
 

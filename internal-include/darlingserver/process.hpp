@@ -31,6 +31,7 @@
 #include <darlingserver/utility.hpp>
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/rpc.h>
+#include <darlingserver/logging.hpp>
 
 struct DTapeHooks;
 
@@ -39,7 +40,7 @@ namespace DarlingServer {
 	class Server;
 	class Call;
 
-	class Process {
+	class Process: public Loggable {
 		friend class Thread;
 		friend class Server;
 		friend class Call; // HACK; see Call.cpp
@@ -133,6 +134,8 @@ namespace DarlingServer {
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();
+
+		void logToStream(Log::Stream& stream) const;
 	};
 };
 
