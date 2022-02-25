@@ -51,7 +51,9 @@ void DarlingServer::Address::setRawSize(size_t newRawSize) {
 	_size = newRawSize;
 };
 
-DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace) {
+DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std::function<void()> sendNotificationCallback):
+	_sendNotificationCallback(sendNotificationCallback)
+{
 	size_t controlLen = CMSG_SPACE(sizeof(struct ucred)) + (descriptorSpace > 0 ? CMSG_SPACE(sizeof(int) * descriptorSpace) : 0);
 	_controlHeader = static_cast<decltype(_controlHeader)>(malloc(controlLen));
 
@@ -95,6 +97,9 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace) {
 };
 
 void DarlingServer::Message::_initWithOther(Message&& other) {
+	_sendNotificationCallback = std::move(other._sendNotificationCallback);
+	other._sendNotificationCallback = nullptr;
+
 	_buffer = std::move(other._buffer);
 	_socketAddress = std::move(other._socketAddress);
 	_controlHeader = std::move(other._controlHeader);
@@ -452,6 +457,18 @@ void DarlingServer::Message::setGID(gid_t gid) {
 	copyCredentialsIn(creds);
 };
 
+std::function<void()> DarlingServer::Message::sendNotificationCallback() const {
+	return _sendNotificationCallback;
+};
+
+void DarlingServer::Message::setSendNotificationCallback(std::function<void()> sendNotificationCallback) {
+	_sendNotificationCallback = sendNotificationCallback;
+};
+
+//
+// message queue
+//
+
 void DarlingServer::MessageQueue::push(Message&& message) {
 	std::unique_lock lock(_lock);
 	_messages.push_back(std::move(message));
@@ -514,7 +531,11 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 		}
 
 		for (size_t i = 0; i < ret; ++i) {
+			auto cb = _messages.front().sendNotificationCallback();
 			_messages.pop_front();
+			if (cb) {
+				cb();
+			}
 		}
 	}
 

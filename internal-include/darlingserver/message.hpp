@@ -56,6 +56,7 @@ namespace DarlingServer {
 		std::vector<uint8_t> _buffer;
 		struct cmsghdr* _controlHeader = nullptr;
 		Address _socketAddress;
+		std::function<void()> _sendNotificationCallback = nullptr;
 
 		void _initWithOther(Message&&);
 		void _cleanupSelf();
@@ -81,7 +82,7 @@ namespace DarlingServer {
 		 * you can call pushData() with a null buffer pointer and a non-zero size. If you wish to
 		 * grow the control data buffer, you can call pushDescriptor() with a descriptor value of `-1`.
 		 */
-		Message(size_t bufferSpace = 256, size_t descriptorSpace = 4);
+		Message(size_t bufferSpace = 256, size_t descriptorSpace = 4, std::function<void()> sendNotificationCallback = nullptr);
 		~Message();
 
 		Message(Message&&);
@@ -110,6 +111,9 @@ namespace DarlingServer {
 
 		gid_t gid() const;
 		void setGID(gid_t gid);
+
+		std::function<void()> sendNotificationCallback() const;
+		void setSendNotificationCallback(std::function<void()> sendNotificationCallback);
 
 		/**
 		 * Returns an array of all the descritors currently owned by this Message.

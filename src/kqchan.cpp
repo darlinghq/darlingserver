@@ -304,7 +304,7 @@ void DarlingServer::Kqchan::MachPort::_modify(uint64_t receiveBuffer, uint64_t r
 		dtape_kqchan_mach_port_modify(self->_dtapeKqchan, receiveBuffer, receiveBufferSize, savedFilterFlags);
 		Thread::currentThread()->impersonate(nullptr);
 
-		Message msg(sizeof(dserver_kqchan_reply_mach_port_modify_t), 0);
+		Message msg(sizeof(dserver_kqchan_reply_mach_port_modify_t), 0, self->_checkForEventsAsyncFactory());
 
 		auto reply = reinterpret_cast<dserver_kqchan_reply_mach_port_modify_t*>(msg.data().data());
 
@@ -338,7 +338,7 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 
 	auto self = shared_from_this();
 	Thread::kernelAsync([self, thread, defaultBuffer, defaultBufferSize]() {
-		Message msg(sizeof(dserver_kqchan_reply_mach_port_read_t), 0);
+		Message msg(sizeof(dserver_kqchan_reply_mach_port_read_t), 0, self->_checkForEventsAsyncFactory());
 
 		kqchanMachPortLog.debug() << *self << ": handling read request in microthread" << kqchanMachPortLog.endLog;
 
@@ -360,6 +360,29 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 
 void DarlingServer::Kqchan::MachPort::_notify() {
 	_sendNotification();
+};
+
+void DarlingServer::Kqchan::MachPort::_checkForEventsAsync() {
+	Thread::kernelAsync([weakSelf = weak_from_this()]() {
+		auto self = weakSelf.lock();
+		if (!self) {
+			return;
+		}
+		// if we have more events ready, notify our peer
+		if (dtape_kqchan_mach_port_has_events(self->_dtapeKqchan)) {
+			self->_notify();
+		}
+	});
+};
+
+std::function<void()> DarlingServer::Kqchan::MachPort::_checkForEventsAsyncFactory() {
+	return [weakSelf = weak_from_this()]() {
+		auto self = weakSelf.lock();
+		if (!self) {
+			return;
+		}
+		self->_checkForEventsAsync();
+	};
 };
 
 //
@@ -461,7 +484,7 @@ void DarlingServer::Kqchan::Process::_modify(uint32_t flags) {
 
 	_flags = flags;
 
-	Message msg(sizeof(dserver_kqchan_reply_proc_modify_t), 0);
+	Message msg(sizeof(dserver_kqchan_reply_proc_modify_t), 0, _checkForEventsAsyncFactory());
 
 	auto reply = reinterpret_cast<dserver_kqchan_reply_proc_modify_t*>(msg.data().data());
 
@@ -493,7 +516,7 @@ void DarlingServer::Kqchan::Process::_read() {
 	}
 
 	std::unique_lock lock(_mutex);
-	Message msg(sizeof(dserver_kqchan_reply_proc_read_t), 0);
+	Message msg(sizeof(dserver_kqchan_reply_proc_read_t), 0, _checkForEventsAsyncFactory());
 	auto reply = reinterpret_cast<dserver_kqchan_reply_proc_read_t*>(msg.data().data());
 
 	reply->header.number = dserver_kqchan_msgnum_proc_read;
@@ -563,11 +586,6 @@ void DarlingServer::Kqchan::Process::_read() {
 	}
 
 	_outbox.push(std::move(msg));
-
-	// if we have more events ready, tell our peer
-	if (!_events.empty()) {
-		_sendNotification();
-	}
 };
 
 void DarlingServer::Kqchan::Process::_notify(uint32_t event, int64_t data) {
@@ -617,4 +635,27 @@ void DarlingServer::Kqchan::Process::_notify(uint32_t event, int64_t data) {
 			_sendNotification();
 		}
 	}
+};
+
+void DarlingServer::Kqchan::Process::_checkForEventsAsync() {
+	Thread::kernelAsync([weakSelf = weak_from_this()]() {
+		auto self = weakSelf.lock();
+		if (!self) {
+			return;
+		}
+		// if we have more events ready, tell our peer
+		if (!self->_events.empty()) {
+			self->_sendNotification();
+		}
+	});
+};
+
+std::function<void()> DarlingServer::Kqchan::Process::_checkForEventsAsyncFactory() {
+	return [weakSelf = weak_from_this()]() {
+		auto self = weakSelf.lock();
+		if (!self) {
+			return;
+		}
+		self->_checkForEventsAsync();
+	};
 };

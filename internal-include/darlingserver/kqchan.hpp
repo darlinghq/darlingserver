@@ -80,6 +80,14 @@ namespace DarlingServer {
 
 		virtual void _processMessages();
 
+		/**
+		 * This method is used to check for events in an async, lock-safe manner.
+		 * This is because the caller may be holding a lock on the kqchan or may even be outside a microthread,
+		 * so the actual check needs to be scheduled in a kernel microthread.
+		 */
+		void _checkForEventsAsync();
+		std::function<void()> _checkForEventsAsyncFactory();
+
 	protected:
 		virtual uintptr_t _idForProcess() const;
 
@@ -123,6 +131,12 @@ namespace DarlingServer {
 		void _notify(uint32_t event, int64_t data);
 
 		virtual void _processMessages();
+
+		/**
+		 * See Kqchan::MachPort::_checkForEventsAsync(); this does the same thing for process kqchannels.
+		 */
+		void _checkForEventsAsync();
+		std::function<void()> _checkForEventsAsyncFactory();
 
 	protected:
 		virtual uintptr_t _idForProcess() const;
