@@ -289,8 +289,14 @@ mig_init(void)
 			}
 		}
 	}
+#ifdef __DARLING__
+	#include <darlingserver/duct-tape/log.h>
+	dtape_log_debug("mig_table_max_displ = %d mach_kobj_count = %d\n",
+	    mig_table_max_displ, mach_kobj_count);
+#else
 	printf("mig_table_max_displ = %d mach_kobj_count = %d\n",
 	    mig_table_max_displ, mach_kobj_count);
+#endif
 }
 STARTUP(MACH_IPC, STARTUP_RANK_FIRST, mig_init);
 

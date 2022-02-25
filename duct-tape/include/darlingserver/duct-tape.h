@@ -9,22 +9,11 @@
 #include <darlingserver/rpc.internal.h>
 #include <darlingserver/rpc-supplement.h>
 #include <darlingserver/rpc.h>
+#include <darlingserver/duct-tape/types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct dtape_thread dtape_thread_t;
-typedef struct dtape_task dtape_task_t;
-typedef struct dtape_kqchan_mach_port dtape_kqchan_mach_port_t;
-typedef struct dtape_semaphore dtape_semaphore_t;
-
-typedef enum dtape_log_level {
-	dtape_log_level_debug,
-	dtape_log_level_info,
-	dtape_log_level_warning,
-	dtape_log_level_error,
-} dtape_log_level_t;
 
 typedef void (*dtape_thread_continuation_callback_f)(void* context);
 

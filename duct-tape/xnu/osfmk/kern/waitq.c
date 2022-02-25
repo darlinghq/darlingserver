@@ -92,6 +92,13 @@
 #  endif
 #endif
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/log.h>
+#define wqdbg(fmt, ...) dtape_log_debug("WQ[%s]: " fmt, __func__, ## __VA_ARGS__)
+#define wqdbg_v(fmt, ...) wqdbg(fmt, ## __VA_ARGS__)
+#define wqinfo(fmt, ...) dtape_log_info("WQ[%s]: " fmt, __func__, ## __VA_ARGS__)
+#define wqerr(fmt, ...) dtape_log_error("WQ[%s]: " fmt, __func__, ## __VA_ARGS__)
+#else
 #if CONFIG_WAITQ_DEBUG
 #define wqdbg(fmt, ...) \
 	printf("WQ[%s]:  " fmt "\n", __func__, ## __VA_ARGS__)
@@ -111,6 +118,7 @@
 
 #define wqerr(fmt, ...) \
 	printf("WQ[%s] ERROR: " fmt "\n", __func__, ## __VA_ARGS__)
+#endif // __DARLING__
 
 /*
  * file-static functions / data
