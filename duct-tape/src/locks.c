@@ -67,6 +67,8 @@ void lck_mtx_lock(lck_mtx_t* lock) {
 	thread_t xthread = current_thread();
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
+	lck_mtx_assert(lock, LCK_MTX_ASSERT_NOTOWNED);
+
 	while (true) {
 		libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
 
@@ -74,6 +76,7 @@ void lck_mtx_lock(lck_mtx_t* lock) {
 			// lock successfully acquired
 			lock->dtape_mutex->dtape_owner = (uintptr_t)xthread;
 			libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
+			__atomic_thread_fence(__ATOMIC_ACQUIRE);
 			return;
 		}
 
@@ -89,10 +92,13 @@ boolean_t lck_mtx_try_lock(lck_mtx_t* lock) {
 	thread_t xthread = current_thread();
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
+	lck_mtx_assert(lock, LCK_MTX_ASSERT_NOTOWNED);
+
 	if (lock->dtape_mutex->dtape_owner == 0 || lock->dtape_mutex->dtape_owner == (uintptr_t)xthread) {
 		// lock successfully acquired
 		lock->dtape_mutex->dtape_owner = (uintptr_t)xthread;
 		libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		return TRUE;
 	}
 
@@ -109,6 +115,8 @@ void lck_mtx_lock_spin(lck_mtx_t* lock) {
 };
 
 void lck_mtx_unlock(lck_mtx_t* lock) {
+	lck_mtx_assert(lock, LCK_MTX_ASSERT_OWNED);
+
 	libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
 	lock->dtape_mutex->dtape_owner = 0;
 
@@ -128,6 +136,7 @@ void lck_mtx_unlock(lck_mtx_t* lock) {
 
 out:
 	libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
+	__atomic_thread_fence(__ATOMIC_RELEASE);
 	return;
 };
 
