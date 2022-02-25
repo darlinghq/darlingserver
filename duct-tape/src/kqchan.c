@@ -79,6 +79,8 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 	thread->kevent_ctx.kec_data_size = thread->kevent_ctx.kec_data_resid = default_buffer_size;
 	thread->kevent_ctx.kec_process_flags = 0;
 
+	dtape_log_debug("trying to fill kevent for kqchan %p with mqueue %p", kqchan, kqchan->knote.kn_mqueue);
+
 	bool result = (filt_machportprocess(&kqchan->knote, (void*)&reply->kev) & FILTER_ACTIVE) ? true : false;
 	if (kqchan->waiter_read_semaphore) {
 		dtape_semaphore_up(kqchan->waiter_read_semaphore);
@@ -88,9 +90,9 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 
 bool dtape_kqchan_mach_port_has_events(dtape_kqchan_mach_port_t* kqchan) {
 	if (imq_is_set(kqchan->knote.kn_mqueue)) {
-		return ipc_mqueue_peek(kqchan->knote.kn_mqueue, NULL, NULL, NULL, NULL, NULL);
-	} else {
 		return ipc_mqueue_set_peek(kqchan->knote.kn_mqueue);
+	} else {
+		return ipc_mqueue_peek(kqchan->knote.kn_mqueue, NULL, NULL, NULL, NULL, NULL);
 	}
 };
 
@@ -102,13 +104,19 @@ kevent_ctx_t kevent_get_context(thread_t xthread) {
 static void knote_post(struct knote* kn, long hint) {
 	dtape_kqchan_mach_port_t* kqchan = __container_of(kn, dtape_kqchan_mach_port_t, knote);
 
+	dtape_log_debug("%s: kn=%p, kqchan=%p, kqchan->callback=%p", __FUNCTION__, kn, kqchan, kqchan->callback);
+
 	if (!kqchan->callback) {
 		return;
 	}
 
-	if (dtape_kqchan_mach_port_has_events(kqchan)) {
+#if 0
+	if (!dtape_kqchan_mach_port_has_events(kqchan)) {
 		return;
 	}
+#endif
+
+	dtape_log_debug("%s: kn=%p, kqchan=%p; invoking callback...", __FUNCTION__, kn, kqchan);
 
 	kqchan->callback(kqchan->context);
 };
