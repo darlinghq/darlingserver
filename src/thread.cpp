@@ -911,7 +911,11 @@ void DarlingServer::Thread::waitUntilNotRunning() {
 
 void DarlingServer::Thread::defer(bool wait) {
 	std::unique_lock lock(_rwlock);
-	_deferralState = DeferralState::DeferredNotPending;
+
+	if (_deferralState == DeferralState::NotDeferred) {
+		_deferralState = DeferralState::DeferredNotPending;
+	}
+
 	if (wait) {
 		_runningCondvar.wait(lock, [&]() {
 			return !_running;
@@ -920,11 +924,17 @@ void DarlingServer::Thread::defer(bool wait) {
 };
 
 void DarlingServer::Thread::undefer() {
-	std::unique_lock lock(_rwlock);
-	if (_deferralState == DeferralState::DeferredPending) {
+	DeferralState previousDeferralState;
+
+	{
+		std::unique_lock lock(_rwlock);
+		previousDeferralState = _deferralState;
+		_deferralState = DeferralState::NotDeferred;
+	}
+
+	if (previousDeferralState == DeferralState::DeferredPending) {
 		Server::sharedInstance().scheduleThread(shared_from_this());
 	}
-	_deferralState = DeferralState::NotDeferred;
 };
 
 uint32_t* DarlingServer::Thread::bsdReturnValuePointer() {
