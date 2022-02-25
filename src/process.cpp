@@ -383,7 +383,7 @@ void DarlingServer::Process::unregisterKqchan(std::shared_ptr<Kqchan> kqchan) {
 
 void DarlingServer::Process::waitForChildAfterFork() {
 	// this function is always called within a microthread
-	dtape_semaphore_down(_dtapeForkWaitSemaphore);
+	dtape_semaphore_down_simple(_dtapeForkWaitSemaphore);
 };
 
 void DarlingServer::Process::registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan) {

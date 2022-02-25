@@ -146,7 +146,10 @@ static void kqchan_waitq_waiter_entry(void* context, wait_result_t wait_result) 
 				kqchan->callback(kqchan->context);
 			}
 			// wait until it's read
-			dtape_semaphore_down(kqchan->waiter_read_semaphore);
+			if (!dtape_semaphore_down_simple(kqchan->waiter_read_semaphore)) {
+				// we got interrupted
+				break;
+			}
 		}
 	}
 
@@ -196,7 +199,7 @@ int knote_unlink_waitq(struct knote *kn, struct waitq *wq) {
 	kqchan->waiter_thread = NULL;
 
 	// wait for the waiter thread to die
-	dtape_semaphore_down(kqchan->waiter_death_semaphore);
+	dtape_semaphore_down_simple(kqchan->waiter_death_semaphore);
 
 	// now destroy the waiter thread death semaphore
 	dtape_semaphore_destroy(kqchan->waiter_death_semaphore);

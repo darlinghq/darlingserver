@@ -158,7 +158,8 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 bool dtape_kqchan_mach_port_has_events(dtape_kqchan_mach_port_t* kqchan);
 
 void dtape_semaphore_up(dtape_semaphore_t* semaphore);
-void dtape_semaphore_down(dtape_semaphore_t* semaphore);
+dtape_semaphore_wait_result_t dtape_semaphore_down(dtape_semaphore_t* semaphore);
+bool dtape_semaphore_down_simple(dtape_semaphore_t* semaphore);
 
 #ifdef __cplusplus
 };

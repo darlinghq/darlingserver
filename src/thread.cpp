@@ -753,7 +753,7 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 	std::optional<Message> reply = std::nullopt;
 
 	// make sure we're the only one performing an S2C call on this thread
-	dtape_semaphore_down(_s2cPerformSempahore);
+	dtape_semaphore_down_simple(_s2cPerformSempahore);
 
 	s2cLog.debug() << _tid << "(" << _nstid << "): Going to perform S2C call" << s2cLog.endLog;
 
@@ -784,7 +784,7 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 	Server::sharedInstance().sendMessage(std::move(call));
 
 	// now let's wait for the reply
-	dtape_semaphore_down(_s2cReplySempahore);
+	dtape_semaphore_down_simple(_s2cReplySempahore);
 
 	s2cLog.debug() << _tid << "(" << _nstid << "): Received S2C reply" << s2cLog.endLog;
 

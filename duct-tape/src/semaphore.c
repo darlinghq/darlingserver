@@ -34,8 +34,25 @@ void dtape_semaphore_up(dtape_semaphore_t* semaphore) {
 	}
 };
 
-void dtape_semaphore_down(dtape_semaphore_t* semaphore) {
-	if (semaphore_wait(semaphore->xnu_semaphore) != KERN_SUCCESS) {
-		panic("Failed to lower up-count of duct-taped XNU semaphore");
+dtape_semaphore_wait_result_t dtape_semaphore_down(dtape_semaphore_t* semaphore) {
+	kern_return_t kr = semaphore_wait(semaphore->xnu_semaphore);
+	switch (kr) {
+		case KERN_SUCCESS:
+			return dtape_semaphore_wait_result_ok;
+		case KERN_ABORTED:
+			return dtape_semaphore_wait_result_interrupted;
+		default:
+			return dtape_semaphore_wait_result_error;
+	}
+};
+
+bool dtape_semaphore_down_simple(dtape_semaphore_t* semaphore) {
+	switch (dtape_semaphore_down(semaphore)) {
+		case dtape_semaphore_wait_result_ok:
+			return true;
+		case dtape_semaphore_wait_result_interrupted:
+			return false;
+		default:
+			panic("Failed to lower up-count of duct-taped XNU semaphore");
 	}
 };
