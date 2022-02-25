@@ -66,6 +66,10 @@ host_notify_init(void)
 	for (int i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++) {
 		queue_init(&host_notify_queue[i]);
 	}
+#ifdef __DARLING__
+	host_notify_zone = zone_create("host_notify", sizeof(struct host_notify_entry), ZC_NONE);
+	lck_mtx_init(&host_notify_lock, LCK_GRP_NULL, LCK_ATTR_NULL);
+#endif
 }
 STARTUP(MACH_IPC, STARTUP_RANK_FIRST, host_notify_init);
 
