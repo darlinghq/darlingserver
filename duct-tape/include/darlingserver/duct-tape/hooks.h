@@ -34,6 +34,7 @@ typedef void (*dtape_hook_thread_set_pending_signal_f)(void* thread_context, int
 typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_context, bool pending_call_override);
 typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection);
 typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t address, size_t page_count);
+typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
 
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
@@ -42,14 +43,18 @@ typedef void (*dtape_hook_current_thread_set_bsd_retval_f)(uint32_t retval);
 
 typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
+typedef dtape_task_t* (*dtape_hook_task_lookup_f)(int id, bool id_is_nsid, bool retain);
 
 typedef struct dtape_hooks {
-	dtape_hook_thread_suspend_f thread_suspend;
-	dtape_hook_thread_resume_f thread_resume;
 	dtape_hook_current_task_f current_task;
 	dtape_hook_current_thread_f current_thread;
+
 	dtape_hook_timer_arm_f timer_arm;
+
 	dtape_hook_log_f log;
+
+	dtape_hook_thread_suspend_f thread_suspend;
+	dtape_hook_thread_resume_f thread_resume;
 	dtape_hook_thread_terminate_f thread_terminate;
 	dtape_hook_thread_create_kernel_f thread_create_kernel;
 	dtape_hook_thread_setup_f thread_setup;
@@ -57,12 +62,16 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_set_pending_call_override_f thread_set_pending_call_override;
 	dtape_hook_thread_allocate_pages_f thread_allocate_pages;
 	dtape_hook_thread_free_pages_f thread_free_pages;
+	dtape_hook_thread_lookup_f thread_lookup;
+
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
 	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
 	dtape_hook_current_thread_set_bsd_retval_f current_thread_set_bsd_retval;
+
 	dtape_hook_task_read_memory_f task_read_memory;
 	dtape_hook_task_write_memory_f task_write_memory;
+	dtape_hook_task_lookup_f task_lookup;
 } dtape_hooks_t;
 
 #ifdef __cplusplus

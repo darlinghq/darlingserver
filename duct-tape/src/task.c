@@ -3,6 +3,7 @@
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/memory.h>
 #include <darlingserver/duct-tape/psynch.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
@@ -11,6 +12,7 @@
 #include <kern/restartable.h>
 #include <kern/sync_sema.h>
 #include <mach/mach_traps.h>
+#include <mach/mach_port.h>
 
 #include <stdlib.h>
 
@@ -162,11 +164,17 @@ void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_ui
 	task_unlock(&task->xnu_task);
 };
 
+void dtape_task_retain(dtape_task_t* task) {
+	task_reference(&task->xnu_task);
+};
+
+void dtape_task_release(dtape_task_t* task) {
+	task_deallocate(&task->xnu_task);
+};
+
 void task_deallocate(task_t task) {
-	if (os_ref_release(&task->ref_count) == 0) {
-		// the managing Task instance is supposed to have the last reference on the duct-taped task
-		panic("Duct-taped task over-released");
-	}
+	// the managing Task instance is supposed to have the last reference on the duct-taped task
+	os_ref_release_live(&task->ref_count);
 };
 
 int pid_from_task(task_t xtask) {
@@ -375,16 +383,109 @@ kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_in
 	dtape_stub_unsafe();
 };
 
+static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pid, uintptr_t t, bool task_name) {
+	kern_return_t kr = KERN_FAILURE;
+	task_t receiving_task = TASK_NULL;
+	dtape_task_t* looked_up_task = NULL;
+	ipc_port_t right = IPC_PORT_NULL;
+	mach_port_name_t out_name = MACH_PORT_NULL;
+
+	receiving_task = port_name_to_task(target_tport);
+	if (receiving_task == TASK_NULL) {
+		goto out;
+	}
+
+	looked_up_task = dtape_hooks->task_lookup(pid, true, true);
+	if (!looked_up_task) {
+		goto out;
+	}
+
+	if (task_name) {
+		right = convert_task_name_to_port(&looked_up_task->xnu_task);
+	} else {
+		if (&looked_up_task->xnu_task == current_task()) {
+			right = convert_task_to_port_pinned(&looked_up_task->xnu_task);
+		} else {
+			right = convert_task_to_port(&looked_up_task->xnu_task);
+		}
+	}
+
+	// consumed by convert_task{,_name}_to_port{,_pinned}
+	looked_up_task = NULL;
+
+	if (right == IPC_PORT_NULL) {
+		goto out;
+	}
+
+	out_name = ipc_port_copyout_send(right, receiving_task->itk_space);
+
+	// consumed by ipc_port_copyout_send
+	right = IPC_PORT_NULL;
+
+	if (!MACH_PORT_VALID(out_name)) {
+		goto out;
+	}
+
+	if (copyout(&out_name, t, sizeof(out_name))) {
+		goto out;
+	}
+
+	// consumed by copyout
+	out_name = MACH_PORT_NULL;
+
+	kr = KERN_SUCCESS;
+
+out:
+	if (MACH_PORT_VALID(out_name)) {
+		mach_port_deallocate(receiving_task->itk_space, out_name);
+	}
+	if (right != IPC_PORT_NULL) {
+		ipc_port_release_send(right);
+	}
+	if (looked_up_task) {
+		dtape_task_release(looked_up_task);
+	}
+	if (receiving_task != TASK_NULL) {
+		task_deallocate(receiving_task);
+	}
+	return kr;
+};
+
 kern_return_t task_for_pid(struct task_for_pid_args* args) {
-	dtape_stub_unsafe();
+	return task_for_pid_internal(args->target_tport, args->pid, args->t, false);
 };
 
 kern_return_t task_name_for_pid(struct task_name_for_pid_args* args) {
-	dtape_stub_unsafe();
+	return task_for_pid_internal(args->target_tport, args->pid, args->t, true);
 };
 
 kern_return_t pid_for_task(struct pid_for_task_args* args) {
-	dtape_stub_unsafe();
+	kern_return_t kr = KERN_FAILURE;
+	task_t converted_task = TASK_NULL;
+	int pid = -1;
+
+	converted_task = port_name_to_task_name(args->t);
+	if (converted_task == TASK_NULL) {
+		goto out;
+	}
+
+	pid = task_pid(converted_task);
+
+	if (pid < 0) {
+		goto out;
+	}
+
+	if (copyout(&pid, args->pid, sizeof(pid))) {
+		goto out;
+	}
+
+	kr = KERN_SUCCESS;
+
+out:
+	if (converted_task != TASK_NULL) {
+		task_deallocate(converted_task);
+	}
+	return kr;
 };
 
 boolean_t task_is_exec_copy(task_t task) {

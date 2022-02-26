@@ -173,6 +173,19 @@ struct DTapeHooks {
 		}
 	};
 
+	static dtape_thread_t* dtape_hook_thread_lookup(int id, bool id_is_nsid, bool retain) {
+		auto& registry = DarlingServer::threadRegistry();
+		auto maybeThread = (id_is_nsid) ? registry.lookupEntryByNSID(id) : registry.lookupEntryByID(id);
+		if (!maybeThread) {
+			return nullptr;
+		}
+		auto thread = *maybeThread;
+		if (retain) {
+			dtape_thread_retain(thread->_dtapeThread);
+		}
+		return thread->_dtapeThread;
+	};
+
 	static void dtape_hook_current_thread_interrupt_disable(void) {
 		DarlingServer::Thread::interruptDisable();
 	};
@@ -197,13 +210,29 @@ struct DTapeHooks {
 		return static_cast<DarlingServer::Process*>(task_context)->writeMemory(remote_address, local_buffer, length);
 	};
 
+	static dtape_task_t* dtape_hook_task_lookup(int id, bool id_is_nsid, bool retain) {
+		auto& registry = DarlingServer::processRegistry();
+		auto maybeProcess = (id_is_nsid) ? registry.lookupEntryByNSID(id) : registry.lookupEntryByID(id);
+		if (!maybeProcess) {
+			return nullptr;
+		}
+		auto process = *maybeProcess;
+		if (retain) {
+			dtape_task_retain(process->_dtapeTask);
+		}
+		return process->_dtapeTask;
+	};
+
 	static constexpr dtape_hooks_t dtape_hooks = {
-		.thread_suspend = dtape_hook_thread_suspend,
-		.thread_resume = dtape_hook_thread_resume,
 		.current_task = dtape_hook_current_task,
 		.current_thread = dtape_hook_current_thread,
+
 		.timer_arm = dtape_hook_timer_arm,
+
 		.log = dtape_hook_log,
+
+		.thread_suspend = dtape_hook_thread_suspend,
+		.thread_resume = dtape_hook_thread_resume,
 		.thread_terminate = dtape_hook_thread_terminate,
 		.thread_create_kernel = dtape_hook_thread_create_kernel,
 		.thread_setup = dtape_hook_thread_setup,
@@ -211,12 +240,16 @@ struct DTapeHooks {
 		.thread_set_pending_call_override = dtape_hook_thread_set_pending_call_override,
 		.thread_allocate_pages = dtape_hook_thread_allocate_pages,
 		.thread_free_pages = dtape_hook_thread_free_pages,
+		.thread_lookup = dtape_hook_thread_lookup,
+
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
 		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,
 		.current_thread_set_bsd_retval = dtape_hook_current_thread_set_bsd_retval,
+
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
+		.task_lookup = dtape_hook_task_lookup,
 	};
 };
 

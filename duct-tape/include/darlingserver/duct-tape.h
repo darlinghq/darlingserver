@@ -81,8 +81,12 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
 void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, int linux_signal_number, int code, uintptr_t signal_address);
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
+void dtape_thread_retain(dtape_thread_t* thread);
+void dtape_thread_release(dtape_thread_t* thread);
 
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
+void dtape_task_retain(dtape_task_t* task);
+void dtape_task_release(dtape_task_t* task);
 
 /**
  * Invoked when a timer armed by an earlier call to the timer_arm hook expires.

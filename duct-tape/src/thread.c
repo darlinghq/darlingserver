@@ -382,6 +382,14 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 	}
 };
 
+void dtape_thread_retain(dtape_thread_t* thread) {
+	thread_reference(&thread->xnu_thread);
+};
+
+void dtape_thread_release(dtape_thread_t* thread) {
+	thread_deallocate(&thread->xnu_thread);
+};
+
 thread_t current_thread(void) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
 	return &thread->xnu_thread;
