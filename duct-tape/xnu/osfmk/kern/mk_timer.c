@@ -56,8 +56,16 @@ struct mk_timer {
 	ipc_port_t              port;
 };
 
+#ifdef __DARLING__
+zone_t mk_timer_zone;
+
+void dtape_mk_timer_init(void) {
+	mk_timer_zone = zone_create("mk_timer", sizeof(struct mk_timer), ZC_NOENCRYPT);
+};
+#else
 static ZONE_DECLARE(mk_timer_zone, "mk_timer",
     sizeof(struct mk_timer), ZC_NOENCRYPT);
+#endif
 
 static mach_port_qos_t mk_timer_qos = {
 	.name       = FALSE,

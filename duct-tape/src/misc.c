@@ -64,6 +64,7 @@ void user_data_attr_manager_init(void);
 void ipc_voucher_init(void);
 
 void dtape_timer_init(void);
+void dtape_mk_timer_init(void);
 
 extern zone_t semaphore_zone;
 extern lck_spin_t ipc_importance_lock_data;
@@ -105,7 +106,11 @@ void dtape_init(const dtape_hooks_t* hooks) {
 	lck_mtx_init(&realhost.lock, LCK_GRP_NULL, LCK_ATTR_NULL);
 	lck_spin_init(&ipc_importance_lock_data, LCK_GRP_NULL, LCK_ATTR_NULL);
 
+	dtape_log_debug("dtape_timer_init");
 	dtape_timer_init();
+
+	dtape_log_debug("dtape_mk_timer_init");
+	dtape_mk_timer_init();
 
 	dtape_log_debug("timer_call_init");
 	timer_call_init();
