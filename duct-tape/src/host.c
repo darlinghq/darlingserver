@@ -113,12 +113,34 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 		case HOST_DEBUG_INFO_INTERNAL:
 			return KERN_NOT_SUPPORTED;
 
+		case HOST_PREFERRED_USER_ARCH: {
+			host_preferred_user_arch_t user_arch_info;
+
+			if (*count < HOST_PREFERRED_USER_ARCH_COUNT) {
+				return KERN_FAILURE;
+			}
+
+			*count = HOST_PREFERRED_USER_ARCH_COUNT;
+
+			user_arch_info = (void*)info;
+
+#if __x86_64__
+			user_arch_info->cpu_type = CPU_TYPE_X86_64;
+			user_arch_info->cpu_subtype = CPU_SUBTYPE_X86_64_ALL;
+#elif __aarch64__
+			user_arch_info->cpu_type = CPU_TYPE_ARM64;
+			user_arch_info->cpu_subtype = CPU_SUBTYPE_ARM64_ALL;
+#else
+			#error HOST_PREFERRED_USER_ARCH not implemented for this architecture
+#endif
+
+			return KERN_SUCCESS;
+		};
+
 		case HOST_SCHED_INFO:
 			dtape_stub_unsafe("HOST_SCHED_INFO");
 		case HOST_RESOURCE_SIZES:
 			dtape_stub_unsafe("HOST_RESOURCE_SIZES");
-		case HOST_PREFERRED_USER_ARCH:
-			dtape_stub_unsafe("HOST_PREFERRED_USER_ARCH");
 		case HOST_CAN_HAS_DEBUGGER:
 			dtape_stub_unsafe("HOST_CAN_HAS_DEBUGGER");
 		case HOST_VM_PURGABLE:
