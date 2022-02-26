@@ -1,5 +1,5 @@
 #include <darlingserver/duct-tape.h>
-#include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/log.h>
 #include <darlingserver/duct-tape/processor.h>
 #include <darlingserver/duct-tape/memory.h>

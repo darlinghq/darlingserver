@@ -1,5 +1,5 @@
 #include <darlingserver/duct-tape/stubs.h>
-#include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 
 #include <kern/timer.h>
 #include <kern/timer_call.h>

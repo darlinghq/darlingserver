@@ -1,5 +1,5 @@
 #include <darlingserver/duct-tape/stubs.h>
-#include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/thread.h>
 
 #include <kern/locks.h>

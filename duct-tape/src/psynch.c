@@ -2,7 +2,7 @@
 #include <darlingserver/duct-tape/stubs.h>
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/thread.h>
-#include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 
 #include <sys/proc.h>
 #include <sys/pthread_shims.h>

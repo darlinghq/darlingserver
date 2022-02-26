@@ -1,7 +1,7 @@
 #include <darlingserver/duct-tape/stubs.h>
 #include <darlingserver/duct-tape/memory.h>
 #include <darlingserver/duct-tape/task.h>
-#include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/thread.h>
 
 #include <kern/zalloc.h>

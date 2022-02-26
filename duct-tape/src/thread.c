@@ -2,7 +2,7 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/thread.h>
-#include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/log.h>
 #include <darlingserver/duct-tape/psynch.h>
 
