@@ -223,6 +223,10 @@ struct DTapeHooks {
 		return process->_dtapeTask;
 	};
 
+	static void dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
+		static_cast<DarlingServer::Process*>(task_context)->memoryInfo(memory_info->virtual_size, memory_info->resident_size);
+	};
+
 	static constexpr dtape_hooks_t dtape_hooks = {
 		.current_task = dtape_hook_current_task,
 		.current_thread = dtape_hook_current_thread,
@@ -250,6 +254,7 @@ struct DTapeHooks {
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
 		.task_lookup = dtape_hook_task_lookup,
+		.task_get_memory_info = dtape_hook_task_get_memory_info,
 	};
 };
 

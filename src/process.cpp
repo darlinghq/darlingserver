@@ -421,3 +421,12 @@ DarlingServer::Process::Architecture DarlingServer::Process::architecture() cons
 void DarlingServer::Process::logToStream(Log::Stream& stream) const {
 	stream << "[P:" << _pid << "(" << _nspid << ")]";
 };
+
+void DarlingServer::Process::memoryInfo(uint64_t& virtualSize, uint64_t& residentSize) const {
+	std::ifstream file("/proc/" + std::to_string(_pid) + "/statm");
+
+	file >> virtualSize >> residentSize;
+
+	virtualSize *= sysconf(_SC_PAGESIZE);
+	residentSize *= sysconf(_SC_PAGESIZE);
+};

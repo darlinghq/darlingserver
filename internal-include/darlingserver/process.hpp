@@ -132,6 +132,8 @@ namespace DarlingServer {
 		bool is64Bit() const;
 		Architecture architecture() const;
 
+		void memoryInfo(uint64_t& virtualSize, uint64_t& residentSize) const;
+
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();
 

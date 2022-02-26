@@ -1,6 +1,8 @@
 #ifndef _DARLINGSERVER_DUCT_TAPE_TYPES_H_
 #define _DARLINGSERVER_DUCT_TAPE_TYPES_H_
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,11 @@ typedef enum dtape_semaphore_wait_result {
 } dtape_semaphore_wait_result_t;
 
 typedef void (*dtape_thread_continuation_callback_f)(void* context);
+
+typedef struct dtape_memory_info {
+	uint64_t virtual_size;
+	uint64_t resident_size;
+} dtape_memory_info_t;
 
 #ifdef __cplusplus
 };

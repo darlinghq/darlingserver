@@ -44,6 +44,7 @@ typedef void (*dtape_hook_current_thread_set_bsd_retval_f)(uint32_t retval);
 typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
 typedef dtape_task_t* (*dtape_hook_task_lookup_f)(int id, bool id_is_nsid, bool retain);
+typedef void (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
 
 typedef struct dtape_hooks {
 	dtape_hook_current_task_f current_task;
@@ -72,6 +73,7 @@ typedef struct dtape_hooks {
 	dtape_hook_task_read_memory_f task_read_memory;
 	dtape_hook_task_write_memory_f task_write_memory;
 	dtape_hook_task_lookup_f task_lookup;
+	dtape_hook_task_get_memory_info_f task_get_memory_info;
 } dtape_hooks_t;
 
 #ifdef __cplusplus

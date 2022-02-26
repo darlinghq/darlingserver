@@ -4,6 +4,7 @@
 #include <darlingserver/duct-tape/memory.h>
 #include <darlingserver/duct-tape/psynch.h>
 #include <darlingserver/duct-tape/hooks.internal.h>
+#include <darlingserver/duct-tape/log.h>
 
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
@@ -268,8 +269,82 @@ kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mac
 	dtape_stub_unsafe();
 };
 
-kern_return_t task_info_from_user(mach_port_t task_port, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
-	dtape_stub_unsafe();
+kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
+	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
+
+	switch (flavor) {
+		case TASK_BASIC_INFO_32:
+		case TASK_BASIC_INFO_64:
+		case MACH_TASK_BASIC_INFO: {
+			uint64_t utimeus;
+			uint64_t stimeus;
+			dtape_memory_info_t mem_info;
+
+			dtape_hooks->task_get_memory_info(task->context, &mem_info);
+
+			dtape_log_debug("%s: TODO: fetch utimeus and stimeus somehow", __FUNCTION__);
+			utimeus = 0;
+			stimeus = 0;
+
+			if (flavor == TASK_BASIC_INFO_32) {
+				struct task_basic_info_32* info = (void*)task_info_out;
+
+				if (*task_info_count < TASK_BASIC_INFO_32_COUNT) {
+					return KERN_INVALID_ARGUMENT;
+				}
+
+				*task_info_count = TASK_BASIC_INFO_32_COUNT;
+
+				info->suspend_count = task->xnu_task.user_stop_count;
+				info->virtual_size = mem_info.virtual_size;
+				info->resident_size = mem_info.resident_size;
+				info->user_time.seconds = utimeus / USEC_PER_SEC;
+				info->user_time.microseconds = utimeus % USEC_PER_SEC;
+				info->system_time.seconds = stimeus / USEC_PER_SEC;
+				info->system_time.microseconds = stimeus % USEC_PER_SEC;
+				info->policy = 0;
+			} else if (flavor == TASK_BASIC_INFO_64) {
+				struct task_basic_info_64* info = (void*)task_info_out;
+
+				if (*task_info_count < TASK_BASIC_INFO_64_COUNT) {
+					return KERN_INVALID_ARGUMENT;
+				}
+
+				*task_info_count = TASK_BASIC_INFO_64_COUNT;
+
+				info->suspend_count = task->xnu_task.user_stop_count;
+				info->virtual_size = mem_info.virtual_size;
+				info->resident_size = mem_info.resident_size;
+				info->user_time.seconds = utimeus / USEC_PER_SEC;
+				info->user_time.microseconds = utimeus % USEC_PER_SEC;
+				info->system_time.seconds = stimeus / USEC_PER_SEC;
+				info->system_time.microseconds = stimeus % USEC_PER_SEC;
+				info->policy = 0;
+			} else {
+				struct mach_task_basic_info* info = (void*)task_info_out;
+
+				if (*task_info_count < MACH_TASK_BASIC_INFO_COUNT) {
+					return KERN_INVALID_ARGUMENT;
+				}
+
+				*task_info_count = MACH_TASK_BASIC_INFO_COUNT;
+
+				info->suspend_count = task->xnu_task.user_stop_count;
+				info->virtual_size = mem_info.virtual_size;
+				info->resident_size = mem_info.resident_size;
+				info->user_time.seconds = utimeus / USEC_PER_SEC;
+				info->user_time.microseconds = utimeus % USEC_PER_SEC;
+				info->system_time.seconds = stimeus / USEC_PER_SEC;
+				info->system_time.microseconds = stimeus % USEC_PER_SEC;
+				info->policy = 0;
+			}
+
+			return KERN_SUCCESS;
+		};
+
+		default:
+			dtape_stub_unsafe("unimplemented flavor");
+	}
 };
 
 kern_return_t task_inspect(task_inspect_t task_insp, task_inspect_flavor_t flavor, task_inspect_info_t info_out, mach_msg_type_number_t* size_in_out) {
@@ -858,6 +933,42 @@ task_findtid(task_t task, uint64_t tid)
 	task_unlock(task);
 
 	return found_thread;
+}
+
+/*
+ * task_info_from_user
+ *
+ * When calling task_info from user space,
+ * this function will be executed as mig server side
+ * instead of calling directly into task_info.
+ * This gives the possibility to perform more security
+ * checks on task_port.
+ *
+ * In the case of TASK_DYLD_INFO, we require the more
+ * privileged task_read_port not the less-privileged task_name_port.
+ *
+ */
+kern_return_t
+task_info_from_user(
+	mach_port_t             task_port,
+	task_flavor_t           flavor,
+	task_info_t             task_info_out,
+	mach_msg_type_number_t  *task_info_count)
+{
+	task_t task;
+	kern_return_t ret;
+
+	if (flavor == TASK_DYLD_INFO) {
+		task = convert_port_to_task_read(task_port);
+	} else {
+		task = convert_port_to_task_name(task_port);
+	}
+
+	ret = task_info(task, flavor, task_info_out, task_info_count);
+
+	task_deallocate(task);
+
+	return ret;
 }
 
 // </copied>
