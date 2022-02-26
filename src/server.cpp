@@ -356,7 +356,7 @@ void DarlingServer::Server::start() {
 
 			while (auto msg = _inbox.pop()) {
 				// TODO: this could be done concurrently
-				auto call = DarlingServer::Call::callFromMessage(std::move(*msg), _outbox);
+				auto call = DarlingServer::Call::callFromMessage(std::move(*msg));
 				if (call) {
 					_workQueue.push(call->thread());
 				}

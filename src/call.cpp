@@ -33,7 +33,7 @@ static DarlingServer::Log callLog("calls");
 
 DarlingServer::Log DarlingServer::Call::rpcReplyLog("replies");
 
-std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Message&& requestMessage, MessageQueue& replyQueue) {
+std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Message&& requestMessage) {
 	if (requestMessage.data().size() < sizeof(dserver_rpc_callhdr_t)) {
 		throw std::invalid_argument("Message buffer was too small for call header");
 	}
@@ -99,7 +99,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			if (requestMessage.data().size() < sizeof(dserver_rpc_call_ ## _callName ## _t)) { \
 				throw std::invalid_argument("Message buffer was too small for dserver_call_" #_callName "_t"); \
 			} \
-			result = std::make_shared<_className>(replyQueue, thread, reinterpret_cast<dserver_rpc_call_ ## _callName ## _t*>(header), std::move(requestMessage)); \
+			result = std::make_shared<_className>(thread, reinterpret_cast<dserver_rpc_call_ ## _callName ## _t*>(header), std::move(requestMessage)); \
 		} break;
 
 	switch (header->number) {
@@ -117,8 +117,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	return result;
 };
 
-DarlingServer::Call::Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader):
-	_replyQueue(replyQueue),
+DarlingServer::Call::Call(std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader):
 	_thread(thread),
 	_replyAddress(replyAddress),
 	_header(*callHeader)
@@ -651,6 +650,14 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 	}
 
 	_sendReply(code, is64Bit);
+};
+
+void DarlingServer::Call::SigexcEnter::processCall() {
+	throw std::runtime_error("sigexc_enter should be handled by the thread");
+};
+
+void DarlingServer::Call::SigexcExit::processCall() {
+	throw std::runtime_error("sigexc_exit should be handled by the thread");
 };
 
 DSERVER_CLASS_SOURCE_DEFS;

@@ -132,6 +132,10 @@ calls = [
 		('is_64_bit', 'bool'),
 	]),
 
+	('sigexc_enter', [], []),
+
+	('sigexc_exit', [], []),
+
 	#
 	# kqueue channels
 	#
@@ -727,8 +731,8 @@ for call in calls:
 		private: \\
 			{2}
 		public: \\
-			{1}(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, dserver_rpc_call_{0}_t* data, Message&& requestMessage): \\
-				Call(replyQueue, thread, requestMessage.address(), reinterpret_cast<dserver_rpc_callhdr_t*>(data)){3} \\
+			{1}(std::shared_ptr<Thread> thread, dserver_rpc_call_{0}_t* data, Message&& requestMessage): \\
+				Call(thread, requestMessage.address(), reinterpret_cast<dserver_rpc_callhdr_t*>(data)){3} \\
 				{4}
 			{{ \\
 		"""), '\t').format(
@@ -811,8 +815,8 @@ for call in calls:
 		internal_header.write("\t\t\treplyStruct->body." + param_name + " = " + val + "; \\\n")
 	internal_header.write("\t\t\tif (auto thread = _thread.lock()) { \\\n")
 	internal_header.write("\t\t\t\tthread->setWaitingForReply(false); \\\n")
+	internal_header.write("\t\t\t\tthread->pushCallReply(std::move(reply)); \\\n")
 	internal_header.write("\t\t\t} \\\n")
-	internal_header.write("\t\t\t_replyQueue.push(std::move(reply)); \\\n")
 	internal_header.write("\t\t}; \\\n")
 
 	if len(reply_parameters) == 0:

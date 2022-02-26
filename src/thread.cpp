@@ -35,6 +35,8 @@
 #define THREAD_STACK_SIZE (64 * 1024ULL)
 #define USE_THREAD_GUARD_PAGES 1
 
+#define THREAD_SIGNAL_STACK_SIZE (THREAD_STACK_SIZE / 4)
+
 static thread_local std::shared_ptr<DarlingServer::Thread> currentThreadVar = nullptr;
 static thread_local bool returningToThreadTop = false;
 static thread_local ucontext_t backToThreadTopContext;
@@ -343,6 +345,62 @@ void DarlingServer::Thread::doWork() {
 		returningToThreadTop = true;
 
 		_rwlock.lock();
+
+		if (_pendingCall) {
+			if (_pendingCall->number() == Call::Number::SigexcEnter) {
+				auto cont = _continuationCallback;
+
+				microthreadLog.debug() << *this << ": sigexc entering" << microthreadLog.endLog;
+
+				_interruptedForSignal = true;
+
+				_rwlock.unlock();
+
+				++interruptDisableCount;
+				dtape_thread_sigexc_enter(_dtapeThread);
+				if (cont) {
+					cont();
+				}
+				--interruptDisableCount;
+
+				_rwlock.lock();
+
+				_interruptedForSignal = false;
+
+				_continuationCallback = nullptr;
+				_suspended = false;
+				_waitingForReply = false;
+				_activeSyscall = nullptr;
+
+				_savedStack = _stack;
+				_stack = allocateStack(THREAD_SIGNAL_STACK_SIZE);
+
+				_savedStackSize = _stackSize;
+				_stackSize = THREAD_SIGNAL_STACK_SIZE;
+
+				_pendingCall->sendBasicReply(0);
+				_pendingCall = nullptr;
+			} else if (_pendingCall->number() == Call::Number::SigexcExit) {
+				freeStack(_stack, _stackSize);
+
+				_stack = _savedStack;
+				_stackSize = _savedStackSize;
+
+				++interruptDisableCount;
+				dtape_thread_sigexc_exit(_dtapeThread);
+				--interruptDisableCount;
+
+				_pendingCall->sendBasicReply(0);
+				_pendingCall = nullptr;
+
+				microthreadLog.debug() << *this << ": sigexc exiting" << microthreadLog.endLog;
+
+				if (_savedReply) {
+					Server::sharedInstance().sendMessage(std::move(*_savedReply));
+					_savedReply = std::nullopt;
+				}
+			}
+		}
 
 		if (_continuationCallback && _pendingCall) {
 			// we can only have one of the two
@@ -943,4 +1001,14 @@ uint32_t* DarlingServer::Thread::bsdReturnValuePointer() {
 
 void DarlingServer::Thread::logToStream(Log::Stream& stream) const {
 	stream << "[T:" << _tid << "(" << _nstid << ")]";
+};
+
+void DarlingServer::Thread::pushCallReply(Message&& reply) {
+	std::unique_lock lock(_rwlock);
+
+	if (_interruptedForSignal) {
+		_savedReply = std::move(reply);
+	} else {
+		Server::sharedInstance().sendMessage(std::move(reply));
+	}
 };

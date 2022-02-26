@@ -84,6 +84,11 @@ namespace DarlingServer {
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;
+		bool _interruptedForSignal = false;
+		std::optional<Message> _savedReply = std::nullopt;
+
+		void* _savedStack = nullptr;
+		size_t _savedStackSize = 0;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
@@ -198,6 +203,8 @@ namespace DarlingServer {
 		 * @note Only to be used for BSD syscalls and only for the current thread!
 		 */
 		uint32_t* bsdReturnValuePointer();
+
+		void pushCallReply(Message&& reply);
 
 		/**
 		 * @note Only to be used by direct XNU traps! (e.g. Mach IPC, psynch, etc.)

@@ -43,17 +43,16 @@ namespace DarlingServer {
 
 	protected:
 		std::weak_ptr<Thread> _thread;
-		MessageQueue& _replyQueue;
 		Address _replyAddress;
 		dserver_rpc_callhdr_t _header;
 
 		static DarlingServer::Log rpcReplyLog;
 
 	public:
-		Call(MessageQueue& replyQueue, std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader);
+		Call(std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader);
 		virtual ~Call();
 
-		static std::shared_ptr<Call> callFromMessage(Message&& requestMessage, MessageQueue& replyQueue);
+		static std::shared_ptr<Call> callFromMessage(Message&& requestMessage);
 
 		virtual Number number() const = 0;
 		std::shared_ptr<Thread> thread() const;

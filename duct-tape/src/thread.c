@@ -390,6 +390,14 @@ void dtape_thread_release(dtape_thread_t* thread) {
 	thread_deallocate(&thread->xnu_thread);
 };
 
+void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
+	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+};
+
+void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
+	// nothing for now
+};
+
 thread_t current_thread(void) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
 	return &thread->xnu_thread;

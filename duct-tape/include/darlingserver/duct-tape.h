@@ -83,6 +83,8 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
 void dtape_thread_retain(dtape_thread_t* thread);
 void dtape_thread_release(dtape_thread_t* thread);
+void dtape_thread_sigexc_enter(dtape_thread_t* thread);
+void dtape_thread_sigexc_exit(dtape_thread_t* thread);
 
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 void dtape_task_retain(dtape_task_t* task);
