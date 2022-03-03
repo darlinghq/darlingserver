@@ -81,10 +81,24 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 
 	dtape_log_debug("trying to fill kevent for kqchan %p with mqueue %p", kqchan, kqchan->knote.kn_mqueue);
 
+	bool has_events = dtape_kqchan_mach_port_has_events(kqchan);
+
+	dtape_log_debug("has events before process? %s", has_events ? "yes" : "no");
+
 	bool result = (filt_machportprocess(&kqchan->knote, (void*)&reply->kev) & FILTER_ACTIVE) ? true : false;
+
+	dtape_log_debug("had events that were processed? %s", result ? "yes" : "no");
+
+	dtape_log_debug("states matched? %s", (has_events == result) ? "yes" : "no");
+
+	if (!result) {
+		dtape_log_debug("imq_msgcount = %u; imq_messages.ikmq_base = %p; imq_receiver_name = %d", kqchan->knote.kn_mqueue->imq_msgcount, kqchan->knote.kn_mqueue->imq_messages.ikmq_base, kqchan->knote.kn_mqueue->imq_receiver_name);
+	}
+
 	if (kqchan->waiter_read_semaphore) {
 		dtape_semaphore_up(kqchan->waiter_read_semaphore);
 	}
+
 	return result;
 };
 

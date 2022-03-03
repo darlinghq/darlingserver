@@ -646,7 +646,6 @@ ipc_mqueue_override_send(
 	ipc_mqueue_t        mqueue,
 	mach_msg_qos_t      qos_ovr)
 {
-#ifndef __DARLING__
 	boolean_t __unused full_queue_empty = FALSE;
 
 	imq_lock(mqueue);
@@ -680,7 +679,6 @@ ipc_mqueue_override_send(
 		dst_pid = ipc_port_get_receiver_task(port, NULL);
 	}
 #endif
-#endif // __DARLING__
 }
 
 /*
