@@ -654,6 +654,9 @@ void
 host_statistics_init(void)
 {
 	nanoseconds_to_absolutetime((HOST_STATISTICS_TIME_WINDOW * NSEC_PER_SEC), &host_statistics_time_window);
+#ifdef __DARLING__
+	lck_mtx_init(&host_statistics_lck, LCK_GRP_NULL, LCK_ATTR_NULL);
+#endif // __DARLING__
 }
 
 static void

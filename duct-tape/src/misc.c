@@ -144,6 +144,9 @@ void dtape_init(const dtape_hooks_t* hooks) {
 
 	dtape_log_debug("turnstiles_init");
 	turnstiles_init();
+
+	dtape_log_debug("host_statistics_init");
+	host_statistics_init();
 };
 
 void dtape_init_in_thread(void) {
