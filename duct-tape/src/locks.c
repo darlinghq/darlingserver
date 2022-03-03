@@ -1,6 +1,7 @@
 #include <darlingserver/duct-tape/stubs.h>
 #include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/log.h>
 
 #include <kern/locks.h>
 #include <kern/waitq.h>
@@ -67,6 +68,23 @@ void lck_mtx_lock(lck_mtx_t* lock) {
 	thread_t xthread = current_thread();
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
+	if (!thread) {
+		dtape_log_warning("Trying to lock mutex without an active thread!");
+		// if we don't have an active thread, we fall back to using the queue lock (which is a native lock).
+		// note that this means that any microthreads that want to lock the lock will sleep for real!
+		// therefore, callers that try to do this must only lock the lock for short periods
+		while (true) {
+			// FIXME: we really should be using a condvar here; right now, we're just spinning until the owner drops the lock.
+			//        we'd need to implement condvars in libsimple first, though.
+			libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
+			if (lock->dtape_mutex->dtape_owner == 0) {
+				return;
+			}
+			libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
+			__builtin_ia32_pause();
+		}
+	}
+
 	lck_mtx_assert(lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	while (true) {
@@ -92,6 +110,18 @@ boolean_t lck_mtx_try_lock(lck_mtx_t* lock) {
 	thread_t xthread = current_thread();
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
+	if (!thread) {
+		dtape_log_warning("Trying to lock mutex without an active thread!");
+		// see lck_mtx_lock()
+		if (libsimple_lock_try_lock(&lock->dtape_mutex->dtape_queue_lock)) {
+			if (lock->dtape_mutex->dtape_owner == 0) {
+				return TRUE;
+			}
+			libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
+		}
+		return FALSE;
+	}
+
 	lck_mtx_assert(lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	if (lock->dtape_mutex->dtape_owner == 0 || lock->dtape_mutex->dtape_owner == (uintptr_t)xthread) {
@@ -115,6 +145,15 @@ void lck_mtx_lock_spin(lck_mtx_t* lock) {
 };
 
 void lck_mtx_unlock(lck_mtx_t* lock) {
+	thread_t xcurr_thread = current_thread();
+	dtape_thread_t* curr_thread = dtape_thread_for_xnu_thread(xcurr_thread);
+
+	if (!curr_thread) {
+		dtape_log_warning("Trying to unlock mutex without an active thread!");
+		// see lck_mtx_lock()
+		return libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
+	}
+
 	lck_mtx_assert(lock, LCK_MTX_ASSERT_OWNED);
 
 	libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
