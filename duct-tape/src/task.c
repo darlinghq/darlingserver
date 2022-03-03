@@ -138,7 +138,11 @@ void dtape_task_destroy(dtape_task_t* task) {
 
 	semaphore_destroy_all(&task->xnu_task);
 
+	task_lock(&task->xnu_task);
+	task->xnu_task.active = false;
 	ipc_task_disable(&task->xnu_task);
+	task_unlock(&task->xnu_task);
+
 	ipc_task_terminate(&task->xnu_task);
 
 	dtape_vm_map_destroy(task->xnu_task.map);
@@ -171,6 +175,10 @@ void dtape_task_retain(dtape_task_t* task) {
 
 void dtape_task_release(dtape_task_t* task) {
 	task_deallocate(&task->xnu_task);
+};
+
+void dtape_task_dying(dtape_task_t* task) {
+	// nothing for now
 };
 
 void task_deallocate(task_t task) {

@@ -138,6 +138,12 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 
 	lck_mtx_destroy(&thread->xnu_thread.mutex, LCK_GRP_NULL);
 
+	// remove this thread from the task's thread list
+	task_lock(thread->xnu_thread.task);
+	queue_remove(&thread->xnu_thread.task->threads, &thread->xnu_thread, thread_t, task_threads);
+	thread->xnu_thread.task->thread_count--;
+	task_unlock(thread->xnu_thread.task);
+
 	task_deallocate(thread->xnu_thread.task);
 
 	free(thread);
@@ -396,6 +402,14 @@ void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 
 void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 	// nothing for now
+};
+
+void dtape_thread_dying(dtape_thread_t* thread) {
+	thread_lock(&thread->xnu_thread);
+	thread->xnu_thread.state &= ~TH_UNINT;
+	thread->xnu_thread.state |= TH_TERMINATE;
+	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+	thread_unlock(&thread->xnu_thread);
 };
 
 thread_t current_thread(void) {

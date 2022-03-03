@@ -112,6 +112,8 @@ DarlingServer::Process::~Process() {
 		_notifyListeningKqchannels(NOTE_EXIT, 0);
 	}
 
+	dtape_task_dying(_dtapeTask);
+
 	// schedule the duct-taped task to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
 	// also destroy the fork-wait semaphore here

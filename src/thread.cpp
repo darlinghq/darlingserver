@@ -176,6 +176,14 @@ void DarlingServer::Thread::registerWithProcess() {
 };
 
 DarlingServer::Thread::~Thread() noexcept(false) {
+	threadLog.info() << *this << ": thread being destroyed" << threadLog.endLog;
+
+	_rwlock.lock();
+	_terminating = true;
+	_rwlock.unlock();
+
+	dtape_thread_dying(_dtapeThread);
+
 	freeStack(_stack, _stackSize);
 
 	// schedule the duct-taped thread to be destroyed
