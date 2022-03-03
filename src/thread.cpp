@@ -309,6 +309,13 @@ void DarlingServer::Thread::doWork() {
 
 	_rwlock.lock();
 
+	if (_deferralState != DeferralState::NotDeferred) {
+		microthreadLog.debug() << _tid << "(" << _nstid << "): execution was deferred" << microthreadLog.endLog;
+		_deferralState = DeferralState::DeferredPending;
+		_rwlock.unlock();
+		return;
+	}
+
 	if (_running) {
 		// this is probably an error
 		microthreadLog.warning() << _tid << "(" << _nstid << "): attempt to re-run already running microthread on another thread" << microthreadLog.endLog;
@@ -319,13 +326,6 @@ void DarlingServer::Thread::doWork() {
 	if (_terminating) {
 		_rwlock.unlock();
 		goto doneWorking;
-	}
-
-	if (_deferralState != DeferralState::NotDeferred) {
-		microthreadLog.debug() << _tid << "(" << _nstid << "): execution was deferred" << microthreadLog.endLog;
-		_deferralState = DeferralState::DeferredPending;
-		_rwlock.unlock();
-		return;
 	}
 
 	_running = true;
@@ -575,7 +575,12 @@ void DarlingServer::Thread::impersonate(std::shared_ptr<Thread> thread) {
 		// prevent the thread from running while we're impersonating it
 		// FIXME: this may lead to blocking natively while we're on a microthread.
 		//        we would prefer to block using duct-taped facilities instead.
-		thread->defer(true);
+		{
+			std::unique_lock lock(thread->_rwlock);
+			thread->_deferLocked(true, lock);
+			thread->_running = true;
+		}
+		thread->_runningCondvar.notify_all();
 	}
 
 	{
@@ -585,7 +590,12 @@ void DarlingServer::Thread::impersonate(std::shared_ptr<Thread> thread) {
 	}
 
 	if (oldThread) {
-		oldThread->undefer();
+		{
+			std::unique_lock lock(oldThread->_rwlock);
+			oldThread->_running = false;
+			oldThread->_undeferLocked(lock);
+		}
+		oldThread->_runningCondvar.notify_all();
 	}
 };
 
@@ -962,9 +972,7 @@ void DarlingServer::Thread::waitUntilNotRunning() {
 	});
 };
 
-void DarlingServer::Thread::defer(bool wait) {
-	std::unique_lock lock(_rwlock);
-
+void DarlingServer::Thread::_deferLocked(bool wait, std::unique_lock<std::shared_mutex>& lock) {
 	if (_deferralState == DeferralState::NotDeferred) {
 		_deferralState = DeferralState::DeferredNotPending;
 	}
@@ -976,18 +984,25 @@ void DarlingServer::Thread::defer(bool wait) {
 	}
 };
 
-void DarlingServer::Thread::undefer() {
+void DarlingServer::Thread::defer(bool wait) {
+	std::unique_lock lock(_rwlock);
+	_deferLocked(wait, lock);
+};
+
+void DarlingServer::Thread::_undeferLocked(std::unique_lock<std::shared_mutex>& lock) {
 	DeferralState previousDeferralState;
 
-	{
-		std::unique_lock lock(_rwlock);
-		previousDeferralState = _deferralState;
-		_deferralState = DeferralState::NotDeferred;
-	}
+	previousDeferralState = _deferralState;
+	_deferralState = DeferralState::NotDeferred;
 
 	if (previousDeferralState == DeferralState::DeferredPending) {
 		Server::sharedInstance().scheduleThread(shared_from_this());
 	}
+};
+
+void DarlingServer::Thread::undefer() {
+	std::unique_lock lock(_rwlock);
+	_undeferLocked(lock);
 };
 
 uint32_t* DarlingServer::Thread::bsdReturnValuePointer() {
