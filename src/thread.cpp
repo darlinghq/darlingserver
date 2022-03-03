@@ -31,6 +31,10 @@
 #include <darlingserver/duct-tape.h>
 #include <atomic>
 
+#if DSERVER_ASAN
+	#include <sanitizer/asan_interface.h>
+#endif
+
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
 #define USE_THREAD_GUARD_PAGES 1
@@ -53,6 +57,12 @@ static thread_local std::shared_ptr<DarlingServer::Call> currentCall = nullptr;
  * This is primarily of use for debugging duct-tape code and ensuring certain assumptions made in the duct-tape code hold true.
  */
 static thread_local uint64_t interruptDisableCount = 0;
+
+#if DSERVER_ASAN
+	static thread_local void* asanOldFakeStack = nullptr;
+	static thread_local const void* asanOldStackBottom = nullptr;
+	static thread_local size_t asanOldStackSize = 0;
+#endif
 
 static DarlingServer::Log threadLog("thread");
 
@@ -282,6 +292,11 @@ static const auto microthreadLog = DarlingServer::Log("microthread");
 
 // this runs in the context of the microthread (i.e. with the microthread's stack active)
 void DarlingServer::Thread::microthreadWorker() {
+#if DSERVER_ASAN
+	__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
+	asanOldFakeStack = nullptr;
+#endif
+
 	currentContinuation = nullptr;
 	currentCall = currentThreadVar->pendingCall();
 	currentThreadVar->setPendingCall(nullptr);
@@ -290,16 +305,35 @@ void DarlingServer::Thread::microthreadWorker() {
 	}
 	currentCall->processCall();
 	currentCall = nullptr;
+
+#if DSERVER_ASAN
+	// we're exiting normally, so we might not re-enter this microthread; tell ASAN to drop the fake stack
+	__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+#endif
+
 	setcontext(&backToThreadTopContext);
+	__builtin_unreachable();
 };
 
 void DarlingServer::Thread::microthreadContinuation() {
+#if DSERVER_ASAN
+	__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
+	asanOldFakeStack = nullptr;
+#endif
+
 	currentCall = nullptr;
 	currentContinuation = currentThreadVar->_continuationCallback;
 	currentThreadVar->_continuationCallback = nullptr;
 	currentContinuation();
 	currentContinuation = nullptr;
+
+#if DSERVER_ASAN
+	// see microthreadWorker()
+	__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+#endif
+
 	setcontext(&backToThreadTopContext);
+	__builtin_unreachable();
 };
 
 void DarlingServer::Thread::doWork() {
@@ -342,6 +376,12 @@ void DarlingServer::Thread::doWork() {
 	if (returningToThreadTop) {
 		// someone jumped back to the top of the microthread
 		// (that means either the microthread has been suspended or it has finished)
+
+#if DSERVER_ASAN
+		__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
+		asanOldFakeStack = nullptr;
+#endif
+
 		//microthreadLog.debug() << _tid << "(" << _nstid << "): microthread returned to top" << microthreadLog.endLog;
 		goto doneWorking;
 	} else {
@@ -381,8 +421,10 @@ void DarlingServer::Thread::doWork() {
 				_savedStackSize = _stackSize;
 				_stackSize = THREAD_SIGNAL_STACK_SIZE;
 
+				_rwlock.unlock();
 				_pendingCall->sendBasicReply(0);
 				_pendingCall = nullptr;
+				_rwlock.lock();
 			} else if (_pendingCall->number() == Call::Number::SigexcExit) {
 				freeStack(_stack, _stackSize);
 
@@ -393,8 +435,10 @@ void DarlingServer::Thread::doWork() {
 				dtape_thread_sigexc_exit(_dtapeThread);
 				--interruptDisableCount;
 
+				_rwlock.unlock();
 				_pendingCall->sendBasicReply(0);
 				_pendingCall = nullptr;
+				_rwlock.lock();
 
 				microthreadLog.debug() << *this << ": sigexc exiting" << microthreadLog.endLog;
 
@@ -418,6 +462,17 @@ void DarlingServer::Thread::doWork() {
 			_suspended = false;
 			_resumeContext.uc_link = &backToThreadTopContext;
 			_rwlock.unlock();
+
+#if DSERVER_ASAN
+			if (_continuationCallback) {
+				// only un-poison the stack if we're entering a continuation;
+				// if we're resuming from a previous suspension, we're not creating a new set of stack frames,
+				// we're reusing the same ones (and we want to detect errors in them).
+				__asan_unpoison_memory_region(_stack, _stackSize);
+			}
+			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack, _stackSize);
+#endif
+
 			setcontext(&_resumeContext);
 		} else {
 			if (!_pendingCall) {
@@ -434,6 +489,11 @@ void DarlingServer::Thread::doWork() {
 			newContext.uc_stack.ss_flags = 0;
 			newContext.uc_link = &backToThreadTopContext;
 			makecontext(&newContext, microthreadWorker, 0);
+
+#if DSERVER_ASAN
+			__asan_unpoison_memory_region(_stack, _stackSize);
+			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack, _stackSize);
+#endif
 
 			setcontext(&newContext);
 		}
@@ -498,10 +558,22 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 		}
 		// jump back to the top of the microthread
 		_rwlock.unlock();
+
+#if DSERVER_ASAN
+		// if we have a continuation, we don't expect to come back here
+		__sanitizer_start_switch_fiber((continuationCallback) ? nullptr : &asanOldFakeStack, asanOldStackBottom, asanOldStackSize);
+#endif
+
 		setcontext(&backToThreadTopContext);
+		__builtin_unreachable();
 	} else {
 		// we've been resumed
 		_rwlock.unlock();
+
+#if DSERVER_ASAN
+		__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
+		asanOldFakeStack = nullptr;
+#endif
 	}
 };
 
