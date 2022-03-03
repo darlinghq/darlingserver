@@ -285,6 +285,9 @@ void DarlingServer::Thread::microthreadWorker() {
 	currentContinuation = nullptr;
 	currentCall = currentThreadVar->pendingCall();
 	currentThreadVar->setPendingCall(nullptr);
+	if (currentCall->isXNUTrap()) {
+		currentThreadVar->setActiveSyscall(currentCall);
+	}
 	currentCall->processCall();
 	currentCall = nullptr;
 	setcontext(&backToThreadTopContext);

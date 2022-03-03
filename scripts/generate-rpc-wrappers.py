@@ -730,7 +730,7 @@ for call in calls:
 	fd_count_in_reply = 0
 
 	internal_header.write(textwrap.indent(textwrap.dedent("""\
-		class Call::{1}: public Call {{ \\
+		class Call::{1}: public Call, public std::enable_shared_from_this<Call::{1}> {{ \\
 			friend class Call; \\
 		private: \\
 			{2}
@@ -867,17 +867,11 @@ for call in calls:
 
 	if (flags & XNU_TRAP_BSD) != 0:
 		internal_header.write("\t\tuint32_t* retvalPointer = nullptr; \\\n")
-
-	internal_header.write("\t\t{ \\\n")
-	internal_header.write("\t\t\tauto thread = _thread.lock(); \\\n")
-	internal_header.write("\t\t\tif (thread) { \\\n")
-	internal_header.write("\t\t\t\tthread->setActiveSyscall(shared_from_this()); \\\n")
-	internal_header.write("\t\t\t} \\\n")
-
-	if (flags & XNU_TRAP_BSD) != 0:
-		internal_header.write("\t\t\tretvalPointer = thread->bsdReturnValuePointer(); \\\n")
-
-	internal_header.write("\t\t}; \\\n")
+		internal_header.write("\t\t{ \\\n")
+		internal_header.write("\t\t\tif (auto thread = _thread.lock()) { \\\n")
+		internal_header.write("\t\t\t\tretvalPointer = thread->bsdReturnValuePointer(); \\\n")
+		internal_header.write("\t\t\t} \\\n")
+		internal_header.write("\t\t}; \\\n")
 
 	internal_header.write("\t\tThread::syscallReturn(dtape_{0}(".format(call_name))
 

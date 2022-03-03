@@ -34,7 +34,7 @@
 namespace DarlingServer {
 	class CallWithReply;
 
-	class Call: public std::enable_shared_from_this<Call> {
+	class Call {
 	public:
 		enum class Number {
 			Invalid = dserver_callnum_invalid,
