@@ -131,18 +131,21 @@ add_compile_options(
 	-ffunction-sections
 	-fdata-sections
 	-Wno-incompatible-library-redeclaration
-
-	# DEBUGGING
-	#-fsanitize=address
-	#-fno-omit-frame-pointer
-	#-g
-	#-Og
 )
 
-add_link_options(
-	# DEBUGGING
-	#-fsanitize=address
-)
+if (DSERVER_ASAN OR DSERVER_UBSAN)
+	add_compile_options(
+		-fsanitize=${dserver_sanitizers}
+		-fsanitize-recover=all
+		-fno-omit-frame-pointer
+		-g
+		-Og
+	)
+	add_link_options(
+		-fsanitize=${dserver_sanitizers}
+		-fsanitize-recover=all
+	)
+endif()
 
 set(MIG_USER_SOURCE_SUFFIX "User.c")
 set(MIG_SERVER_SOURCE_SUFFIX "Server.c")

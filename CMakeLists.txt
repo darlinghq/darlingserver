@@ -2,6 +2,43 @@ project(darlingserver)
 
 cmake_minimum_required(VERSION 3.10)
 
+set(DSERVER_ASAN OFF)
+set(DSERVER_UBSAN OFF)
+
+if (DSERVER_ASAN)
+	add_compile_definitions(
+		DSERVER_ASAN=1
+	)
+else()
+	add_compile_definitions(
+		DSERVER_ASAN=0
+	)
+endif()
+
+if (DSERVER_UBSAN)
+	add_compile_definitions(
+		DSERVER_UBSAN=1
+	)
+else()
+	add_compile_definitions(
+		DSERVER_UBSAN=0
+	)
+endif()
+
+set(dserver_sanitizers "")
+if (DSERVER_ASAN)
+	if (NOT (dserver_sanitizers STREQUAL ""))
+		set(dserver_sanitizers "${dserver_sanitizers},")
+	endif()
+	set(dserver_sanitizers "${dserver_sanitizers}address")
+endif()
+if (DSERVER_UBSAN)
+	if (NOT (dserver_sanitizers STREQUAL ""))
+		set(dserver_sanitizers "${dserver_sanitizers},")
+	endif()
+	set(dserver_sanitizers "${dserver_sanitizers}undefined")
+endif()
+
 add_subdirectory(duct-tape)
 
 set(DARLINGSERVER_INIT_PROCESS "/sbin/launchd" CACHE STRING "The init process darlingserver should execute (default is \"/sbin/launchd\")")
@@ -62,20 +99,25 @@ target_link_libraries(darlingserver
 target_compile_options(darlingserver PRIVATE
 	-pthread
 	-std=c++17
-
-	# DEBUGGING
-	#-fsanitize=address
-	#-fno-omit-frame-pointer
-	#-g
-	#-Og
 )
 target_link_options(darlingserver PRIVATE
 	-pthread
 	-Wl,--gc-sections
-
-	# DEBUGGING
-	#-fsanitize=address
 )
+
+if (DSERVER_ASAN OR DSERVER_UBSAN)
+	target_compile_options(darlingserver PRIVATE
+		-fsanitize=${dserver_sanitizers}
+		-fsanitize-recover=all
+		-fno-omit-frame-pointer
+		-g
+		-Og
+	)
+	target_link_options(darlingserver PRIVATE
+		-fsanitize=${dserver_sanitizers}
+		-fsanitize-recover=all
+	)
+endif()
 
 install(TARGETS darlingserver DESTINATION bin)
 
