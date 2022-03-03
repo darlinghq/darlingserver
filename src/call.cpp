@@ -660,4 +660,78 @@ void DarlingServer::Call::SigexcExit::processCall() {
 	throw std::runtime_error("sigexc_exit should be handled by the thread");
 };
 
+void DarlingServer::Call::ConsoleOpen::processCall() {
+	static Log consoleLog("console");
+
+	int code = 0;
+	int sockets[2] = { -1, -1 };
+
+	// we don't really need bidirectional communication, so a pipe would suffice,
+	// except that when you set O_NONBLOCK on one side of a pipe, it is set for both.
+
+	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) < 0) {
+		int err = errno;
+		callLog.warning() << __PRETTY_FUNCTION__ << ": socketpair failed with " << err << callLog.endLog;
+
+		// just report EMFILE for the peer
+		code = EMFILE;
+	} else {
+		// make our side non-blocking
+		int flags = fcntl(sockets[0], F_GETFL);
+		if (flags < 0) {
+			code = -errno;
+		} else {
+			flags |= O_NONBLOCK;
+			if (fcntl(sockets[0], F_SETFL, flags) < 0) {
+				code = -errno;
+			} else {
+				// now monitor it
+				auto fd = std::make_shared<FD>(sockets[0]);
+				std::weak_ptr<Process> weakProcess;
+
+				if (auto thread = _thread.lock()) {
+					if (auto process = thread->process()) {
+						weakProcess = process;
+					}
+				}
+
+				Server::sharedInstance().addMonitor(std::make_shared<Monitor>(fd, Monitor::Event::Readable | Monitor::Event::HangUp, false, false, [fd, weakProcess](std::shared_ptr<Monitor> monitor, Monitor::Event events) {
+					auto proc = weakProcess.lock();
+
+					if (!proc || static_cast<uint64_t>(events & Monitor::Event::HangUp) != 0) {
+						Server::sharedInstance().removeMonitor(monitor);
+						return;
+					}
+
+					if (static_cast<uint64_t>(events & Monitor::Event::Readable) != 0) {
+						std::stringstream data;
+						while (true) {
+							char buf[128];
+							auto count = read(fd->fd(), buf, sizeof(buf) - 1);
+							if (count <= 0) {
+								break;
+							}
+							buf[count] = '\0';
+							data << buf;
+						}
+						consoleLog.info() << *proc << ": " << data.rdbuf();
+					}
+				}));
+			}
+		}
+	}
+
+	if (code != 0) {
+		if (sockets[0] >= 0) {
+			close(sockets[0]);
+			sockets[0] = -1;
+		}
+		if (sockets[1] >= 0) {
+			close(sockets[1]);
+			sockets[1] = -1;
+		}
+	}
+	_sendReply(code, sockets[1]);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;

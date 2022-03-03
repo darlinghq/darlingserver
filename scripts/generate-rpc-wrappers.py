@@ -136,6 +136,10 @@ calls = [
 
 	('sigexc_exit', [], []),
 
+	('console_open', [], [
+		('console', '@fd'),
+	]),
+
 	#
 	# kqueue channels
 	#
