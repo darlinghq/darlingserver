@@ -433,10 +433,18 @@ int main(int argc, char** argv) {
 	// Mount overlay onto our prefix
 	if (mount("overlay", prefix, "overlay", 0, opts) != 0)
 	{
+		if (errno == EINVAL) {
+			opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir";
+			sprintf(opts, opts_fmt, LIBEXEC_PATH, prefix, prefix);
+			if (mount("overlay", prefix, "overlay", 0, opts) == 0) {
+				goto mount_ok;
+			}
+		}
 		fprintf(stderr, "Cannot mount overlay: %s\n", strerror(errno));
 		exit(1);
 	}
 
+mount_ok:
 	free(opts);
 
 	// This is executed once at prefix creation
