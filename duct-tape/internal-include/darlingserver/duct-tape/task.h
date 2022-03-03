@@ -18,6 +18,9 @@ struct dtape_task {
 
 __attribute__((always_inline))
 static dtape_task_t* dtape_task_for_xnu_task(task_t xnu_task) {
+	if (!xnu_task) {
+		return NULL;
+	}
 	return (dtape_task_t*)((char*)xnu_task - offsetof(dtape_task_t, xnu_task));
 };
 

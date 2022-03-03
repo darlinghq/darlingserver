@@ -42,11 +42,17 @@ struct dtape_thread {
 
 __attribute__((always_inline))
 static dtape_thread_t* dtape_thread_for_xnu_thread(thread_t xnu_thread) {
+	if (!xnu_thread) {
+		return NULL;
+	}
 	return (dtape_thread_t*)((char*)xnu_thread - offsetof(dtape_thread_t, xnu_thread));
 };
 
 __attribute__((always_inline))
 static dtape_task_t* dtape_task_for_thread(dtape_thread_t* thread) {
+	if (!thread) {
+		return NULL;
+	}
 	return dtape_task_for_xnu_task(thread->xnu_thread.task);
 };
 

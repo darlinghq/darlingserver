@@ -414,7 +414,7 @@ void dtape_thread_dying(dtape_thread_t* thread) {
 
 thread_t current_thread(void) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
-	return &thread->xnu_thread;
+	return thread ? &thread->xnu_thread : NULL;
 };
 
 void (thread_reference)(thread_t thread) {
