@@ -342,7 +342,9 @@ DarlingServer::Server::~Server() {
 };
 
 void DarlingServer::Server::start() {
+	Thread::interruptDisable();
 	dtape_init(&DTapeHooks::dtape_hooks);
+	Thread::interruptEnable();
 
 	// force the kernel process to be created now
 	Process::kernelProcess();

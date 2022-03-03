@@ -95,9 +95,6 @@ namespace DarlingServer {
 
 		friend struct ::DTapeHooks;
 
-		static void interruptDisable();
-		static void interruptEnable();
-
 		Message _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
@@ -230,6 +227,9 @@ namespace DarlingServer {
 		 * Runs the given function on a duct-taped kernel microthread and waits for it to return.
 		 */
 		static void kernelSync(std::function<void()> fn);
+
+		static void interruptDisable();
+		static void interruptEnable();
 
 		void logToStream(Log::Stream& stream) const;
 	};

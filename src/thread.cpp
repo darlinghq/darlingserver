@@ -595,18 +595,10 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::impersonatingThrea
 };
 
 void DarlingServer::Thread::interruptDisable() {
-	if (!currentThreadVar) {
-		throw std::runtime_error("interruptDisable() called with no current thread");
-	}
-
 	++interruptDisableCount;
 };
 
 void DarlingServer::Thread::interruptEnable() {
-	if (!currentThreadVar) {
-		throw std::runtime_error("interruptEnable() called with no current thread");
-	}
-
 	if (interruptDisableCount-- == 0) {
 		throw std::runtime_error("interruptEnable() called when already enabled");
 	}
