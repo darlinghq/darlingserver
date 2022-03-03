@@ -30,6 +30,8 @@
 #include <chrono>
 #include <optional>
 
+#include <darlingserver/config.hpp>
+
 namespace DarlingServer {
 	template<class WorkItem>
 	class WorkQueue {
@@ -43,19 +45,21 @@ namespace DarlingServer {
 		bool _dying = false;
 
 		static constexpr unsigned int minimumThreads() {
-			return 2;
+			return (Config::singleThreadedWorkQueue) ? 1 : 2;
 		};
 
 		static unsigned int maximumThreads() {
-			unsigned int hw = std::thread::hardware_concurrency();
-			if (hw > 0 && hw > minimumThreads()) {
-				// we used to take the main thread into account by doing `hw - 1`,
-				// but we no longer do that because the main thread is going to be sleeping most of the time.
-				// therefore, it makes sense to create as many worker threads as there are CPUs/cores.
-				return hw;
-			} else {
-				return minimumThreads();
+			if (!Config::singleThreadedWorkQueue) {
+				unsigned int hw = std::thread::hardware_concurrency();
+				if (hw > 0 && hw > minimumThreads()) {
+					// we used to take the main thread into account by doing `hw - 1`,
+					// but we no longer do that because the main thread is going to be sleeping most of the time.
+					// therefore, it makes sense to create as many worker threads as there are CPUs/cores.
+					return hw;
+				}
 			}
+
+			return minimumThreads();
 		};
 
 		static constexpr std::chrono::seconds temporaryWorkerWaitPeriod() {
