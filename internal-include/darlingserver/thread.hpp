@@ -191,7 +191,7 @@ namespace DarlingServer {
 
 		void setPendingCallOverride(bool pendingCallOverride);
 
-		uintptr_t allocatePages(size_t pageCount, int protection);
+		uintptr_t allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite);
 		void freePages(uintptr_t address, size_t pageCount);
 
 		void defer(bool wait = false);

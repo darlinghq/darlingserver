@@ -300,7 +300,7 @@ static kern_return_t vm_map_copyout_kernel_buffer(vm_map_t map, vm_map_address_t
 				return KERN_RESOURCE_SHORTAGE;
 			}
 		} else if (map == current_map()) {
-			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (copy_size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
+			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (copy_size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, 0, 0);
 			if (*addr == 0) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
@@ -351,6 +351,10 @@ kern_return_t vm_map_copyout_size(vm_map_t dst_map, vm_map_address_t* dst_addr, 
 	return vm_map_copyout_kernel_buffer(dst_map, dst_addr, copy, copy_size, FALSE, TRUE);
 };
 
+kern_return_t vm_map_copyout(vm_map_t dst_map, vm_map_address_t* dst_addr, vm_map_copy_t copy) {
+	return vm_map_copyout_size(dst_map, dst_addr, copy, copy ? copy->size : 0);
+};
+
 boolean_t vm_map_copy_validate_size(vm_map_t dst_map, vm_map_copy_t copy, vm_map_size_t* size) {
 	if (copy == VM_MAP_COPY_NULL) {
 		return FALSE;
@@ -384,7 +388,7 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
 		return kr;
 	} else if (map == current_map()) {
 		// mach_vm_allocate_kernel allocates with default protection
-		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
+		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, 0, 0);
 		if (tmp == 0) {
 			return KERN_RESOURCE_SHORTAGE;
 		}
@@ -504,7 +508,71 @@ kern_return_t mach_vm_region_recurse(vm_map_t map, mach_vm_address_t* address, m
 };
 
 kern_return_t mach_vm_remap_external(vm_map_t target_map, mach_vm_offset_t* address, mach_vm_size_t size, mach_vm_offset_t mask, int flags, vm_map_t src_map, mach_vm_offset_t memory_address, boolean_t copy, vm_prot_t* cur_protection, vm_prot_t* max_protection, vm_inherit_t inheritance) {
-	dtape_stub_unsafe();
+	kern_return_t kr = KERN_SUCCESS;
+	vm_map_copy_t mem_copy = NULL;
+	vm_map_address_t addr = 0;
+	bool dealloc = false;
+
+	if (!copy) {
+		dtape_stub_unsafe("Can't share memory yet");
+	}
+
+	if (target_map != current_map()) {
+		dtape_stub_unsafe("Can't copy into non-current map yet");
+	}
+
+	kr = vm_map_copyin(src_map, memory_address, size, FALSE, &mem_copy);
+	if (kr != KERN_SUCCESS) {
+		goto out;
+	}
+
+	dtape_memory_flags_t memflags = 0;
+	if (!(flags & VM_FLAGS_ANYWHERE)) {
+		memflags |= dtape_memory_flag_fixed;
+	}
+	if (flags & VM_FLAGS_OVERWRITE) {
+		memflags |= dtape_memory_flag_overwrite;
+	}
+
+	int prot = PROT_READ | PROT_WRITE;
+
+	// TODO: properly determine when to make memory executable by looking at the protection of the source region;
+	//       for now, we just always make it executable for compatibility with libobjc's trampolines
+	prot |= PROT_EXEC;
+
+	addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, size, prot, (flags & VM_FLAGS_ANYWHERE) ? 0 : *address, memflags);
+	if (!addr) {
+		kr = KERN_RESOURCE_SHORTAGE;
+		goto out;
+	}
+
+	dealloc = true;
+
+	kr = vm_map_copy_overwrite(target_map, addr, mem_copy, mem_copy->size, TRUE);
+	if (kr != KERN_SUCCESS) {
+		goto out;
+	}
+
+	dealloc = false;
+
+	// a successful copy-out consumes the copy
+	mem_copy = NULL;
+
+	dtape_stub_safe("Determine correct protections for copied memory");
+	*max_protection = VM_PROT_ALL;
+	// LLDB doesn't like it when we tell it that memory is executable;
+	// so don't tell it that it's executable, even if it is
+	*cur_protection = VM_PROT_READ | VM_PROT_WRITE;
+	*address = addr;
+
+out:
+	if (mem_copy) {
+		vm_map_copy_discard(mem_copy);
+	}
+	if (dealloc) {
+		dtape_hooks->thread_free_pages(dtape_thread_for_xnu_thread(current_thread())->context, addr, size);
+	}
+	return kr;
 };
 
 kern_return_t mach_vm_remap_new_external(vm_map_t target_map, mach_vm_offset_t* address, mach_vm_size_t size, mach_vm_offset_t mask, int flags, mach_port_t src_tport, mach_vm_offset_t memory_address, boolean_t copy, vm_prot_t* cur_protection, vm_prot_t* max_protection, vm_inherit_t inheritance) {

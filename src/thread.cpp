@@ -1020,9 +1020,15 @@ int DarlingServer::Thread::_munmap(uintptr_t address, size_t length, int& outErr
 	return reply->return_value;
 };
 
-uintptr_t DarlingServer::Thread::allocatePages(size_t pageCount, int protection) {
+uintptr_t DarlingServer::Thread::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
 	int err = 0;
-	auto result = _mmap(0, pageCount * sysconf(_SC_PAGESIZE), protection, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, err);
+	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	if (fixed && overwrite) {
+		flags |= MAP_FIXED;
+	} else if (fixed) {
+		flags |= MAP_FIXED_NOREPLACE;
+	}
+	auto result = _mmap(addressHint, pageCount * sysconf(_SC_PAGESIZE), protection, flags, -1, 0, err);
 	if (result == (uintptr_t)MAP_FAILED) {
 		throw std::system_error(err, std::generic_category(), "S2C mmap call failed");
 	}

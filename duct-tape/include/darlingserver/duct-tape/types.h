@@ -32,6 +32,12 @@ typedef struct dtape_memory_info {
 	uint64_t resident_size;
 } dtape_memory_info_t;
 
+typedef enum dtape_memory_flags {
+	dtape_memory_flag_none = 0,
+	dtape_memory_flag_fixed = 1ULL << 0,
+	dtape_memory_flag_overwrite = 1ULL << 1,
+} dtape_memory_flags_t;
+
 #ifdef __cplusplus
 };
 #endif

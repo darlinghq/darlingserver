@@ -156,9 +156,9 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Thread*>(thread_context)->setPendingCallOverride(pending_call_override);
 	};
 
-	static uintptr_t dtape_hook_thread_allocate_pages(void* thread_context, size_t page_count, int protection) {
+	static uintptr_t dtape_hook_thread_allocate_pages(void* thread_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags) {
 		try {
-			return static_cast<DarlingServer::Thread*>(thread_context)->allocatePages(page_count, protection);
+			return static_cast<DarlingServer::Thread*>(thread_context)->allocatePages(page_count, protection, address_hint, flags & dtape_memory_flag_fixed, flags & dtape_memory_flag_overwrite);
 		} catch (std::system_error e) {
 			return 0;
 		}

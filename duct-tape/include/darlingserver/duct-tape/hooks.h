@@ -32,7 +32,7 @@ typedef dtape_thread_t* (*dtape_hook_thread_create_kernel_f)(void);
 typedef void (*dtape_hook_thread_setup_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
 typedef void (*dtape_hook_thread_set_pending_signal_f)(void* thread_context, int pending_signal);
 typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_context, bool pending_call_override);
-typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection);
+typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
 typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t address, size_t page_count);
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
 
