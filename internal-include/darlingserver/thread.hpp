@@ -72,12 +72,11 @@ namespace DarlingServer {
 		std::function<void()> _continuationCallback = nullptr;
 		bool _running = false;
 		bool _terminating = false;
-		std::shared_ptr<Call> _activeSyscall = nullptr;
+		std::shared_ptr<Call> _activeCall = nullptr;
 		std::shared_ptr<Thread> _impersonating = nullptr;
 		int _pendingSignal = 0;
 		bool _processingSignal = false;
 		bool _pendingCallOverride = false;
-		bool _waitingForReply = false;
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
 		dtape_semaphore_t* _s2cReplySempahore = nullptr;
 		std::optional<Message> _s2cReply = std::nullopt;
@@ -86,7 +85,6 @@ namespace DarlingServer {
 		uint32_t _bsdReturnValue = 0;
 		bool _interruptedForSignal = false;
 		std::optional<Message> _savedReply = std::nullopt;
-
 		void* _savedStack = nullptr;
 		size_t _savedStackSize = 0;
 
@@ -102,6 +100,8 @@ namespace DarlingServer {
 
 		void _deferLocked(bool wait, std::unique_lock<std::shared_mutex>& lock);
 		void _undeferLocked(std::unique_lock<std::shared_mutex>& lock);
+
+		void _deactivateCallLocked(std::shared_ptr<Call> expectedCall);
 
 	public:
 		using ID = pid_t;
@@ -125,11 +125,11 @@ namespace DarlingServer {
 		std::shared_ptr<Call> pendingCall() const;
 		void setPendingCall(std::shared_ptr<Call> newPendingCall);
 
-		std::shared_ptr<Call> activeSyscall() const;
-		void setActiveSyscall(std::shared_ptr<Call> activeSyscall);
+		std::shared_ptr<Call> activeCall() const;
+		void makePendingCallActive();
+		void deactivateCall(std::shared_ptr<Call> expectedCall);
 
 		bool waitingForReply() const;
-		void setWaitingForReply(bool waitingForReply);
 
 		/**
 		 * The TID of this Thread as seen from darlingserver's namespace.
@@ -204,7 +204,7 @@ namespace DarlingServer {
 		 */
 		uint32_t* bsdReturnValuePointer();
 
-		void pushCallReply(Message&& reply);
+		void pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply);
 
 		/**
 		 * @note Only to be used by direct XNU traps! (e.g. Mach IPC, psynch, etc.)

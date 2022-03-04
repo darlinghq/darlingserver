@@ -112,7 +112,6 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	#undef CALL_CASE
 
 	thread->setPendingCall(result);
-	thread->setWaitingForReply(true);
 
 	return result;
 };

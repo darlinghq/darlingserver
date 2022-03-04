@@ -46,7 +46,6 @@ static thread_local bool returningToThreadTop = false;
 static thread_local ucontext_t backToThreadTopContext;
 static thread_local libsimple_lock_t* unlockMeWhenSuspending = nullptr;
 static thread_local std::function<void()> currentContinuation = nullptr;
-static thread_local std::shared_ptr<DarlingServer::Call> currentCall = nullptr;
 
 /**
  * Our microthreads use cooperative multitasking, so we don't really use interrupts per-se.
@@ -249,6 +248,29 @@ void DarlingServer::Thread::setPendingCall(std::shared_ptr<Call> newPendingCall)
 	_pendingCall = newPendingCall;
 };
 
+std::shared_ptr<DarlingServer::Call> DarlingServer::Thread::activeCall() const {
+	std::shared_lock lock(_rwlock);
+	return _activeCall;
+};
+
+void DarlingServer::Thread::makePendingCallActive() {
+	std::unique_lock lock(_rwlock);
+	_activeCall = _pendingCall;
+	_pendingCall = nullptr;
+};
+
+void DarlingServer::Thread::_deactivateCallLocked(std::shared_ptr<Call> expectedCall) {
+	if (_activeCall.get() != expectedCall.get()) {
+		throw std::runtime_error("Upon deactivating the active call found active call != expected call");
+	}
+	_activeCall = nullptr;
+};
+
+void DarlingServer::Thread::deactivateCall(std::shared_ptr<Call> expectedCall) {
+	std::unique_lock lock(_rwlock);
+	_deactivateCallLocked(expectedCall);
+};
+
 DarlingServer::Address DarlingServer::Thread::address() const {
 	std::shared_lock lock(_rwlock);
 	return _address;
@@ -263,27 +285,9 @@ void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t 
 	dtape_thread_set_handles(_dtapeThread, pthreadHandle, dispatchQueueAddress);
 };
 
-std::shared_ptr<DarlingServer::Call> DarlingServer::Thread::activeSyscall() const {
-	std::shared_lock lock(_rwlock);
-	return _activeSyscall;
-};
-
-void DarlingServer::Thread::setActiveSyscall(std::shared_ptr<DarlingServer::Call> activeSyscall) {
-	std::unique_lock lock(_rwlock);
-	if (activeSyscall && _activeSyscall) {
-		throw std::runtime_error("Thread's active syscall overwritten while active");
-	}
-	_activeSyscall = activeSyscall;
-};
-
 bool DarlingServer::Thread::waitingForReply() const {
 	std::shared_lock lock(_rwlock);
-	return _waitingForReply;
-};
-
-void DarlingServer::Thread::setWaitingForReply(bool waitingForReply) {
-	std::unique_lock lock(_rwlock);
-	_waitingForReply = waitingForReply;
+	return !!_activeCall;
 };
 
 /*
@@ -306,13 +310,8 @@ void DarlingServer::Thread::microthreadWorker() {
 #endif
 
 	currentContinuation = nullptr;
-	currentCall = currentThreadVar->pendingCall();
-	currentThreadVar->setPendingCall(nullptr);
-	if (currentCall->isXNUTrap()) {
-		currentThreadVar->setActiveSyscall(currentCall);
-	}
-	currentCall->processCall();
-	currentCall = nullptr;
+	currentThreadVar->makePendingCallActive();
+	currentThreadVar->_activeCall->processCall();
 
 #if DSERVER_ASAN
 	// we're exiting normally, so we might not re-enter this microthread; tell ASAN to drop the fake stack
@@ -329,7 +328,6 @@ void DarlingServer::Thread::microthreadContinuation() {
 	asanOldFakeStack = nullptr;
 #endif
 
-	currentCall = nullptr;
 	currentContinuation = currentThreadVar->_continuationCallback;
 	currentThreadVar->_continuationCallback = nullptr;
 	currentContinuation();
@@ -416,12 +414,13 @@ void DarlingServer::Thread::doWork() {
 
 				_rwlock.lock();
 
+				_activeCall = _pendingCall;
+				_pendingCall = nullptr;
+
 				_interruptedForSignal = false;
 
 				_continuationCallback = nullptr;
 				_suspended = false;
-				_waitingForReply = false;
-				_activeSyscall = nullptr;
 
 				_savedStack = _stack;
 				_stack = allocateStack(THREAD_SIGNAL_STACK_SIZE);
@@ -430,8 +429,7 @@ void DarlingServer::Thread::doWork() {
 				_stackSize = THREAD_SIGNAL_STACK_SIZE;
 
 				_rwlock.unlock();
-				_pendingCall->sendBasicReply(0);
-				_pendingCall = nullptr;
+				_activeCall->sendBasicReply(0);
 				_rwlock.lock();
 			} else if (_pendingCall->number() == Call::Number::SigexcExit) {
 				freeStack(_stack, _stackSize);
@@ -443,9 +441,11 @@ void DarlingServer::Thread::doWork() {
 				dtape_thread_sigexc_exit(_dtapeThread);
 				--interruptDisableCount;
 
-				_rwlock.unlock();
-				_pendingCall->sendBasicReply(0);
+				_activeCall = _pendingCall;
 				_pendingCall = nullptr;
+
+				_rwlock.unlock();
+				_activeCall->sendBasicReply(0);
 				_rwlock.lock();
 
 				microthreadLog.debug() << *this << ": sigexc exiting" << microthreadLog.endLog;
@@ -555,7 +555,6 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 		if (continuationCallback) {
 			// when suspendeding with a continuation, the current continuation and call are discarded (since they can no longer be safely returned to)
 			currentContinuation = nullptr;
-			currentCall = nullptr;
 
 			_continuationCallback = continuationCallback;
 			_resumeContext.uc_stack.ss_sp = _stack;
@@ -700,8 +699,8 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 	}
 
 	{
-		auto call = currentThreadVar->activeSyscall();
-		if (!call) {
+		auto call = currentThreadVar->activeCall();
+		if (!call || !call->isXNUTrap()) {
 			throw std::runtime_error("Attempt to return from syscall on thread with no active syscall");
 		}
 		if (call->isBSDTrap()) {
@@ -711,7 +710,6 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 		}
 	}
 
-	currentThreadVar->setActiveSyscall(nullptr);
 	currentThreadVar->suspend();
 	throw std::runtime_error("Thread should not continue normally after syscall return");
 };
@@ -906,7 +904,7 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 	{
 		std::shared_lock lock(_rwlock);
 
-		if (!_waitingForReply) {
+		if (!_activeCall) {
 			dtape_semaphore_up(_s2cPerformSempahore);
 			throw std::runtime_error("Cannot perform S2C call if thread is not waiting for reply");
 		}
@@ -1093,8 +1091,10 @@ void DarlingServer::Thread::logToStream(Log::Stream& stream) const {
 	stream << "[T:" << _tid << "(" << _nstid << ")]";
 };
 
-void DarlingServer::Thread::pushCallReply(Message&& reply) {
+void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply) {
 	std::unique_lock lock(_rwlock);
+
+	_deactivateCallLocked(expectedCall);
 
 	if (_interruptedForSignal) {
 		_savedReply = std::move(reply);

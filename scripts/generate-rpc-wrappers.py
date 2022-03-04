@@ -818,8 +818,7 @@ for call in calls:
 
 		internal_header.write("\t\t\treplyStruct->body." + param_name + " = " + val + "; \\\n")
 	internal_header.write("\t\t\tif (auto thread = _thread.lock()) { \\\n")
-	internal_header.write("\t\t\t\tthread->setWaitingForReply(false); \\\n")
-	internal_header.write("\t\t\t\tthread->pushCallReply(std::move(reply)); \\\n")
+	internal_header.write("\t\t\t\tthread->pushCallReply(shared_from_this(), std::move(reply)); \\\n")
 	internal_header.write("\t\t\t} \\\n")
 	internal_header.write("\t\t}; \\\n")
 
