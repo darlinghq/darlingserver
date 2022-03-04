@@ -2786,3 +2786,12 @@ _pthread_find_owner(thread_t thread,
 			break;
 	}
 }
+
+#ifdef __DARLING__
+void dtape_psynch_thread_dying(thread_t thread, struct ksyn_waitq_element* kwe) {
+	if (kwe->kwe_kwqqueue) {
+		kq_index_t kqi = (thread->block_hint == kThreadWaitPThreadRWLockRead) ? KSYN_QUEUE_READ : KSYN_QUEUE_WRITE;
+		ksyn_queue_remove_item(kwe->kwe_kwqqueue, &((struct ksyn_wait_queue*)kwe->kwe_kwqqueue)->kw_ksynqueues[kqi], kwe);
+	}
+};
+#endif

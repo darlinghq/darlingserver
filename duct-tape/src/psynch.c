@@ -671,6 +671,8 @@ void dtape_psynch_thread_init(dtape_thread_t* thread) {
 	// nothing for now
 };
 
+extern void dtape_psynch_thread_dying(thread_t thread, void* kwe);
+
 void dtape_psynch_thread_destroy(dtape_thread_t* thread) {
-	// nothing for now
+	dtape_psynch_thread_dying(&thread->xnu_thread, &thread->kwe);
 };

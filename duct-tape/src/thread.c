@@ -49,6 +49,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 
 	thread->context = context;
 	memset(&thread->xnu_thread, 0, sizeof(thread->xnu_thread));
+	memset(&thread->kwe, 0, sizeof(thread->kwe));
 
 	// this next section uses code adapted from XNU's thread_create_internal() in osfmk/kern/thread.c
 
@@ -153,6 +154,7 @@ void dtape_thread_entering(dtape_thread_t* thread) {
 	// if the thread is entering, it cannot be waiting
 	thread->xnu_thread.state &= ~(TH_WAIT | TH_UNINT);
 	thread->xnu_thread.state |= TH_RUN;
+	thread->xnu_thread.block_hint = kThreadWaitNone;
 };
 
 void dtape_thread_exiting(dtape_thread_t* thread) {
@@ -410,7 +412,7 @@ void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 
 void dtape_thread_dying(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
-	thread->xnu_thread.state &= ~TH_UNINT;
+	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
 	thread->xnu_thread.state |= TH_TERMINATE;
 	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
 	thread_unlock(&thread->xnu_thread);
@@ -502,6 +504,8 @@ wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interrup
 	dtape_stub_safe();
 	thread->state = TH_WAIT;
 	thread->wait_result = THREAD_WAITING;
+	thread->block_hint = thread->pending_block_hint;
+	thread->pending_block_hint = kThreadWaitNone;
 	return THREAD_WAITING;
 };
 
@@ -1081,7 +1085,7 @@ boolean_t thread_recompute_user_promotion_locked(thread_t thread) {
 };
 
 void thread_set_pending_block_hint(thread_t thread, block_hint_t block_hint) {
-	dtape_stub_safe();
+	thread->pending_block_hint = block_hint;
 };
 
 void thread_set_eager_preempt(thread_t thread) {
