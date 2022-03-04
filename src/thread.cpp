@@ -260,10 +260,10 @@ void DarlingServer::Thread::makePendingCallActive() {
 };
 
 void DarlingServer::Thread::_deactivateCallLocked(std::shared_ptr<Call> expectedCall) {
-	if (_activeCall.get() != expectedCall.get()) {
-		throw std::runtime_error("Upon deactivating the active call found active call != expected call");
+	if ((_interruptedForSignal ? _interruptedCall : _activeCall).get() != expectedCall.get()) {
+		throw std::runtime_error("Upon deactivating the active call found active/interrupted call != expected call");
 	}
-	_activeCall = nullptr;
+	(_interruptedForSignal ? _interruptedCall : _activeCall) = nullptr;
 };
 
 void DarlingServer::Thread::deactivateCall(std::shared_ptr<Call> expectedCall) {
@@ -395,66 +395,11 @@ void DarlingServer::Thread::doWork() {
 
 		_rwlock.lock();
 
-		if (_pendingCall) {
-			if (_pendingCall->number() == Call::Number::SigexcEnter) {
-				auto cont = _continuationCallback;
-
-				microthreadLog.debug() << *this << ": sigexc entering" << microthreadLog.endLog;
-
-				_interruptedForSignal = true;
-
-				_rwlock.unlock();
-
-				++interruptDisableCount;
-				dtape_thread_sigexc_enter(_dtapeThread);
-				if (cont) {
-					cont();
-				}
-				--interruptDisableCount;
-
-				_rwlock.lock();
-
-				_activeCall = _pendingCall;
-				_pendingCall = nullptr;
-
-				_interruptedForSignal = false;
-
-				_continuationCallback = nullptr;
-				_suspended = false;
-
-				_savedStack = _stack;
-				_stack = allocateStack(THREAD_SIGNAL_STACK_SIZE);
-
-				_savedStackSize = _stackSize;
-				_stackSize = THREAD_SIGNAL_STACK_SIZE;
-
-				_rwlock.unlock();
-				_activeCall->sendBasicReply(0);
-				_rwlock.lock();
-			} else if (_pendingCall->number() == Call::Number::SigexcExit) {
-				freeStack(_stack, _stackSize);
-
-				_stack = _savedStack;
-				_stackSize = _savedStackSize;
-
-				++interruptDisableCount;
-				dtape_thread_sigexc_exit(_dtapeThread);
-				--interruptDisableCount;
-
-				_activeCall = _pendingCall;
-				_pendingCall = nullptr;
-
-				_rwlock.unlock();
-				_activeCall->sendBasicReply(0);
-				_rwlock.lock();
-
-				microthreadLog.debug() << *this << ": sigexc exiting" << microthreadLog.endLog;
-
-				if (_savedReply) {
-					Server::sharedInstance().sendMessage(std::move(*_savedReply));
-					_savedReply = std::nullopt;
-				}
-			}
+		if (_pendingCall && _pendingCall->number() == Call::Number::SigexcEnter) {
+			_interruptedContinuation = _continuationCallback;
+			_continuationCallback = nullptr;
+			_interruptedCall = _activeCall;
+			_activeCall = nullptr;
 		}
 
 		if (_continuationCallback && _pendingCall) {
@@ -699,7 +644,7 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 	}
 
 	{
-		auto call = currentThreadVar->activeCall();
+		auto call = (currentThreadVar->_interruptedForSignal) ? currentThreadVar->_interruptedCall : currentThreadVar->_activeCall;
 		if (!call || !call->isXNUTrap()) {
 			throw std::runtime_error("Attempt to return from syscall on thread with no active syscall");
 		}
@@ -708,6 +653,12 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 		} else {
 			call->sendBasicReply(resultCode);
 		}
+	}
+
+	if (currentThreadVar->_interruptedForSignal) {
+		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
+		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+		__builtin_unreachable();
 	}
 
 	currentThreadVar->suspend();

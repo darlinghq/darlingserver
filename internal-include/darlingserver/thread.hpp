@@ -85,8 +85,10 @@ namespace DarlingServer {
 		uint32_t _bsdReturnValue = 0;
 		bool _interruptedForSignal = false;
 		std::optional<Message> _savedReply = std::nullopt;
-		void* _savedStack = nullptr;
-		size_t _savedStackSize = 0;
+		std::function<void()> _interruptedContinuation = nullptr;
+		ucontext_t _syscallReturnHereDuringInterrupt;
+		bool _didSyscallReturnDuringInterrupt = false;
+		std::shared_ptr<Call> _interruptedCall = nullptr;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();

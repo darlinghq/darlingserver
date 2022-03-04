@@ -397,7 +397,11 @@ void dtape_thread_release(dtape_thread_t* thread) {
 };
 
 void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
+	thread_lock(&thread->xnu_thread);
+	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
+	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
 	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+	thread_unlock(&thread->xnu_thread);
 };
 
 void dtape_thread_sigexc_exit(dtape_thread_t* thread) {

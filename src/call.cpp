@@ -652,11 +652,42 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 };
 
 void DarlingServer::Call::SigexcEnter::processCall() {
-	throw std::runtime_error("sigexc_enter should be handled by the thread");
+	// FIXME: we should not be accessing private Thread members
+
+	auto thread = _thread.lock();
+
+	thread->_interruptedForSignal = true;
+
+	dtape_thread_sigexc_enter(thread->_dtapeThread);
+
+	if (thread->_interruptedContinuation) {
+		thread->_didSyscallReturnDuringInterrupt = false;
+		getcontext(&thread->_syscallReturnHereDuringInterrupt);
+
+		if (!thread->_didSyscallReturnDuringInterrupt) {
+			thread->_interruptedContinuation();
+		}
+
+		thread->_interruptedContinuation = nullptr;
+	}
+
+	thread->_interruptedForSignal = false;
+	thread->_interruptedCall = nullptr;
+
+	_sendReply(0);
 };
 
 void DarlingServer::Call::SigexcExit::processCall() {
-	throw std::runtime_error("sigexc_exit should be handled by the thread");
+	auto thread = _thread.lock();
+
+	dtape_thread_sigexc_exit(thread->_dtapeThread);
+
+	_sendReply(0);
+
+	if (thread->_savedReply) {
+		Server::sharedInstance().sendMessage(std::move(*thread->_savedReply));
+		thread->_savedReply = std::nullopt;
+	}
 };
 
 void DarlingServer::Call::ConsoleOpen::processCall() {
