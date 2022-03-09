@@ -13,6 +13,7 @@ XNU_TRAP_NOSUFFIX_ARGS = 1 << 3
 XNU_TRAP_BSD           = 1 << 4
 XNU_TRAP_NO_DTAPE_DEF  = 1 << 5
 XNU_BSD_TRAP_CALL      = XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX | XNU_TRAP_NOSUFFIX_ARGS | XNU_TRAP_BSD
+UNMANAGED_CALL         = 1 << 6
 
 # NOTE: in Python 3.7+, we can rely on dictionaries having their items in insertion order.
 #       unfortunately, we can't expect everyone building Darling to have Python 3.7+ installed.
@@ -576,16 +577,26 @@ extern "C" {
 
 """)
 
+public_header.write("#define DSERVER_CALL_UNMANAGED_FLAG 0x80000000U\n\n")
 public_header.write("enum dserver_callnum {\n")
 # "52ccall" -> "s2c call"
 public_header.write("\tdserver_callnum_s2c = 0x52cca11,\n")
 public_header.write("\tdserver_callnum_invalid = 0,\n")
+idx = 1
 for call in calls:
 	call_name = call[0]
 	call_parameters = call[1]
 	reply_parameters = call[2]
+	flags = call[3] if len(call) >= 4 else 0
 
-	public_header.write("\tdserver_callnum_" + call_name + ",\n")
+	debug_flag = ""
+
+	if (flags & UNMANAGED_CALL) != 0:
+		debug_flag = "DSERVER_CALL_UNMANAGED_FLAG | "
+
+	public_header.write("\tdserver_callnum_" + call_name + " = " + debug_flag + str(idx) + "U,\n")
+
+	idx += 1
 public_header.write("};\n")
 
 public_header.write("""\
@@ -819,6 +830,8 @@ for call in calls:
 		internal_header.write("\t\t\treplyStruct->body." + param_name + " = " + val + "; \\\n")
 	internal_header.write("\t\t\tif (auto thread = _thread.lock()) { \\\n")
 	internal_header.write("\t\t\t\tthread->pushCallReply(shared_from_this(), std::move(reply)); \\\n")
+	internal_header.write("\t\t\t} else { \\\n")
+	internal_header.write("\t\t\t\tCall::sendReply(std::move(reply)); \\\n")
 	internal_header.write("\t\t\t} \\\n")
 	internal_header.write("\t\t}; \\\n")
 
@@ -1035,20 +1048,13 @@ for call in calls:
 		public_header.write("\tdserver_reply_" + call_name + "_t body;\n")
 	public_header.write("};\n")
 
-	# declare the RPC call wrapper function
-	# (and output the prototype part of the function definition)
-	tmp = "int dserver_rpc_" + call_name + "("
+	tmp = "int dserver_rpc_explicit_" + call_name + "(int server_socket"
 	public_header.write(tmp)
 	library_source.write(tmp)
-	is_first = True
 	for param in call_parameters:
 		param_name = param[0]
 
-		if is_first:
-			is_first = False
-			tmp = ""
-		else:
-			tmp = ", "
+		tmp = ", "
 		tmp += parse_type(param, True) + " " + param_name
 		public_header.write(tmp)
 		library_source.write(tmp)
@@ -1056,11 +1062,7 @@ for call in calls:
 	for param in reply_parameters:
 		param_name = param[0]
 
-		if is_first:
-			is_first = False
-			tmp = ""
-		else:
-			tmp = ", "
+		tmp = ", "
 		tmp += parse_type(param, True) + "* out_" + param_name
 		public_header.write(tmp)
 		library_source.write(tmp)
@@ -1166,12 +1168,7 @@ for call in calls:
 
 	library_source.write("\t};\n\n")
 
-	library_source.write("\tint socket = dserver_rpc_hooks_get_socket();\n")
-	library_source.write("\tif (socket < 0) {\n")
-	library_source.write("\t\treturn dserver_rpc_hooks_get_broken_pipe_status();\n")
-	library_source.write("\t}\n\n")
-
-	library_source.write("\tlong int long_status = dserver_rpc_hooks_send_message(socket, &callmsg);\n")
+	library_source.write("\tlong int long_status = dserver_rpc_hooks_send_message(server_socket, &callmsg);\n")
 	library_source.write("\tif (long_status < 0) {\n")
 	library_source.write("\t\treturn (int)long_status;\n")
 	library_source.write("\t}\n\n")
@@ -1179,7 +1176,7 @@ for call in calls:
 	library_source.write("\t\treturn dserver_rpc_hooks_get_communication_error_status();\n")
 	library_source.write("\t}\n\n")
 
-	library_source.write("\tlong_status = dserver_rpc_hooks_receive_message(socket, &replymsg);\n")
+	library_source.write("\tlong_status = dserver_rpc_hooks_receive_message(server_socket, &replymsg);\n")
 	library_source.write("\tif (long_status < 0) {\n")
 	library_source.write("\t\treturn (int)long_status;\n")
 	library_source.write("\t}\n\n")
@@ -1224,6 +1221,63 @@ for call in calls:
 			library_source.write("\t}\n")
 
 	library_source.write("\treturn reply_msg.reply.header.code;\n")
+
+	library_source.write("};\n\n")
+
+	# declare the RPC call wrapper function
+	# (and output the prototype part of the function definition)
+	tmp = "int dserver_rpc_" + call_name + "("
+	public_header.write(tmp)
+	library_source.write(tmp)
+	is_first = True
+	for param in call_parameters:
+		param_name = param[0]
+
+		if is_first:
+			is_first = False
+			tmp = ""
+		else:
+			tmp = ", "
+		tmp += parse_type(param, True) + " " + param_name
+		public_header.write(tmp)
+		library_source.write(tmp)
+
+	for param in reply_parameters:
+		param_name = param[0]
+
+		if is_first:
+			is_first = False
+			tmp = ""
+		else:
+			tmp = ", "
+		tmp += parse_type(param, True) + "* out_" + param_name
+		public_header.write(tmp)
+		library_source.write(tmp)
+	public_header.write(");\n\n")
+	library_source.write(") {\n")
+
+	library_source.write("\tint server_socket = dserver_rpc_hooks_get_socket();\n")
+	library_source.write("\tif (server_socket < 0) {\n")
+	library_source.write("\t\treturn dserver_rpc_hooks_get_broken_pipe_status();\n")
+	library_source.write("\t}\n\n")
+
+	library_source.write("\treturn dserver_rpc_explicit_" + call_name + "(server_socket")
+
+	for param in call_parameters:
+		param_name = param[0]
+
+		tmp = ", "
+		tmp += param_name
+		library_source.write(tmp)
+
+	for param in reply_parameters:
+		param_name = param[0]
+
+		tmp = ", "
+		tmp += "out_" + param_name
+		library_source.write(tmp)
+
+	library_source.write(");\n")
 
 	library_source.write("};\n\n")
 

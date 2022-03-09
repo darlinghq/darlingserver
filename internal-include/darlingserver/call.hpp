@@ -36,9 +36,13 @@ namespace DarlingServer {
 
 	class Call {
 	public:
-		enum class Number {
+		enum class Number: unsigned int {
 			Invalid = dserver_callnum_invalid,
 			DSERVER_ENUM_VALUES
+		};
+
+		static constexpr const char* callNumberToString(Number number) {
+			return dserver_callnum_to_string(static_cast<dserver_callnum_t>(number));
 		};
 
 	protected:
@@ -47,6 +51,8 @@ namespace DarlingServer {
 		dserver_rpc_callhdr_t _header;
 
 		static DarlingServer::Log rpcReplyLog;
+
+		static void sendReply(Message&& reply);
 
 	public:
 		Call(std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader);

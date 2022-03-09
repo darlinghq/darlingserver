@@ -53,26 +53,30 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			throw std::invalid_argument("Invalid call number");
 	}
 
-	// now let's lookup (and possibly create) the process and thread making this call
-	process = processRegistry().registerIfAbsent(header->pid, [&]() {
-		auto tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture));
-		Server::sharedInstance().monitorProcess(tmp);
-		return tmp;
-	});
-	thread = threadRegistry().registerIfAbsent(header->tid, [&]() {
-		auto tmp = std::make_shared<Thread>(process, header->tid);
-		tmp->setAddress(requestMessage.address());
-		tmp->registerWithProcess();
-		return tmp;
-	});
+	if ((header->number & DSERVER_CALL_UNMANAGED_FLAG) == 0) {
+		// now let's lookup (and possibly create) the process and thread making this call
+		process = processRegistry().registerIfAbsent(header->pid, [&]() {
+			auto tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture));
+			Server::sharedInstance().monitorProcess(tmp);
+			return tmp;
+		});
+		thread = threadRegistry().registerIfAbsent(header->tid, [&]() {
+			auto tmp = std::make_shared<Thread>(process, header->tid);
+			tmp->setAddress(requestMessage.address());
+			tmp->registerWithProcess();
+			return tmp;
+		});
 
-	thread->setAddress(requestMessage.address());
+		thread->setAddress(requestMessage.address());
 
-	if (process->id() != requestMessage.pid()) {
-		throw std::runtime_error("System-reported message PID != darlingserver-recorded PID");
+		if (process->id() != requestMessage.pid()) {
+			throw std::runtime_error("System-reported message PID != darlingserver-recorded PID");
+		}
 	}
 
-	callLog.debug() << "Received call #" << header->number << " (" << dserver_callnum_to_string(header->number) << ") from PID " << process->id() << " (" << process->nsid() << "), TID " << thread->id() << " (" << thread->nsid() << ")" << callLog.endLog;
+	auto pidString = (process) ? (std::to_string(process->id()) + " (" + std::to_string(process->nsid()) + ")") : (std::to_string(header->pid) + " (-1)");
+	auto tidString = (thread) ? (std::to_string(thread->id()) + " (" + std::to_string(thread->nsid()) + ")") : (std::to_string(header->tid) + " (-1)");
+	callLog.debug() << "Received call #" << header->number << " (" << dserver_callnum_to_string(header->number) << ") from PID " << pidString << ", TID " << tidString << callLog.endLog;
 
 	if (header->number == dserver_callnum_s2c) {
 		// this is an S2C reply
@@ -111,9 +115,15 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 	#undef CALL_CASE
 
-	thread->setPendingCall(result);
-
-	return result;
+	if (thread) {
+		thread->setPendingCall(result);
+		return result;
+	} else {
+		Thread::kernelAsync([result]() {
+			result->processCall();
+		});
+		return nullptr;
+	}
 };
 
 DarlingServer::Call::Call(std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader):
@@ -142,6 +152,10 @@ bool DarlingServer::Call::isXNUTrap() const {
 
 bool DarlingServer::Call::isBSDTrap() const {
 	return false;
+};
+
+void DarlingServer::Call::sendReply(Message&& reply) {
+	Server::sharedInstance().sendMessage(std::move(reply));
 };
 
 //
@@ -299,58 +313,22 @@ void DarlingServer::Call::VchrootPath::processCall() {
 };
 
 void DarlingServer::Call::TaskSelfTrap::processCall() {
-	if (auto thread = _thread.lock()) {
-		if (auto process = thread->process()) {
-			callLog.debug() << "Got TaskSelfTrap call from " << process->nsid() << ":" << thread->nsid() << callLog.endLog;
-		}
-	}
-
 	const auto taskSelfPort = dtape_task_self_trap();
-
-	callLog.debug() << "TaskSelfTrap returning port " << taskSelfPort << callLog.endLog;
-
 	_sendReply(0, taskSelfPort);
 };
 
 void DarlingServer::Call::HostSelfTrap::processCall() {
-	if (auto thread = _thread.lock()) {
-		if (auto process = thread->process()) {
-			callLog.debug() << "Got HostSelfTrap call from " << process->nsid() << ":" << thread->nsid() << callLog.endLog;
-		}
-	}
-
 	const auto hostSelfPort = dtape_host_self_trap();
-
-	callLog.debug() << "HostSelfTrap returning port " << hostSelfPort << callLog.endLog;
-
 	_sendReply(0, hostSelfPort);
 };
 
 void DarlingServer::Call::ThreadSelfTrap::processCall() {
-	if (auto thread = _thread.lock()) {
-		if (auto process = thread->process()) {
-			callLog.debug() << "Got ThreadSelfTrap call from " << process->nsid() << ":" << thread->nsid() << callLog.endLog;
-		}
-	}
-
 	const auto threadSelfPort = dtape_thread_self_trap();
-
-	callLog.debug() << "ThreadSelfTrap returning port " << threadSelfPort << callLog.endLog;
-
 	_sendReply(0, threadSelfPort);
 };
 
 void DarlingServer::Call::MachReplyPort::processCall() {
-	if (auto thread = _thread.lock()) {
-		if (auto process = thread->process()) {
-			callLog.debug() << "Got MachReplyPort call from " << process->nsid() << ":" << thread->nsid() << callLog.endLog;
-		}
-	}
-
 	const auto machReplyPort = dtape_mach_reply_port();
-
-	callLog.debug() << "MachReplyPort returning port " << machReplyPort << callLog.endLog;
-
 	_sendReply(0, machReplyPort);
 };
 
