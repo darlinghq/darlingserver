@@ -41,7 +41,7 @@ namespace DarlingServer {
 			DSERVER_ENUM_VALUES
 		};
 
-		static constexpr const char* callNumberToString(Number number) {
+		static inline const char* callNumberToString(Number number) {
 			return dserver_callnum_to_string(static_cast<dserver_callnum_t>(number));
 		};
 
