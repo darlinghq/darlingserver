@@ -136,12 +136,14 @@ void dtape_task_destroy(dtape_task_t* task) {
 
 	// this next section uses code adapted from XNU's task_deallocate() in osfmk/kern/task.c
 
-	semaphore_destroy_all(&task->xnu_task);
-
 	task_lock(&task->xnu_task);
 	task->xnu_task.active = false;
 	ipc_task_disable(&task->xnu_task);
 	task_unlock(&task->xnu_task);
+
+	semaphore_destroy_all(&task->xnu_task);
+
+	ipc_space_terminate(task->xnu_task.itk_space);
 
 	ipc_task_terminate(&task->xnu_task);
 
@@ -455,10 +457,6 @@ void task_suspension_token_deallocate(task_suspension_token_t token) {
 };
 
 kern_return_t task_terminate(task_t task) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t task_threads_from_user(mach_port_t port, thread_act_array_t* threads_out, mach_msg_type_number_t* count) {
 	dtape_stub_unsafe();
 };
 
@@ -977,6 +975,179 @@ task_info_from_user(
 	task_deallocate(task);
 
 	return ret;
+}
+
+static kern_return_t
+task_threads_internal(
+	task_t                      task,
+	thread_act_array_t         *threads_out,
+	mach_msg_type_number_t     *count,
+	mach_thread_flavor_t        flavor)
+{
+	mach_msg_type_number_t  actual;
+	thread_t                                *thread_list;
+	thread_t                                thread;
+	vm_size_t                               size, size_needed;
+	void                                    *addr;
+	unsigned int                    i, j;
+
+	size = 0; addr = NULL;
+
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	assert(flavor <= THREAD_FLAVOR_INSPECT);
+
+	for (;;) {
+		task_lock(task);
+		if (!task->active) {
+			task_unlock(task);
+
+			if (size != 0) {
+				kfree(addr, size);
+			}
+
+			return KERN_FAILURE;
+		}
+
+		actual = task->thread_count;
+
+		/* do we have the memory we need? */
+		size_needed = actual * sizeof(mach_port_t);
+		if (size_needed <= size) {
+			break;
+		}
+
+		/* unlock the task and allocate more memory */
+		task_unlock(task);
+
+		if (size != 0) {
+			kfree(addr, size);
+		}
+
+		assert(size_needed > 0);
+		size = size_needed;
+
+		addr = kalloc(size);
+		if (addr == 0) {
+			return KERN_RESOURCE_SHORTAGE;
+		}
+	}
+
+	/* OK, have memory and the task is locked & active */
+	thread_list = (thread_t *)addr;
+
+	i = j = 0;
+
+	for (thread = (thread_t)queue_first(&task->threads); i < actual;
+	    ++i, thread = (thread_t)queue_next(&thread->task_threads)) {
+		thread_reference_internal(thread);
+		thread_list[j++] = thread;
+	}
+
+	assert(queue_end(&task->threads, (queue_entry_t)thread));
+
+	actual = j;
+	size_needed = actual * sizeof(mach_port_t);
+
+	/* can unlock task now that we've got the thread refs */
+	task_unlock(task);
+
+	if (actual == 0) {
+		/* no threads, so return null pointer and deallocate memory */
+
+		*threads_out = NULL;
+		*count = 0;
+
+		if (size != 0) {
+			kfree(addr, size);
+		}
+	} else {
+		/* if we allocated too much, must copy */
+
+		if (size_needed < size) {
+			void *newaddr;
+
+			newaddr = kalloc(size_needed);
+			if (newaddr == 0) {
+				for (i = 0; i < actual; ++i) {
+					thread_deallocate(thread_list[i]);
+				}
+				kfree(addr, size);
+				return KERN_RESOURCE_SHORTAGE;
+			}
+
+			bcopy(addr, newaddr, size_needed);
+			kfree(addr, size);
+			thread_list = (thread_t *)newaddr;
+		}
+
+		*threads_out = thread_list;
+		*count = actual;
+
+		/* do the conversion that Mig should handle */
+
+		switch (flavor) {
+		case THREAD_FLAVOR_CONTROL:
+			if (task == current_task()) {
+				for (i = 0; i < actual; ++i) {
+					((ipc_port_t *) thread_list)[i] = convert_thread_to_port_pinned(thread_list[i]);
+				}
+			} else {
+				for (i = 0; i < actual; ++i) {
+					((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
+				}
+			}
+			break;
+		case THREAD_FLAVOR_READ:
+			for (i = 0; i < actual; ++i) {
+				((ipc_port_t *) thread_list)[i] = convert_thread_read_to_port(thread_list[i]);
+			}
+			break;
+		case THREAD_FLAVOR_INSPECT:
+			for (i = 0; i < actual; ++i) {
+				((ipc_port_t *) thread_list)[i] = convert_thread_inspect_to_port(thread_list[i]);
+			}
+			break;
+		}
+	}
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+task_threads_from_user(
+	mach_port_t                 port,
+	thread_act_array_t         *threads_out,
+	mach_msg_type_number_t     *count)
+{
+	ipc_kobject_type_t kotype;
+	kern_return_t kr;
+
+	task_t task = convert_port_to_task_check_type(port, &kotype, TASK_FLAVOR_INSPECT, FALSE);
+
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	switch (kotype) {
+	case IKOT_TASK_CONTROL:
+		kr = task_threads_internal(task, threads_out, count, THREAD_FLAVOR_CONTROL);
+		break;
+	case IKOT_TASK_READ:
+		kr = task_threads_internal(task, threads_out, count, THREAD_FLAVOR_READ);
+		break;
+	case IKOT_TASK_INSPECT:
+		kr = task_threads_internal(task, threads_out, count, THREAD_FLAVOR_INSPECT);
+		break;
+	default:
+		panic("strange kobject type");
+		break;
+	}
+
+	task_deallocate(task);
+	return kr;
 }
 
 // </copied>

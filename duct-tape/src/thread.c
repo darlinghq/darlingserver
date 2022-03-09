@@ -1088,6 +1088,10 @@ void thread_set_pending_block_hint(thread_t thread, block_hint_t block_hint) {
 	thread->pending_block_hint = block_hint;
 };
 
+kern_return_t thread_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
+	return thread_set_state(thread, flavor, state, state_count);
+};
+
 void thread_set_eager_preempt(thread_t thread) {
 	dtape_stub_safe();
 };
@@ -1137,10 +1141,6 @@ kern_return_t thread_depress_abort_from_user(thread_t thread) {
 	return KERN_SUCCESS;
 };
 
-kern_return_t thread_get_state_to_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* state_count) {
-	dtape_stub_unsafe();
-};
-
 kern_return_t thread_info(thread_t thread, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t* thread_info_count) {
 	dtape_stub_unsafe();
 };
@@ -1161,10 +1161,6 @@ kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, 
 	dtape_stub_unsafe();
 };
 
-void thread_read_deallocate(thread_read_t thread_read) {
-	dtape_stub_unsafe();
-};
-
 kern_return_t thread_resume(thread_t thread) {
 	dtape_stub_unsafe();
 };
@@ -1174,10 +1170,6 @@ kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
 };
 
 kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t policy, policy_base_t base, mach_msg_type_number_t base_count, policy_limit_t limit, mach_msg_type_number_t limit_count) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t thread_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
 	dtape_stub_unsafe();
 };
 
@@ -1665,6 +1657,18 @@ thread_tid(
 	return thread != THREAD_NULL? thread->thread_id: 0;
 }
 
+/*
+ *	thread_read_deallocate:
+ *
+ *	Drop a reference on thread read port.
+ */
+void
+thread_read_deallocate(
+	thread_read_t                thread_read)
+{
+	return thread_deallocate((thread_t)thread_read);
+}
+
 // </copied>
 
 // <copied from="xnu://7195.141.2/osfmk/kern/syscall_subr.c">
@@ -1747,6 +1751,16 @@ thread_start(
 {
 	clear_wait(thread, THREAD_AWAKENED);
 	thread->started = TRUE;
+}
+
+kern_return_t
+thread_get_state_to_user(
+	thread_t                thread,
+	int                                             flavor,
+	thread_state_t                  state,                  /* pointer to OUT array */
+	mach_msg_type_number_t  *state_count)   /*IN/OUT*/
+{
+	return thread_get_state_internal(thread, flavor, state, state_count, TRUE);
 }
 
 // </copied>
