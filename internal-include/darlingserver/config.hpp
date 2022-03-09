@@ -12,7 +12,7 @@ namespace DarlingServer {
 		constexpr std::string_view defaultMldrPath = LIBEXEC_PATH "/usr/libexec/darling/mldr";
 
 		// this would actually probably be better as a workqueue construction parameter
-		constexpr bool singleThreadedWorkQueue = false;
+		constexpr bool singleThreadedWorkQueue = DSERVER_SINGLE_THREADED;
 	};
 };
 

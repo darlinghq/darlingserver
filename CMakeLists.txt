@@ -2,8 +2,8 @@ project(darlingserver)
 
 cmake_minimum_required(VERSION 3.10)
 
-set(DSERVER_ASAN OFF)
-set(DSERVER_UBSAN OFF)
+option(DSERVER_ASAN "Build darlingserver with ASAN" OFF)
+option(DSERVER_UBSAN "Build darlingserver with UBSAN" OFF)
 
 if (DSERVER_ASAN)
 	add_compile_definitions(
@@ -39,7 +39,7 @@ if (DSERVER_UBSAN)
 	set(dserver_sanitizers "${dserver_sanitizers}undefined")
 endif()
 
-set(DSERVER_EXTENDED_DEBUG OFF)
+option(DSERVER_EXTENDED_DEBUG "Build darlingserver with extended debugging support" OFF)
 
 if (DSERVER_EXTENDED_DEBUG)
 	add_compile_definitions(
@@ -48,6 +48,18 @@ if (DSERVER_EXTENDED_DEBUG)
 else()
 	add_compile_definitions(
 		DSERVER_EXTENDED_DEBUG=0
+	)
+endif()
+
+option(DSERVER_SINGLE_THREADED "Only use a single thread per workqueue in darlingserver" OFF)
+
+if (DSERVER_SINGLE_THREADED)
+	add_compile_definitions(
+		DSERVER_SINGLE_THREADED=1
+	)
+else()
+	add_compile_definitions(
+		DSERVER_SINGLE_THREADED=0
 	)
 endif()
 
