@@ -79,6 +79,11 @@
 #include <libkern/section_keywords.h>
 #include <pthread/priority_private.h>
 
+#if DSERVER_EXTENDED_DEBUG
+	#include <darlingserver/duct-tape/hooks.internal.h>
+	#include <darlingserver/duct-tape/task.h>
+#endif
+
 /*
  *	Routine:	ipc_pset_alloc
  *	Purpose:
@@ -234,6 +239,12 @@ ipc_pset_add(
 	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages,
 	    reserved_link, reserved_prepost);
 
+#if DSERVER_EXTENDED_DEBUG
+	if (kr == KERN_SUCCESS) {
+		dtape_hooks->task_add_port_set_member(dtape_task_for_xnu_task(current_task())->context, (dtape_port_set_id_t)pset, (dtape_port_id_t)port);
+	}
+#endif
+
 	return kr;
 }
 
@@ -262,6 +273,12 @@ ipc_pset_remove(
 	}
 
 	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
+
+#if DSERVER_EXTENDED_DEBUG
+	if (kr == KERN_SUCCESS) {
+		dtape_hooks->task_remove_port_set_member(dtape_task_for_xnu_task(current_task())->context, (dtape_port_set_id_t)pset, (dtape_port_id_t)port);
+	}
+#endif
 
 	return kr;
 }
@@ -356,6 +373,10 @@ ipc_pset_destroy(
 	ipc_pset_t      pset)
 {
 	assert(ips_active(pset));
+
+#if DSERVER_EXTENDED_DEBUG
+	dtape_hooks->task_clear_port_set(dtape_task_for_xnu_task(current_task())->context, (dtape_port_set_id_t)pset);
+#endif
 
 	pset->ips_object.io_bits &= ~IO_BITS_ACTIVE;
 

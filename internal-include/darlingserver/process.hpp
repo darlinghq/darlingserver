@@ -26,6 +26,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/utility.hpp>
@@ -72,6 +73,11 @@ namespace DarlingServer {
 		dtape_semaphore_t* _dtapeForkWaitSemaphore;
 		Architecture _architecture;
 
+#if DSERVER_EXTENDED_DEBUG
+		std::unordered_map<uint32_t, uintptr_t> _registeredNames;
+		std::unordered_map<dtape_port_set_id_t, std::unordered_set<dtape_port_id_t>> _portSetMembers;
+#endif
+
 		void _unregisterThreads();
 
 		struct KernelProcessConstructorTag {};
@@ -81,6 +87,14 @@ namespace DarlingServer {
 		bool _readOrWriteMemory(bool isWrite, uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const;
 
 		void _notifyListeningKqchannels(uint32_t event, int64_t data);
+
+#if DSERVER_EXTENDED_DEBUG
+		void _registerName(uint32_t name, uintptr_t pointer);
+		void _unregisterName(uint32_t name);
+		void _addPortSetMember(dtape_port_set_id_t portSetID, dtape_port_id_t portID);
+		void _removePortSetMember(dtape_port_set_id_t portSetID, dtape_port_id_t portID);
+		void _clearPortSet(dtape_port_set_id_t portSetID);
+#endif
 
 	public:
 		using ID = pid_t;

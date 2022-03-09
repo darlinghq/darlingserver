@@ -383,7 +383,7 @@ ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space,
     mach_port_seqno_t seqno, boolean_t minimal_trailer,
     mach_vm_offset_t context);
 
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
+#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) || defined(__DARLING__)
 extern void ipc_kmsg_trace_send(ipc_kmsg_t kmsg,
     mach_msg_option_t option);
 #else

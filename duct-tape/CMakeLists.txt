@@ -147,6 +147,12 @@ if (DSERVER_ASAN OR DSERVER_UBSAN)
 	)
 endif()
 
+if (DSERVER_EXTENDED_DEBUG)
+	add_compile_options(
+		-fno-omit-frame-pointer
+	)
+endif()
+
 set(MIG_USER_SOURCE_SUFFIX "User.c")
 set(MIG_SERVER_SOURCE_SUFFIX "Server.c")
 set(MIG_SERVER_HEADER_SUFFIX "Server.h")

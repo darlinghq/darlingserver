@@ -81,6 +81,11 @@
 #include <string.h>
 #include <sys/kdebug.h>
 
+#if DSERVER_EXTENDED_DEBUG
+	#include <darlingserver/duct-tape/task.h>
+	#include <darlingserver/duct-tape/hooks.internal.h>
+#endif
+
 /*
  *	Routine:	ipc_entry_lookup
  *	Purpose:
@@ -407,6 +412,10 @@ ipc_entry_dealloc(
 	ipc_entry_t table;
 	ipc_entry_num_t size;
 	mach_port_index_t index;
+
+#if DSERVER_EXTENDED_DEBUG
+	dtape_hooks->task_unregister_name(dtape_task_for_xnu_task(current_task())->context, name);
+#endif
 
 	assert(is_active(space));
 	assert(entry->ie_object == IO_NULL);

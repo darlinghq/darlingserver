@@ -46,6 +46,14 @@ typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t rem
 typedef dtape_task_t* (*dtape_hook_task_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef void (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
 
+#if DSERVER_EXTENDED_DEBUG
+	typedef void (*dtape_hook_task_register_name_f)(void* task_context, uint32_t name, uintptr_t pointer);
+	typedef void (*dtape_hook_task_unregister_name_f)(void* task_context, uint32_t name);
+	typedef void (*dtape_hook_task_add_port_set_member_f)(void* task_context, dtape_port_set_id_t port_set, dtape_port_id_t member);
+	typedef void (*dtape_hook_task_remove_port_set_member_f)(void* task_context, dtape_port_set_id_t port_set, dtape_port_id_t member);
+	typedef void (*dtape_hook_task_clear_port_set_f)(void* task_context, dtape_port_set_id_t port_set);
+#endif
+
 typedef struct dtape_hooks {
 	dtape_hook_current_task_f current_task;
 	dtape_hook_current_thread_f current_thread;
@@ -74,6 +82,14 @@ typedef struct dtape_hooks {
 	dtape_hook_task_write_memory_f task_write_memory;
 	dtape_hook_task_lookup_f task_lookup;
 	dtape_hook_task_get_memory_info_f task_get_memory_info;
+
+#if DSERVER_EXTENDED_DEBUG
+	dtape_hook_task_register_name_f task_register_name;
+	dtape_hook_task_unregister_name_f task_unregister_name;
+	dtape_hook_task_add_port_set_member_f task_add_port_set_member;
+	dtape_hook_task_remove_port_set_member_f task_remove_port_set_member;
+	dtape_hook_task_clear_port_set_f task_clear_port_set;
+#endif
 } dtape_hooks_t;
 
 #ifdef __cplusplus

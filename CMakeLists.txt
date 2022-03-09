@@ -39,6 +39,18 @@ if (DSERVER_UBSAN)
 	set(dserver_sanitizers "${dserver_sanitizers}undefined")
 endif()
 
+set(DSERVER_EXTENDED_DEBUG OFF)
+
+if (DSERVER_EXTENDED_DEBUG)
+	add_compile_definitions(
+		DSERVER_EXTENDED_DEBUG=1
+	)
+else()
+	add_compile_definitions(
+		DSERVER_EXTENDED_DEBUG=0
+	)
+endif()
+
 add_subdirectory(duct-tape)
 
 set(DARLINGSERVER_INIT_PROCESS "/sbin/launchd" CACHE STRING "The init process darlingserver should execute (default is \"/sbin/launchd\")")
@@ -85,13 +97,14 @@ add_executable(darlingserver
 	src/thread.cpp
 	src/utility.cpp
 	src/kqchan.cpp
+	src/async-writer.cpp
 )
 
 add_dependencies(darlingserver
 	generate_dserver_rpc_wrappers
 )
 
-target_link_libraries(darlingserver
+target_link_libraries(darlingserver PRIVATE
 	darlingserver_duct_tape
 	cap
 )
@@ -116,6 +129,12 @@ if (DSERVER_ASAN OR DSERVER_UBSAN)
 	target_link_options(darlingserver PRIVATE
 		-fsanitize=${dserver_sanitizers}
 		-fsanitize-recover=all
+	)
+endif()
+
+if (DSERVER_EXTENDED_DEBUG)
+	target_compile_options(darlingserver PRIVATE
+		-fno-omit-frame-pointer
 	)
 endif()
 

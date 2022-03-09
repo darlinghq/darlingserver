@@ -432,3 +432,39 @@ void DarlingServer::Process::memoryInfo(uint64_t& virtualSize, uint64_t& residen
 	virtualSize *= sysconf(_SC_PAGESIZE);
 	residentSize *= sysconf(_SC_PAGESIZE);
 };
+
+#if DSERVER_EXTENDED_DEBUG
+
+void DarlingServer::Process::_registerName(uint32_t name, uintptr_t pointer) {
+	std::unique_lock lock(_rwlock);
+	_registeredNames[name] = pointer;
+};
+
+void DarlingServer::Process::_unregisterName(uint32_t name) {
+	std::unique_lock lock(_rwlock);
+	_registeredNames.erase(name);
+};
+
+void DarlingServer::Process::_addPortSetMember(dtape_port_set_id_t portSetID, dtape_port_id_t portID) {
+	std::unique_lock lock(_rwlock);
+	auto& members = _portSetMembers[portSetID];
+	members.insert(portID);
+};
+
+void DarlingServer::Process::_removePortSetMember(dtape_port_set_id_t portSetID, dtape_port_id_t portID) {
+	std::unique_lock lock(_rwlock);
+	if (_portSetMembers.find(portSetID) != _portSetMembers.end()) {
+		auto& members = _portSetMembers[portSetID];
+		members.erase(portID);
+		if (members.empty()) {
+			_portSetMembers.erase(portSetID);
+		}
+	}
+};
+
+void DarlingServer::Process::_clearPortSet(dtape_port_set_id_t portSetID) {
+	std::unique_lock lock(_rwlock);
+	_portSetMembers.erase(portSetID);
+};
+
+#endif

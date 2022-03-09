@@ -347,6 +347,13 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
+#if DSERVER_EXTENDED_DEBUG
+	if (getenv("DSERVER_WAIT4DEBUGGER")) {
+		volatile bool debugged = false;
+		while (!debugged);
+	}
+#endif
+
 	prefix = argv[1];
 	sscanf(argv[2], "%d", &originalUID);
 	sscanf(argv[3], "%d", &originalGID);

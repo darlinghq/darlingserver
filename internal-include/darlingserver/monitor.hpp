@@ -36,6 +36,8 @@ namespace DarlingServer {
 
 		void enable(bool edgeTriggered = false, bool oneshot = false);
 		void disable();
+
+		std::shared_ptr<FD> fd() const;
 	};
 };
 
@@ -47,6 +49,11 @@ inline DarlingServer::Monitor::Event operator|(DarlingServer::Monitor::Event a, 
 inline DarlingServer::Monitor::Event operator&(DarlingServer::Monitor::Event a, DarlingServer::Monitor::Event b) {
 	using UnderlyingType = std::underlying_type_t<DarlingServer::Monitor::Event>;
 	return static_cast<DarlingServer::Monitor::Event>(static_cast<UnderlyingType>(a) & static_cast<UnderlyingType>(b));
+};
+
+inline bool operator!(DarlingServer::Monitor::Event event) {
+	using UnderlyingType = std::underlying_type_t<DarlingServer::Monitor::Event>;
+	return static_cast<UnderlyingType>(event) == 0;
 };
 
 #endif // _DARLINGSERVER_MONITOR_HPP_

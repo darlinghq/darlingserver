@@ -227,6 +227,28 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Process*>(task_context)->memoryInfo(memory_info->virtual_size, memory_info->resident_size);
 	};
 
+#if DSERVER_EXTENDED_DEBUG
+	static void dtape_hook_task_register_name(void* task_context, uint32_t name, uintptr_t pointer) {
+		static_cast<DarlingServer::Process*>(task_context)->_registerName(name, pointer);
+	};
+
+	static void dtape_hook_task_unregister_name(void* task_context, uint32_t name) {
+		static_cast<DarlingServer::Process*>(task_context)->_unregisterName(name);
+	};
+
+	static void dtape_hook_task_add_port_set_member(void* task_context, dtape_port_set_id_t port_set, dtape_port_id_t member) {
+		static_cast<DarlingServer::Process*>(task_context)->_addPortSetMember(port_set, member);
+	};
+
+	static void dtape_hook_task_remove_port_set_member(void* task_context, dtape_port_set_id_t port_set, dtape_port_id_t member) {
+		static_cast<DarlingServer::Process*>(task_context)->_removePortSetMember(port_set, member);
+	};
+
+	static void dtape_hook_task_clear_port_set(void* task_context, dtape_port_set_id_t port_set) {
+		static_cast<DarlingServer::Process*>(task_context)->_clearPortSet(port_set);
+	};
+#endif
+
 	static constexpr dtape_hooks_t dtape_hooks = {
 		.current_task = dtape_hook_current_task,
 		.current_thread = dtape_hook_current_thread,
@@ -255,6 +277,14 @@ struct DTapeHooks {
 		.task_write_memory = dtape_hook_task_write_memory,
 		.task_lookup = dtape_hook_task_lookup,
 		.task_get_memory_info = dtape_hook_task_get_memory_info,
+
+#if DSERVER_EXTENDED_DEBUG
+		.task_register_name = dtape_hook_task_register_name,
+		.task_unregister_name = dtape_hook_task_unregister_name,
+		.task_add_port_set_member = dtape_hook_task_add_port_set_member,
+		.task_remove_port_set_member = dtape_hook_task_remove_port_set_member,
+		.task_clear_port_set = dtape_hook_task_clear_port_set,
+#endif
 	};
 };
 
@@ -628,6 +658,10 @@ void DarlingServer::Monitor::disable() {
 	if (epoll_ctl(_server->_epollFD, EPOLL_CTL_MOD, _fd->fd(), &settings) < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to modify descriptor in epoll context");
 	}
+};
+
+std::shared_ptr<DarlingServer::FD> DarlingServer::Monitor::fd() const {
+	return _fd;
 };
 
 void DarlingServer::Server::sendMessage(Message&& message) {

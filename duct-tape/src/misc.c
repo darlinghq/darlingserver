@@ -196,14 +196,12 @@ int scnprintf(char* buffer, size_t buffer_size, const char* format, ...) {
 };
 
 void (ipc_kmsg_trace_send)(ipc_kmsg_t kmsg, mach_msg_option_t option) {
-#if 0
 	pid_t dest_pid = -1;
 	ipc_port_t dest = kmsg->ikm_header->msgh_remote_port;
 
 	dest_pid = ipc_port_get_receiver_task(dest, NULL);
 
 	dtape_log_debug("sending kmsg %p to pid %d", kmsg, dest_pid);
-#endif
 };
 
 void Assert(const char* file, int line, const char* expression) {

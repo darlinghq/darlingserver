@@ -94,6 +94,11 @@
 
 #include <security/mac_mach_internal.h>
 
+#if DSERVER_EXTENDED_DEBUG
+	#include <darlingserver/duct-tape/hooks.internal.h>
+	#include <darlingserver/duct-tape/task.h>
+#endif
+
 SECURITY_READ_ONLY_LATE(zone_t) ipc_object_zones[IOT_NUMBER];
 
 ZONE_INIT(&ipc_object_zones[IOT_PORT], "ipc ports", sizeof(struct ipc_port),
@@ -405,6 +410,10 @@ ipc_object_alloc(
 	io_lock(object);
 
 	object->io_references = 1; /* for entry, not caller */
+
+#if DSERVER_EXTENDED_DEBUG
+	dtape_hooks->task_register_name(dtape_task_for_xnu_task(current_task())->context, *namep, (uintptr_t)object);
+#endif
 
 	*objectp = object;
 	return KERN_SUCCESS;

@@ -38,6 +38,11 @@ typedef enum dtape_memory_flags {
 	dtape_memory_flag_overwrite = 1ULL << 1,
 } dtape_memory_flags_t;
 
+#if DSERVER_EXTENDED_DEBUG
+	typedef uintptr_t dtape_port_id_t;
+	typedef uintptr_t dtape_port_set_id_t;
+#endif
+
 #ifdef __cplusplus
 };
 #endif
