@@ -3,6 +3,7 @@
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/log.h>
 
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
@@ -45,6 +46,14 @@ long sysconf(int name);
 
 void dtape_memory_init(void) {
 
+};
+
+static uint64_t dtape_byte_count_to_page_count_round_up(uint64_t byte_count) {
+	return (byte_count + (sysconf(_SC_PAGESIZE) - 1)) / sysconf(_SC_PAGESIZE);
+};
+
+static uint64_t dtape_byte_count_to_page_count_round_down(uint64_t byte_count) {
+	return byte_count / sysconf(_SC_PAGESIZE);
 };
 
 vm_map_t dtape_vm_map_create(struct dtape_task* task) {
@@ -300,7 +309,7 @@ static kern_return_t vm_map_copyout_kernel_buffer(vm_map_t map, vm_map_address_t
 				return KERN_RESOURCE_SHORTAGE;
 			}
 		} else if (map == current_map()) {
-			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (copy_size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, 0, 0);
+			*addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, dtape_byte_count_to_page_count_round_up(copy_size), PROT_READ | PROT_WRITE, 0, 0);
 			if (*addr == 0) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
@@ -369,7 +378,7 @@ kern_return_t vm_map_remove(vm_map_t map, vm_map_offset_t start, vm_map_offset_t
 		}
 		return KERN_SUCCESS;
 	} else if (map == current_map()) {
-		if (dtape_hooks->thread_free_pages(dtape_thread_for_xnu_thread(current_thread())->context, start, (end - start) / sysconf(_SC_PAGESIZE)) < 0) {
+		if (dtape_hooks->thread_free_pages(dtape_thread_for_xnu_thread(current_thread())->context, start, dtape_byte_count_to_page_count_round_down(end - start)) < 0) {
 			return KERN_FAILURE;
 		}
 		return KERN_SUCCESS;
@@ -388,7 +397,7 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
 		return kr;
 	} else if (map == current_map()) {
 		// mach_vm_allocate_kernel allocates with default protection
-		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, (size + sysconf(_SC_PAGESIZE) - 1) / sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE, 0, 0);
+		uintptr_t tmp = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, dtape_byte_count_to_page_count_round_up(size), PROT_READ | PROT_WRITE, 0, 0);
 		if (tmp == 0) {
 			return KERN_RESOURCE_SHORTAGE;
 		}
@@ -540,7 +549,7 @@ kern_return_t mach_vm_remap_external(vm_map_t target_map, mach_vm_offset_t* addr
 	//       for now, we just always make it executable for compatibility with libobjc's trampolines
 	prot |= PROT_EXEC;
 
-	addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, size, prot, (flags & VM_FLAGS_ANYWHERE) ? 0 : *address, memflags);
+	addr = dtape_hooks->thread_allocate_pages(dtape_thread_for_xnu_thread(current_thread())->context, dtape_byte_count_to_page_count_round_up(size), prot, (flags & VM_FLAGS_ANYWHERE) ? 0 : *address, memflags);
 	if (!addr) {
 		kr = KERN_RESOURCE_SHORTAGE;
 		goto out;
@@ -570,7 +579,7 @@ out:
 		vm_map_copy_discard(mem_copy);
 	}
 	if (dealloc) {
-		dtape_hooks->thread_free_pages(dtape_thread_for_xnu_thread(current_thread())->context, addr, size);
+		dtape_hooks->thread_free_pages(dtape_thread_for_xnu_thread(current_thread())->context, addr, dtape_byte_count_to_page_count_round_up(size));
 	}
 	return kr;
 };
