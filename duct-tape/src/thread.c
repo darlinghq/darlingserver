@@ -1141,12 +1141,63 @@ kern_return_t thread_depress_abort_from_user(thread_t thread) {
 	return KERN_SUCCESS;
 };
 
-kern_return_t thread_info(thread_t thread, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t* thread_info_count) {
-	dtape_stub_unsafe();
-};
+kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t* thread_info_count) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
-void thread_inspect_deallocate(thread_inspect_t thread_inspect) {
-	dtape_stub_unsafe();
+	switch (flavor) {
+		case THREAD_IDENTIFIER_INFO: {
+			if (*thread_info_count < THREAD_IDENTIFIER_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			*thread_info_count = THREAD_IDENTIFIER_INFO_COUNT;
+
+			thread_identifier_info_t info = (thread_identifier_info_t)thread_info_out;
+
+			thread_lock(xthread);
+
+			info->thread_id = xthread->thread_id;
+			info->thread_handle = thread->pthread_handle;
+			info->dispatch_qaddr = thread->dispatch_qaddr;
+
+			thread_unlock(xthread);
+
+			return KERN_SUCCESS;
+		};
+
+		case THREAD_BASIC_INFO: {
+			if (*thread_info_count < THREAD_BASIC_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			*thread_info_count = THREAD_BASIC_INFO_COUNT;
+
+			thread_basic_info_t info = (thread_basic_info_t) thread_info_out;
+
+			thread_lock(xthread);
+
+			// TODO: fill in these values properly
+			info->cpu_usage = 0;
+			info->flags = 0;
+			info->policy = 0;
+			info->sleep_time = 0;
+			info->system_time.seconds = 0;
+			info->system_time.microseconds = 0;
+			info->user_time.seconds = 0;
+			info->user_time.microseconds = 0;
+
+			// TODO: the old LKM code used a separate "user_stop_count" member;
+			//       investigate whether we need to do that or if we can just use `suspend_count`
+			info->suspend_count = xthread->suspend_count;
+
+			thread_unlock(xthread);
+
+			info->run_state = dtape_hooks->thread_get_state(thread->context);
+
+			return KERN_SUCCESS;
+		};
+
+		default:
+			dtape_stub_unsafe("Unimplemented flavor");
+	}
 };
 
 kern_return_t thread_policy(thread_t thread, policy_t policy, policy_base_t base, mach_msg_type_number_t count, boolean_t set_limit) {
@@ -1667,6 +1718,18 @@ thread_read_deallocate(
 	thread_read_t                thread_read)
 {
 	return thread_deallocate((thread_t)thread_read);
+}
+
+/*
+ *	thread_inspect_deallocate:
+ *
+ *	Drop a thread inspection reference.
+ */
+void
+thread_inspect_deallocate(
+	thread_inspect_t                thread_inspect)
+{
+	return thread_deallocate((thread_t)thread_inspect);
 }
 
 // </copied>

@@ -35,6 +35,7 @@ typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_conte
 typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
 typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t address, size_t page_count);
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
+typedef dtape_thread_state_t (*dtape_hook_thread_get_state_f)(void* thread_context);
 
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
@@ -45,6 +46,7 @@ typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remo
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
 typedef dtape_task_t* (*dtape_hook_task_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef void (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
+typedef bool (*dtape_hook_task_get_memory_region_info_f)(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info);
 
 #if DSERVER_EXTENDED_DEBUG
 	typedef void (*dtape_hook_task_register_name_f)(void* task_context, uint32_t name, uintptr_t pointer);
@@ -72,6 +74,7 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_allocate_pages_f thread_allocate_pages;
 	dtape_hook_thread_free_pages_f thread_free_pages;
 	dtape_hook_thread_lookup_f thread_lookup;
+	dtape_hook_thread_get_state_f thread_get_state;
 
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
@@ -82,6 +85,7 @@ typedef struct dtape_hooks {
 	dtape_hook_task_write_memory_f task_write_memory;
 	dtape_hook_task_lookup_f task_lookup;
 	dtape_hook_task_get_memory_info_f task_get_memory_info;
+	dtape_hook_task_get_memory_region_info_f task_get_memory_region_info;
 
 #if DSERVER_EXTENDED_DEBUG
 	dtape_hook_task_register_name_f task_register_name;

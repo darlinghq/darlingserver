@@ -352,6 +352,26 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			return KERN_SUCCESS;
 		};
 
+		case TASK_THREAD_TIMES_INFO: {
+			task_thread_times_info_data_t* info = (task_thread_times_info_data_t*)task_info_out;
+
+			if (*task_info_count < TASK_THREAD_TIMES_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			*task_info_count = TASK_THREAD_TIMES_INFO_COUNT;
+
+			dtape_log_debug("%s: TODO: fetch utimeus and stimeus somehow", __FUNCTION__);
+			uint64_t utimeus = 0;
+			uint64_t stimeus = 0;
+
+			info->user_time.seconds = utimeus / USEC_PER_SEC;
+			info->user_time.microseconds = utimeus % USEC_PER_SEC;
+			info->system_time.seconds = stimeus / USEC_PER_SEC;
+			info->system_time.microseconds = stimeus % USEC_PER_SEC;
+
+			return KERN_SUCCESS;
+		};
+
 		default:
 			dtape_stub_unsafe("unimplemented flavor");
 	}

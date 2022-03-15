@@ -33,6 +33,7 @@
 #include <sys/eventfd.h>
 #include <darlingserver/duct-tape.h>
 #include <sys/timerfd.h>
+#include <sys/mman.h>
 
 #include <darlingserver/logging.hpp>
 
@@ -186,6 +187,10 @@ struct DTapeHooks {
 		return thread->_dtapeThread;
 	};
 
+	static dtape_thread_state_t dtape_hook_thread_get_state(void* thread_context) {
+		return static_cast<dtape_thread_state_t>(static_cast<DarlingServer::Thread*>(thread_context)->getRunState());
+	};
+
 	static void dtape_hook_current_thread_interrupt_disable(void) {
 		DarlingServer::Thread::interruptDisable();
 	};
@@ -225,6 +230,28 @@ struct DTapeHooks {
 
 	static void dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
 		static_cast<DarlingServer::Process*>(task_context)->memoryInfo(memory_info->virtual_size, memory_info->resident_size);
+	};
+
+	static bool dtape_hook_task_get_memory_region_info(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info) {
+		int protection;
+		try {
+			static_cast<DarlingServer::Process*>(task_context)->memoryRegionInfo(address, memory_region_info->start_address, memory_region_info->page_count, protection, memory_region_info->map_offset, memory_region_info->shared);
+		} catch (...) {
+			return false;
+		}
+		memory_region_info->protection = dtape_memory_protection_none;
+		if (protection & PROT_READ) {
+			// for some reason, we can't just do `|=`;
+			// the compiler complains about "can't assign `int` to `dtape_memory_protection`" or something like that
+			memory_region_info->protection = (dtape_memory_protection_t)(memory_region_info->protection | dtape_memory_protection_read);
+		}
+		if (protection & PROT_WRITE) {
+			memory_region_info->protection = (dtape_memory_protection_t)(memory_region_info->protection | dtape_memory_protection_write);
+		}
+		if (protection & PROT_EXEC) {
+			memory_region_info->protection = (dtape_memory_protection_t)(memory_region_info->protection | dtape_memory_protection_execute);
+		}
+		return true;
 	};
 
 #if DSERVER_EXTENDED_DEBUG
@@ -267,6 +294,7 @@ struct DTapeHooks {
 		.thread_allocate_pages = dtape_hook_thread_allocate_pages,
 		.thread_free_pages = dtape_hook_thread_free_pages,
 		.thread_lookup = dtape_hook_thread_lookup,
+		.thread_get_state = dtape_hook_thread_get_state,
 
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
@@ -277,6 +305,7 @@ struct DTapeHooks {
 		.task_write_memory = dtape_hook_task_write_memory,
 		.task_lookup = dtape_hook_task_lookup,
 		.task_get_memory_info = dtape_hook_task_get_memory_info,
+		.task_get_memory_region_info = dtape_hook_task_get_memory_region_info,
 
 #if DSERVER_EXTENDED_DEBUG
 		.task_register_name = dtape_hook_task_register_name,

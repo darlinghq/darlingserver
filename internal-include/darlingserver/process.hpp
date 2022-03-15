@@ -147,6 +147,7 @@ namespace DarlingServer {
 		Architecture architecture() const;
 
 		void memoryInfo(uint64_t& virtualSize, uint64_t& residentSize) const;
+		void memoryRegionInfo(uintptr_t address, uintptr_t& startAddress, uint64_t& pageCount, int& protection, uint64_t& mapOffset, bool& shared) const;
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

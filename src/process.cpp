@@ -25,6 +25,9 @@
 #include <darlingserver/logging.hpp>
 
 #include <fstream>
+#include <regex>
+
+#include <sys/mman.h>
 
 static DarlingServer::Log processLog("process");
 
@@ -431,6 +434,56 @@ void DarlingServer::Process::memoryInfo(uint64_t& virtualSize, uint64_t& residen
 
 	virtualSize *= sysconf(_SC_PAGESIZE);
 	residentSize *= sysconf(_SC_PAGESIZE);
+};
+
+static const std::regex memoryRegionEntryRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)\\s+((?:r|w|x|p|s|\\-)+)\\s+([0-9a-fA-F]+)");
+
+void DarlingServer::Process::memoryRegionInfo(uintptr_t address, uintptr_t& startAddress, uint64_t& pageCount, int& protection, uint64_t& mapOffset, bool& shared) const {
+	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");
+	std::string line;
+
+	uintptr_t endAddress;
+
+	while (std::getline(file, line)) {
+		std::smatch match;
+
+		if (!std::regex_search(line, match, memoryRegionEntryRegex)) {
+			processLog.warning() << "Encountered malformed `/proc/<pid>/maps` entry? Definitely a bug (on our part)." << processLog.endLog;
+			continue;
+		}
+
+		startAddress = std::stoul(match[1].str());
+		endAddress = std::stoul(match[2].str());
+
+		if (endAddress <= address || startAddress > address) {
+			continue;
+		}
+
+		pageCount = (endAddress - startAddress) / sysconf(_SC_PAGESIZE);
+
+		mapOffset = std::stoul(match[4].str());
+
+		auto perms = match[3].str();
+
+		protection = 0;
+
+		if (perms.find('r') != std::string::npos) {
+			protection |= PROT_READ;
+		}
+		if (perms.find('w') != std::string::npos) {
+			protection |= PROT_WRITE;
+		}
+		if (perms.find('x') != std::string::npos) {
+			protection |= PROT_EXEC;
+		}
+
+		shared = perms.find('s') != std::string::npos;
+
+		return;
+	}
+
+	processLog.warning() << *this << ": Address " << std::hex << address << " not found in \"/proc/" << _pid << "/maps\"";
+	throw std::system_error(EFAULT, std::generic_category());
 };
 
 #if DSERVER_EXTENDED_DEBUG

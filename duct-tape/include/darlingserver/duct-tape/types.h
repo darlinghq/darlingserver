@@ -2,6 +2,7 @@
 #define _DARLINGSERVER_DUCT_TAPE_TYPES_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,21 @@ typedef struct dtape_memory_info {
 	uint64_t resident_size;
 } dtape_memory_info_t;
 
+typedef enum dtape_memory_protection {
+	dtape_memory_protection_none = 0,
+	dtape_memory_protection_read = 1 << 0,
+	dtape_memory_protection_write = 1 << 1,
+	dtape_memory_protection_execute = 1 << 2,
+} __attribute__((flag_enum)) dtape_memory_protection_t;
+
+typedef struct dtape_memory_region_info {
+	uintptr_t start_address;
+	uint64_t page_count;
+	uint64_t map_offset;
+	dtape_memory_protection_t protection;
+	bool shared;
+} dtape_memory_region_info_t;
+
 typedef enum dtape_memory_flags {
 	dtape_memory_flag_none = 0,
 	dtape_memory_flag_fixed = 1ULL << 0,
@@ -42,6 +58,14 @@ typedef enum dtape_memory_flags {
 	typedef uintptr_t dtape_port_id_t;
 	typedef uintptr_t dtape_port_set_id_t;
 #endif
+
+typedef enum dtape_thread_state {
+	dtape_thread_state_dead,
+	dtape_thread_state_running,
+	dtape_thread_state_stopped,
+	dtape_thread_state_interruptible,
+	dtape_thread_state_uninterruptible,
+} dtape_thread_state_t;
 
 #ifdef __cplusplus
 };

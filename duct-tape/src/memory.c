@@ -509,7 +509,89 @@ kern_return_t mach_vm_read_list(vm_map_t map, mach_vm_read_entry_t data_list, na
 };
 
 kern_return_t mach_vm_region(vm_map_t map, mach_vm_offset_t* address, mach_vm_size_t* size, vm_region_flavor_t flavor, vm_region_info_t info, mach_msg_type_number_t* count, mach_port_t* object_name) {
-	dtape_stub_unsafe();
+	switch (flavor) {
+		case VM_REGION_BASIC_INFO:
+		case VM_REGION_BASIC_INFO_64: {
+			kern_return_t kr = KERN_FAILURE;
+			dtape_memory_region_info_t region_info;
+
+			if (!dtape_hooks->task_get_memory_region_info(dtape_task_for_xnu_task(current_task())->context, *address, &region_info)) {
+				kr = KERN_INVALID_ADDRESS;
+				goto region_info_out;
+			}
+
+			*address = region_info.start_address;
+			*size = region_info.page_count * sysconf(_SC_PAGESIZE);
+
+			if (flavor == VM_REGION_BASIC_INFO_64) {
+				vm_region_basic_info_64_t out = (vm_region_basic_info_64_t)info;
+
+				if (*count < VM_REGION_BASIC_INFO_COUNT_64) {
+					kr = KERN_INVALID_ARGUMENT;
+					goto region_info_out;
+				}
+				*count = VM_REGION_BASIC_INFO_COUNT_64;
+
+				out->protection = 0;
+
+				if (region_info.protection & dtape_memory_protection_read)
+					out->protection |= VM_PROT_READ;
+				if (region_info.protection & dtape_memory_protection_write)
+					out->protection |= VM_PROT_WRITE;
+				// This is a special hack for LLDB. For processes started as suspended, with two RX segments.
+				// However, in order to avoid failures, they are actually mapped as RWX and are to be changed to RX later by dyld.
+				if (region_info.protection & dtape_memory_protection_execute)
+					//out->protection |= VM_PROT_EXECUTE;
+					out->protection = VM_PROT_EXECUTE | VM_PROT_READ;
+
+				out->offset = region_info.map_offset;
+				out->shared = region_info.shared;
+				out->behavior = VM_BEHAVIOR_DEFAULT;
+				out->user_wired_count = 0;
+				out->inheritance = 0;
+				out->max_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+				out->reserved = FALSE;
+			} else {
+				vm_region_basic_info_t out = (vm_region_basic_info_t)info;
+
+				if (*count < VM_REGION_BASIC_INFO_COUNT) {
+					kr = KERN_INVALID_ARGUMENT;
+					goto region_info_out;
+				}
+				*count = VM_REGION_BASIC_INFO_COUNT;
+
+				out->protection = 0;
+
+				if (region_info.protection & dtape_memory_protection_read)
+					out->protection |= VM_PROT_READ;
+				if (region_info.protection & dtape_memory_protection_write)
+					out->protection |= VM_PROT_WRITE;
+				// This is a special hack for LLDB. For processes started as suspended, with two RX segments.
+				// However, in order to avoid failures, they are actually mapped as RWX and are to be changed to RX later by dyld.
+				if (region_info.protection & dtape_memory_protection_execute)
+					//out->protection |= VM_PROT_EXECUTE;
+					out->protection = VM_PROT_EXECUTE | VM_PROT_READ;
+
+				out->offset = region_info.map_offset;
+				out->shared = region_info.shared;
+				out->behavior = VM_BEHAVIOR_DEFAULT;
+				out->user_wired_count = 0;
+				out->inheritance = 0;
+				out->max_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+				out->reserved = FALSE;
+			}
+
+			kr = KERN_SUCCESS;
+
+region_info_out:
+			if (object_name)
+				*object_name = IP_NULL;
+
+			return kr;
+		};
+		default:
+			dtape_stub_unsafe("Unimplemented flavor");
+	}
 };
 
 kern_return_t mach_vm_region_recurse(vm_map_t map, mach_vm_address_t* address, mach_vm_size_t* size, uint32_t* depth, vm_region_recurse_info_t info, mach_msg_type_number_t* infoCnt) {

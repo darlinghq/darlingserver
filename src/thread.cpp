@@ -1059,3 +1059,38 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 		Server::sharedInstance().sendMessage(std::move(reply));
 	}
 };
+
+DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
+	auto process = this->process();
+	if (!process) {
+		return RunState::Dead;
+	}
+
+	std::ifstream file("/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id()));
+	std::string line;
+	if (!std::getline(file, line)) {
+		return RunState::Dead;
+	}
+
+	auto endOfComm = line.find(')');
+	if (endOfComm == std::string::npos) {
+		return RunState::Dead;
+	}
+
+	if (line.size() <= endOfComm + 2) {
+		return RunState::Dead;
+	}
+
+	switch (line[endOfComm + 2]) {
+		case 'R':
+			return RunState::Running;
+		case 'S':
+			return RunState::Interruptible;
+		case 'D':
+			return RunState::Uninterruptible;
+		case 'T':
+			return RunState::Stopped;
+		default:
+			return RunState::Dead;
+	}
+};

@@ -42,6 +42,15 @@ namespace DarlingServer {
 		friend class Process;
 		friend class Call; // HACK, see call.cpp
 
+	public:
+		enum class RunState {
+			Dead = dtape_thread_state_dead,
+			Running = dtape_thread_state_running,
+			Stopped = dtape_thread_state_stopped,
+			Interruptible = dtape_thread_state_interruptible,
+			Uninterruptible = dtape_thread_state_uninterruptible,
+		};
+
 	private:
 		enum class DeferralState: uint8_t {
 			/**
@@ -207,6 +216,8 @@ namespace DarlingServer {
 		uint32_t* bsdReturnValuePointer();
 
 		void pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply);
+
+		RunState getRunState() const;
 
 		/**
 		 * @note Only to be used by direct XNU traps! (e.g. Mach IPC, psynch, etc.)
