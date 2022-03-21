@@ -46,6 +46,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	// first, make sure we know this call number
 	switch (header->number) {
 		case dserver_callnum_s2c:
+		case dserver_callnum_push_reply:
 		DSERVER_VALID_CALLNUM_CASES
 			break;
 
@@ -92,6 +93,33 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		}
 
 		dtape_semaphore_up(thread->_s2cReplySempahore);
+
+		return nullptr;
+	} else if (header->number == dserver_callnum_push_reply) {
+		// this is a reply push
+		// (used to send interrupted replies back to the server)
+
+		auto pushReplyCall = reinterpret_cast<const dserver_rpc_call_push_reply_t*>(requestMessage.data().data());
+		Message replyToSave(pushReplyCall->reply_size, 0);
+
+		if (!process->readMemory(pushReplyCall->reply, replyToSave.data().data(), pushReplyCall->reply_size)) {
+			throw std::runtime_error("Failed to read client-pushed reply body");
+		}
+
+		replyToSave.replaceDescriptors(requestMessage.descriptors());
+		requestMessage.replaceDescriptors({});
+
+		replyToSave.setAddress(requestMessage.address());
+
+		{
+			std::unique_lock lock(thread->_rwlock);
+			if (thread->_savedReply) {
+				throw std::runtime_error("Client-pushed reply overwriting existing saved reply");
+			}
+			thread->_savedReply = std::move(replyToSave);
+		}
+
+		callLog.debug() << *thread << ": Saved client-pushed reply" << callLog.endLog;
 
 		return nullptr;
 	}
@@ -629,7 +657,7 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 	_sendReply(code, is64Bit);
 };
 
-void DarlingServer::Call::SigexcEnter::processCall() {
+void DarlingServer::Call::InterruptEnter::processCall() {
 	// FIXME: we should not be accessing private Thread members
 
 	auto thread = _thread.lock();
@@ -655,7 +683,7 @@ void DarlingServer::Call::SigexcEnter::processCall() {
 	_sendReply(0);
 };
 
-void DarlingServer::Call::SigexcExit::processCall() {
+void DarlingServer::Call::InterruptExit::processCall() {
 	auto thread = _thread.lock();
 
 	dtape_thread_sigexc_exit(thread->_dtapeThread);

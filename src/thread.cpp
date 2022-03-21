@@ -398,7 +398,7 @@ void DarlingServer::Thread::doWork() {
 
 		_rwlock.lock();
 
-		if (_pendingCall && _pendingCall->number() == Call::Number::SigexcEnter) {
+		if (_pendingCall && _pendingCall->number() == Call::Number::InterruptEnter) {
 			_interruptedContinuation = _continuationCallback;
 			_continuationCallback = nullptr;
 			_interruptedCall = _activeCall;
