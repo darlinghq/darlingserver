@@ -208,5 +208,16 @@ kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t inf
 };
 
 kern_return_t vm_stats(void* info, unsigned int* count) {
-	dtape_stub_unsafe();
+	vm_statistics64_t stat = (vm_statistics64_t)info;
+
+	if (*count < HOST_VM_INFO64_COUNT)
+		return (KERN_FAILURE);
+
+	memset(stat, 0, sizeof(*stat));
+
+	dtape_stub("TODO: actually fill in the values with something useful");
+
+	*count = HOST_VM_INFO64_COUNT;
+
+	return KERN_SUCCESS;
 };
