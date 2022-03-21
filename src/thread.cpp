@@ -329,9 +329,12 @@ void DarlingServer::Thread::microthreadContinuation() {
 #endif
 
 	currentContinuation = currentThreadVar->_continuationCallback;
-	currentThreadVar->_continuationCallback = nullptr;
-	currentContinuation();
-	currentContinuation = nullptr;
+	// FIXME: we probably should never see `currentContinuation == nullptr`
+	if (currentContinuation) {
+		currentThreadVar->_continuationCallback = nullptr;
+		currentContinuation();
+		currentContinuation = nullptr;
+	}
 
 #if DSERVER_ASAN
 	// see microthreadWorker()
@@ -1054,6 +1057,9 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 	_deactivateCallLocked(expectedCall);
 
 	if (_interruptedForSignal) {
+		if (_savedReply) {
+			throw std::runtime_error("Pushed call reply overwriting existing saved reply");
+		}
 		_savedReply = std::move(reply);
 	} else {
 		Server::sharedInstance().sendMessage(std::move(reply));

@@ -663,6 +663,7 @@ void DarlingServer::Call::SigexcExit::processCall() {
 	_sendReply(0);
 
 	if (thread->_savedReply) {
+		callLog.debug() << *thread << ": Going to send saved reply" << callLog.endLog;
 		Server::sharedInstance().sendMessage(std::move(*thread->_savedReply));
 		thread->_savedReply = std::nullopt;
 	}
