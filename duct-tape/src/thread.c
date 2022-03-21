@@ -1201,7 +1201,8 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 };
 
 kern_return_t thread_policy(thread_t thread, policy_t policy, policy_base_t base, mach_msg_type_number_t count, boolean_t set_limit) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_policy_get(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
@@ -1209,7 +1210,8 @@ kern_return_t thread_policy_get(thread_t thread, thread_policy_flavor_t flavor, 
 };
 
 kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_resume(thread_t thread) {
