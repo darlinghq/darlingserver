@@ -474,15 +474,6 @@ mount_ok:
 		}
 	}
 
-	snprintf(putOld, sizeof(putOld), "%s/proc", prefix);
-
-	// mount procfs for our new PID namespace
-	if (mount("proc", putOld, "proc", 0, "") != 0)
-	{
-		fprintf(stderr, "Cannot mount procfs: %s\n", strerror(errno));
-		exit(1);
-	}
-
 	// temporarily drop privileges and do some prefix work
 	temp_drop_privileges(originalUID, originalGID);
 	darlingPreInit(prefix);
@@ -516,10 +507,6 @@ mount_ok:
 #endif
 	}
 
-	// drop privileges in both parent and child
-	perma_drop_privileges(originalUID, originalGID);
-	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
-
 	if (launchdGlobalPID < 0) {
 		fprintf(stderr, "Failed to fork to start launchd: %s\n", strerror(errno));
 		exit(1);
@@ -528,6 +515,19 @@ mount_ok:
 		char buf[1];
 
 		close(childWaitFDs[1]);
+
+		snprintf(putOld, sizeof(putOld), "%s/proc", prefix);
+
+		// mount procfs for our new PID namespace
+		if (mount("proc", putOld, "proc", 0, "") != 0)
+		{
+			fprintf(stderr, "Cannot mount procfs: %s\n", strerror(errno));
+			exit(1);
+		}
+
+		// drop our privileges now
+		perma_drop_privileges(originalUID, originalGID);
+		prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
 
 		// decrease the FD limit back to the default
 		if (setrlimit(RLIMIT_NOFILE, &default_limit) != 0) {
@@ -545,6 +545,10 @@ mount_ok:
 
 	// this is the parent
 	close(childWaitFDs[0]);
+
+	// drop our privileges
+	perma_drop_privileges(originalUID, originalGID);
+	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
 
 	// regain our capabilities
 	cap_value_t regainCaps[] = { CAP_SYS_RAWIO, CAP_SYS_RESOURCE };
