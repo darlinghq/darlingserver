@@ -55,7 +55,9 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 
 			libsimple_once(&once_token, cache_sysinfo, &cached_sysinfo);
 
-			basic_info->memory_size = cached_sysinfo.totalram;
+			uint64_t memsize = cached_sysinfo.totalram * cached_sysinfo.mem_unit;
+
+			basic_info->memory_size = memsize;
 #if __x86_64__ || __i386__
 			basic_info->cpu_type = CPU_TYPE_X86;
 			basic_info->cpu_subtype = CPU_SUBTYPE_X86_ARCH1;
@@ -75,7 +77,7 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 				basic_info->logical_cpu = basic_info->avail_cpus;
 				basic_info->logical_cpu_max = basic_info->max_cpus;
 
-				basic_info->max_mem = basic_info->memory_size;
+				basic_info->max_mem = memsize;
 
 				*count = HOST_BASIC_INFO_COUNT;
 			} else {
