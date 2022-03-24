@@ -473,12 +473,15 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 		dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
 	}
 
-	// this should only ever be reached if there is no continuation
-	assert(!continuation);
-
 	thread_lock(&thread->xnu_thread);
 	wait_result_t wait_result = thread->xnu_thread.wait_result;
 	thread_unlock(&thread->xnu_thread);
+
+	if (continuation) {
+		// TODO: we should add a thread hook to jump to a continuation without suspending
+		continuation(parameter, wait_result);
+		__builtin_unreachable();
+	}
 
 	return wait_result;
 };
