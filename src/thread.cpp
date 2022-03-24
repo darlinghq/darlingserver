@@ -31,6 +31,8 @@
 #include <darlingserver/duct-tape.h>
 #include <atomic>
 
+#include <sys/syscall.h>
+
 #if DSERVER_ASAN
 	#include <sanitizer/asan_interface.h>
 #endif
@@ -1098,5 +1100,16 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 			return RunState::Stopped;
 		default:
 			return RunState::Dead;
+	}
+};
+
+void DarlingServer::Thread::sendSignal(int signal) const {
+	if (auto process = _process.lock()) {
+		if (syscall(SYS_tgkill, process->id(), id(), signal) < 0) {
+			int code = errno;
+			throw std::system_error(code, std::generic_category());
+		}
+	} else {
+		throw std::system_error(ESRCH, std::generic_category());
 	}
 };

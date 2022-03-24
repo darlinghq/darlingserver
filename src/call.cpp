@@ -517,12 +517,10 @@ void DarlingServer::Call::PthreadKill::processCall() {
 	int code = 0;
 
 	if (auto targetThread = Thread::threadForPort(_body.thread_port)) {
-		if (auto targetProcess = targetThread->process()) {
-			if (syscall(SYS_tgkill, targetProcess->id(), targetThread->id(), _body.signal) < 0) {
-				code = -errno;
-			}
-		} else {
-			code = -ESRCH;
+		try {
+			targetThread->sendSignal(_body.signal);
+		} catch (std::system_error e) {
+			code = -e.code().value();
 		}
 	} else {
 		code = -ESRCH;

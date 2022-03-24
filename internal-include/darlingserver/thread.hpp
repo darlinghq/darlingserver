@@ -219,6 +219,8 @@ namespace DarlingServer {
 
 		RunState getRunState() const;
 
+		void sendSignal(int signal) const;
+
 		/**
 		 * @note Only to be used by direct XNU traps! (e.g. Mach IPC, psynch, etc.)
 		 */

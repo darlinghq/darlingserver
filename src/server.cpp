@@ -191,6 +191,15 @@ struct DTapeHooks {
 		return static_cast<dtape_thread_state_t>(static_cast<DarlingServer::Thread*>(thread_context)->getRunState());
 	};
 
+	static int dtape_hook_thread_send_signal(void* thread_context, int signal) {
+		try {
+			static_cast<DarlingServer::Thread*>(thread_context)->sendSignal(signal);
+			return 0;
+		} catch (std::system_error e) {
+			return -e.code().value();
+		}
+	};
+
 	static void dtape_hook_current_thread_interrupt_disable(void) {
 		DarlingServer::Thread::interruptDisable();
 	};
@@ -295,6 +304,7 @@ struct DTapeHooks {
 		.thread_free_pages = dtape_hook_thread_free_pages,
 		.thread_lookup = dtape_hook_thread_lookup,
 		.thread_get_state = dtape_hook_thread_get_state,
+		.thread_send_signal = dtape_hook_thread_send_signal,
 
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,

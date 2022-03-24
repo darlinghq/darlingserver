@@ -36,6 +36,7 @@ typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, si
 typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t address, size_t page_count);
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef dtape_thread_state_t (*dtape_hook_thread_get_state_f)(void* thread_context);
+typedef int (*dtape_hook_thread_send_signal_f)(void* thread_context, int signal);
 
 typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
@@ -75,6 +76,7 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_free_pages_f thread_free_pages;
 	dtape_hook_thread_lookup_f thread_lookup;
 	dtape_hook_thread_get_state_f thread_get_state;
+	dtape_hook_thread_send_signal_f thread_send_signal;
 
 	dtape_hook_current_thread_interrupt_disable_f current_thread_interrupt_disable;
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
