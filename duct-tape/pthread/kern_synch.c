@@ -35,6 +35,8 @@
 #include <sys/proc.h>
 #include <net/if_var.h>
 #include "kern_internal.h"
+
+#include <darlingserver/duct-tape/log.h>
 #endif // __DARLING__
 
 #include <sys/param.h>
@@ -98,8 +100,14 @@
 typedef struct uthread *uthread_t;
 
 //#define __FAILEDUSERTEST__(s) do { panic(s); } while (0)
+
+#ifdef __DARLING__
+#define __FAILEDUSERTEST__(s) do { dtape_log_error("PSYNCH: pid[%d]: %s\n", proc_pid(current_proc()), s); } while (0)
+#define __FAILEDUSERTEST2__(s, x...) do { dtape_log_error("PSYNCH: pid[%d]: " s "\n", proc_pid(current_proc()), x); } while (0)
+#else
 #define __FAILEDUSERTEST__(s) do { printf("PSYNCH: pid[%d]: %s\n", proc_pid(current_proc()), s); } while (0)
 #define __FAILEDUSERTEST2__(s, x...) do { printf("PSYNCH: pid[%d]: " s "\n", proc_pid(current_proc()), x); } while (0)
+#endif // __DARLING__
 
 lck_mtx_t *pthread_list_mlock;
 
