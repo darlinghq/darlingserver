@@ -15,6 +15,8 @@
 
 #include <stdlib.h>
 
+#include <rtsig.h>
+
 #define LINUX_ENOSYS 38
 #define LINUX_EFAULT 14
 
@@ -48,6 +50,11 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	}
 
 	thread->context = context;
+	thread->processing_signal = false;
+	thread->name = NULL;
+	thread->waiting_suspended = false;
+	dtape_mutex_init(&thread->suspension_mutex);
+	dtape_condvar_init(&thread->suspension_condvar);
 	memset(&thread->xnu_thread, 0, sizeof(thread->xnu_thread));
 	memset(&thread->kwe, 0, sizeof(thread->kwe));
 
@@ -385,8 +392,22 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 
 	while (thread->xnu_thread.suspend_count > 0) {
 		dtape_log_debug("sigexc: going to sleep");
+
+		dtape_mutex_lock(&thread->suspension_mutex);
+		thread->waiting_suspended = true;
+		dtape_mutex_unlock(&thread->suspension_mutex);
+		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
+
+		// FIXME: possible race condition here between notifying of waiting and actually sleeping
+
 		dtape_hooks->thread_suspend(thread->context, NULL, NULL, NULL);
+
 		dtape_log_debug("sigexc: woken up");
+
+		dtape_mutex_lock(&thread->suspension_mutex);
+		thread->waiting_suspended = false;
+		dtape_mutex_unlock(&thread->suspension_mutex);
+		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
 	}
 };
 
@@ -1187,9 +1208,7 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			info->user_time.seconds = 0;
 			info->user_time.microseconds = 0;
 
-			// TODO: the old LKM code used a separate "user_stop_count" member;
-			//       investigate whether we need to do that or if we can just use `suspend_count`
-			info->suspend_count = xthread->suspend_count;
+			info->suspend_count = xthread->user_stop_count;
 
 			thread_unlock(xthread);
 
@@ -1217,19 +1236,11 @@ kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, 
 	return KERN_SUCCESS;
 };
 
-kern_return_t thread_resume(thread_t thread) {
-	dtape_stub_unsafe();
-};
-
 kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
 	dtape_stub_unsafe();
 };
 
 kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t policy, policy_base_t base, mach_msg_type_number_t base_count, policy_limit_t limit, mach_msg_type_number_t limit_count) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t thread_suspend(thread_t thread) {
 	dtape_stub_unsafe();
 };
 
@@ -1262,6 +1273,34 @@ static wait_result_t thread_handoff_internal(thread_t thread, thread_continue_t 
 	}
 
 	return thread_block_parameter(continuation, parameter);
+};
+
+void thread_hold(thread_t xthread) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	dtape_log_debug("sigexc: thread_hold(%p)\n", xthread);
+	// CHECKME: the LKM was always sending the signal whenever thread_hold got called;
+	//          we mimic XNU here instead. check whether this actually works as expected.
+	if (xthread->suspend_count++ == 0) {
+		// This signal leads to sigexc.c which will end up calling darlingserver;
+		// darlingserver will hold the caller so long as the suspend_count > 0.
+		dtape_hooks->thread_send_signal(thread->context, LINUX_SIGRTMIN);
+	}
+};
+
+void thread_release(thread_t xthread) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	dtape_log_debug("sigexc: thread_release(%p)\n", xthread);
+	xthread->suspend_count--;
+	dtape_hooks->thread_resume(thread->context);
+};
+
+void thread_wait(thread_t xthread, boolean_t until_not_runnable) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	dtape_mutex_lock(&thread->suspension_mutex);
+	while (!thread->waiting_suspended) {
+		dtape_condvar_wait(&thread->suspension_condvar, &thread->suspension_mutex);
+	}
+	dtape_mutex_unlock(&thread->suspension_mutex);
 };
 
 // ignore the lock timeout
@@ -1829,6 +1868,62 @@ thread_get_state_to_user(
 	mach_msg_type_number_t  *state_count)   /*IN/OUT*/
 {
 	return thread_get_state_internal(thread, flavor, state, state_count, TRUE);
+}
+
+kern_return_t
+thread_suspend(thread_t thread)
+{
+	kern_return_t result = KERN_SUCCESS;
+
+	if (thread == THREAD_NULL || thread->task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	thread_mtx_lock(thread);
+
+	if (thread->active) {
+		if (thread->user_stop_count++ == 0) {
+			thread_hold(thread);
+		}
+	} else {
+		result = KERN_TERMINATED;
+	}
+
+	thread_mtx_unlock(thread);
+
+	if (thread != current_thread() && result == KERN_SUCCESS) {
+		thread_wait(thread, FALSE);
+	}
+
+	return result;
+}
+
+kern_return_t
+thread_resume(thread_t thread)
+{
+	kern_return_t result = KERN_SUCCESS;
+
+	if (thread == THREAD_NULL || thread->task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	thread_mtx_lock(thread);
+
+	if (thread->active) {
+		if (thread->user_stop_count > 0) {
+			if (--thread->user_stop_count == 0) {
+				thread_release(thread);
+			}
+		} else {
+			result = KERN_FAILURE;
+		}
+	} else {
+		result = KERN_TERMINATED;
+	}
+
+	thread_mtx_unlock(thread);
+
+	return result;
 }
 
 // </copied>

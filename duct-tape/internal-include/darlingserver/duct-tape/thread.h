@@ -4,6 +4,7 @@
 #include <kern/thread.h>
 #include <darlingserver/duct-tape/locks.h>
 #include <darlingserver/duct-tape/task.h>
+#include <darlingserver/duct-tape/condvar.h>
 
 #include <sys/event.h>
 
@@ -26,6 +27,10 @@ struct dtape_thread {
 	x86_float_state_t float_state;
 #endif
 	bool processing_signal;
+
+	bool waiting_suspended;
+	dtape_mutex_t suspension_mutex;
+	dtape_condvar_t suspension_condvar;
 
 	//
 	// uthread stuff for psynch

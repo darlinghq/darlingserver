@@ -72,6 +72,7 @@ include_directories(
 	internal-include
 	${CMAKE_CURRENT_BINARY_DIR}/include
 	${CMAKE_CURRENT_BINARY_DIR}/internal-include
+	${CMAKE_BINARY_DIR}/src/startup # for `rtsig.h`
 )
 
 add_custom_command(

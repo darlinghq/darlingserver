@@ -13,6 +13,7 @@ include_directories(
 
 	${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk
 	${CMAKE_CURRENT_BINARY_DIR}/../include
+	${CMAKE_BINARY_DIR}/src/startup
 )
 
 add_compile_definitions(
