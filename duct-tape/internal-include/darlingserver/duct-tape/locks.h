@@ -28,4 +28,10 @@ typedef struct lck_spin {
 	lck_mtx_t dtape_interlock;
 } lck_spin_t;
 
+void dtape_mutex_init(dtape_mutex_t* mutex);
+void dtape_mutex_lock(dtape_mutex_t* mutex);
+void dtape_mutex_unlock(dtape_mutex_t* mutex);
+bool dtape_mutex_try_lock(dtape_mutex_t* mutex);
+void dtape_mutex_assert(dtape_mutex_t* mutex, bool should_be_owned);
+
 #endif // _DARLINGSERVER_DUCT_TAPE_LOCKS_H_

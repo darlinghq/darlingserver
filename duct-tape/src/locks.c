@@ -35,14 +35,135 @@
 // the hook is supposed to unlock the lock passed in for that argument once the microthread is fully suspended.
 // this way, we can be certain that we won't miss any wakeups (from someone trying to resume us just after we add ourselves to the queue but before we suspend).
 
+void dtape_mutex_init(dtape_mutex_t* mutex) {
+	mutex->dtape_owner = 0;
+	libsimple_lock_init(&mutex->dtape_queue_lock);
+	TAILQ_INIT(&mutex->dtape_queue_head);
+};
+
+void dtape_mutex_assert(dtape_mutex_t* mutex, bool should_be_owned) {
+	bool owned = mutex->dtape_owner == (uintptr_t)current_thread();
+
+	if (should_be_owned && !owned) {
+		panic("Lock assertion failed (not owned but expected to be owned)");
+	} else if (!should_be_owned && owned) {
+		panic("Lock assertion failed (owned but expected not to be owned)");
+	}
+};
+
+void dtape_mutex_lock(dtape_mutex_t* mutex) {
+	thread_t xthread = current_thread();
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+
+	if (!thread) {
+		dtape_log_warning("Trying to lock mutex without an active thread!");
+		// if we don't have an active thread, we fall back to using the queue lock (which is a native lock).
+		// note that this means that any microthreads that want to lock the lock will sleep for real!
+		// therefore, callers that try to do this must only lock the lock for short periods
+		while (true) {
+			// FIXME: we really should be using a condvar here; right now, we're just spinning until the owner drops the lock.
+			//        we'd need to implement condvars in libsimple first, though.
+			libsimple_lock_lock(&mutex->dtape_queue_lock);
+			if (mutex->dtape_owner == 0) {
+				return;
+			}
+			libsimple_lock_unlock(&mutex->dtape_queue_lock);
+			__builtin_ia32_pause();
+		}
+	}
+
+	dtape_mutex_assert(mutex, false);
+
+	while (true) {
+		libsimple_lock_lock(&mutex->dtape_queue_lock);
+
+		if (mutex->dtape_owner == 0 || mutex->dtape_owner == (uintptr_t)xthread) {
+			// lock successfully acquired
+			mutex->dtape_owner = (uintptr_t)xthread;
+			libsimple_lock_unlock(&mutex->dtape_queue_lock);
+			__atomic_thread_fence(__ATOMIC_ACQUIRE);
+			return;
+		}
+
+		// lock not acquired; let's wait
+		TAILQ_INSERT_TAIL(&mutex->dtape_queue_head, &thread->mutex_link, link);
+
+		// this call drops the lock
+		dtape_hooks->thread_suspend(thread->context, NULL, NULL, &mutex->dtape_queue_lock);
+	}
+};
+
+bool dtape_mutex_try_lock(dtape_mutex_t* mutex) {
+	thread_t xthread = current_thread();
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+
+	if (!thread) {
+		dtape_log_warning("Trying to lock mutex without an active thread!");
+		// see lck_mtx_lock()
+		if (libsimple_lock_try_lock(&mutex->dtape_queue_lock)) {
+			if (mutex->dtape_owner == 0) {
+				return TRUE;
+			}
+			libsimple_lock_unlock(&mutex->dtape_queue_lock);
+		}
+		return FALSE;
+	}
+
+	dtape_mutex_assert(mutex, false);
+
+	if (mutex->dtape_owner == 0 || mutex->dtape_owner == (uintptr_t)xthread) {
+		// lock successfully acquired
+		mutex->dtape_owner = (uintptr_t)xthread;
+		libsimple_lock_unlock(&mutex->dtape_queue_lock);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		return TRUE;
+	}
+
+	// lock not acquired
+	return FALSE;
+};
+
+void dtape_mutex_unlock(dtape_mutex_t* mutex) {
+	thread_t xcurr_thread = current_thread();
+	dtape_thread_t* curr_thread = dtape_thread_for_xnu_thread(xcurr_thread);
+
+	if (!curr_thread) {
+		dtape_log_warning("Trying to unlock mutex without an active thread!");
+		// see lck_mtx_lock()
+		return libsimple_lock_unlock(&mutex->dtape_queue_lock);
+	}
+
+	dtape_mutex_assert(mutex, true);
+
+	libsimple_lock_lock(&mutex->dtape_queue_lock);
+	mutex->dtape_owner = 0;
+
+	dtape_mutex_link_t* link = TAILQ_FIRST(&mutex->dtape_queue_head);
+
+	if (!link) {
+		// uncontended case
+		// no one is waiting for the lock, so we don't need to wake anyone up.
+		goto out;
+	}
+
+	// contended case
+	// one or more microthreads are waiting; wake the oldest waiter (the one at the head of queue).
+	TAILQ_REMOVE(&mutex->dtape_queue_head, link, link);
+	dtape_thread_t* thread = __container_of(link, dtape_thread_t, mutex_link);
+	dtape_hooks->thread_resume(thread->context);
+
+out:
+	libsimple_lock_unlock(&mutex->dtape_queue_lock);
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	return;
+};
+
 void lck_mtx_init(lck_mtx_t* lock, lck_grp_t* grp, lck_attr_t* attr) {
 	lock->dtape_mutex = malloc(sizeof(dtape_mutex_t));
 	if (!lock->dtape_mutex) {
 		panic("Insufficient memory to allocate mutex");
 	}
-	lock->dtape_mutex->dtape_owner = 0;
-	libsimple_lock_init(&lock->dtape_mutex->dtape_queue_lock);
-	TAILQ_INIT(&lock->dtape_mutex->dtape_queue_head);
+	dtape_mutex_init(lock->dtape_mutex);
 };
 
 void lck_mtx_destroy(lck_mtx_t* lock, lck_grp_t* grp) {
@@ -55,85 +176,15 @@ void lck_mtx_destroy(lck_mtx_t* lock, lck_grp_t* grp) {
 };
 
 void lck_mtx_assert(lck_mtx_t* lock, unsigned int type) {
-	bool owned = lock->dtape_mutex->dtape_owner == (uintptr_t)current_thread();
-
-	if (type == LCK_ASSERT_OWNED && !owned) {
-		panic("Lock assertion failed (not owned but expected to be owned)");
-	} else if (type == LCK_ASSERT_NOTOWNED && owned) {
-		panic("Lock assertion failed (owned but expected not to be owned)");
-	}
+	dtape_mutex_assert(lock->dtape_mutex, type == LCK_ASSERT_OWNED);
 };
 
 void lck_mtx_lock(lck_mtx_t* lock) {
-	thread_t xthread = current_thread();
-	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
-
-	if (!thread) {
-		dtape_log_warning("Trying to lock mutex without an active thread!");
-		// if we don't have an active thread, we fall back to using the queue lock (which is a native lock).
-		// note that this means that any microthreads that want to lock the lock will sleep for real!
-		// therefore, callers that try to do this must only lock the lock for short periods
-		while (true) {
-			// FIXME: we really should be using a condvar here; right now, we're just spinning until the owner drops the lock.
-			//        we'd need to implement condvars in libsimple first, though.
-			libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
-			if (lock->dtape_mutex->dtape_owner == 0) {
-				return;
-			}
-			libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
-			__builtin_ia32_pause();
-		}
-	}
-
-	lck_mtx_assert(lock, LCK_MTX_ASSERT_NOTOWNED);
-
-	while (true) {
-		libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
-
-		if (lock->dtape_mutex->dtape_owner == 0 || lock->dtape_mutex->dtape_owner == (uintptr_t)xthread) {
-			// lock successfully acquired
-			lock->dtape_mutex->dtape_owner = (uintptr_t)xthread;
-			libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
-			__atomic_thread_fence(__ATOMIC_ACQUIRE);
-			return;
-		}
-
-		// lock not acquired; let's wait
-		TAILQ_INSERT_TAIL(&lock->dtape_mutex->dtape_queue_head, &thread->mutex_link, link);
-
-		// this call drops the lock
-		dtape_hooks->thread_suspend(thread->context, NULL, NULL, &lock->dtape_mutex->dtape_queue_lock);
-	}
+	dtape_mutex_lock(lock->dtape_mutex);
 };
 
 boolean_t lck_mtx_try_lock(lck_mtx_t* lock) {
-	thread_t xthread = current_thread();
-	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
-
-	if (!thread) {
-		dtape_log_warning("Trying to lock mutex without an active thread!");
-		// see lck_mtx_lock()
-		if (libsimple_lock_try_lock(&lock->dtape_mutex->dtape_queue_lock)) {
-			if (lock->dtape_mutex->dtape_owner == 0) {
-				return TRUE;
-			}
-			libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
-		}
-		return FALSE;
-	}
-
-	lck_mtx_assert(lock, LCK_MTX_ASSERT_NOTOWNED);
-
-	if (lock->dtape_mutex->dtape_owner == 0 || lock->dtape_mutex->dtape_owner == (uintptr_t)xthread) {
-		// lock successfully acquired
-		lock->dtape_mutex->dtape_owner = (uintptr_t)xthread;
-		libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
-		__atomic_thread_fence(__ATOMIC_ACQUIRE);
-		return TRUE;
-	}
-
-	// lock not acquired
-	return FALSE;
+	return dtape_mutex_try_lock(lock->dtape_mutex);
 };
 
 void lck_mtx_lock_spin_always(lck_mtx_t* lock) {
@@ -145,38 +196,7 @@ void lck_mtx_lock_spin(lck_mtx_t* lock) {
 };
 
 void lck_mtx_unlock(lck_mtx_t* lock) {
-	thread_t xcurr_thread = current_thread();
-	dtape_thread_t* curr_thread = dtape_thread_for_xnu_thread(xcurr_thread);
-
-	if (!curr_thread) {
-		dtape_log_warning("Trying to unlock mutex without an active thread!");
-		// see lck_mtx_lock()
-		return libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
-	}
-
-	lck_mtx_assert(lock, LCK_MTX_ASSERT_OWNED);
-
-	libsimple_lock_lock(&lock->dtape_mutex->dtape_queue_lock);
-	lock->dtape_mutex->dtape_owner = 0;
-
-	dtape_mutex_link_t* link = TAILQ_FIRST(&lock->dtape_mutex->dtape_queue_head);
-
-	if (!link) {
-		// uncontended case
-		// no one is waiting for the lock, so we don't need to wake anyone up.
-		goto out;
-	}
-
-	// contended case
-	// one or more microthreads are waiting; wake the oldest waiter (the one at the head of queue).
-	TAILQ_REMOVE(&lock->dtape_mutex->dtape_queue_head, link, link);
-	dtape_thread_t* thread = __container_of(link, dtape_thread_t, mutex_link);
-	dtape_hooks->thread_resume(thread->context);
-
-out:
-	libsimple_lock_unlock(&lock->dtape_mutex->dtape_queue_lock);
-	__atomic_thread_fence(__ATOMIC_RELEASE);
-	return;
+	dtape_mutex_unlock(lock->dtape_mutex);
 };
 
 void lck_mtx_init_ext(lck_mtx_t* lck, struct _lck_mtx_ext_* lck_ext, lck_grp_t* grp, lck_attr_t* attr) {

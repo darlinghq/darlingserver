@@ -265,6 +265,7 @@ add_library(darlingserver_duct_tape
 	src/kqchan.c
 	src/semaphore.c
 	src/psynch.c
+	src/condvar.c
 
 	xnu/libkern/os/refcnt.c
 	xnu/libkern/gen/OSAtomicOperations.c
