@@ -65,6 +65,10 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	task->saved_pid = nsid;
 	task->architecture = architecture;
 	task->has_sigexc = false;
+	task->dyld_info_addr = 0;
+	task->dyld_info_length = 0;
+	dtape_mutex_init(&task->dyld_info_lock);
+	dtape_condvar_init(&task->dyld_info_condvar);
 	memset(&task->xnu_task, 0, sizeof(task->xnu_task));
 
 	// this next section uses code adapted from XNU's task_create_internal() in osfmk/kern/task.c
@@ -181,6 +185,14 @@ void dtape_task_release(dtape_task_t* task) {
 
 void dtape_task_dying(dtape_task_t* task) {
 	// nothing for now
+};
+
+void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t length) {
+	dtape_mutex_lock(&task->dyld_info_lock);
+	task->dyld_info_addr = address;
+	task->dyld_info_length = length;
+	dtape_mutex_unlock(&task->dyld_info_lock);
+	dtape_condvar_signal(&task->dyld_info_condvar, SIZE_MAX);
 };
 
 void task_deallocate(task_t task) {
@@ -370,6 +382,46 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			info->system_time.microseconds = stimeus % USEC_PER_SEC;
 
 			return KERN_SUCCESS;
+		};
+
+		case TASK_DYLD_INFO: {
+			task_dyld_info_t info = (task_dyld_info_t)task_info_out;
+
+			/*
+			* We added the format field to TASK_DYLD_INFO output.  For
+			* temporary backward compatibility, accept the fact that
+			* clients may ask for the old version - distinquished by the
+			* size of the expected result structure.
+			*/
+#define TASK_LEGACY_DYLD_INFO_COUNT \
+			offsetof(struct task_dyld_info, all_image_info_format)/sizeof(natural_t)
+
+			if (*task_info_count < TASK_LEGACY_DYLD_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			// DARLING:
+			// This call may block, waiting for Darling to provide this information
+			// shortly after startup.
+
+			dtape_mutex_lock(&task->dyld_info_lock);
+
+			while (task->dyld_info_addr == 0 && task->dyld_info_length == 0) {
+				dtape_condvar_wait(&task->dyld_info_condvar, &task->dyld_info_lock);
+			}
+
+			info->all_image_info_addr = task->dyld_info_addr;
+			info->all_image_info_size = task->dyld_info_length;
+
+			dtape_mutex_unlock(&task->dyld_info_lock);
+
+			/* only set format on output for those expecting it */
+			if (*task_info_count >= TASK_DYLD_INFO_COUNT) {
+				info->all_image_info_format = task_has_64Bit_addr(xtask) ? TASK_DYLD_ALL_IMAGE_INFO_64 : TASK_DYLD_ALL_IMAGE_INFO_32 ;
+				*task_info_count = TASK_DYLD_INFO_COUNT;
+			} else {
+				*task_info_count = TASK_LEGACY_DYLD_INFO_COUNT;
+			}
 		};
 
 		case TASK_VM_INFO: {

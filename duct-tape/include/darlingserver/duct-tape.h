@@ -91,6 +91,7 @@ void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_ui
 void dtape_task_retain(dtape_task_t* task);
 void dtape_task_release(dtape_task_t* task);
 void dtape_task_dying(dtape_task_t* task);
+void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t length);
 
 /**
  * Invoked when a timer armed by an earlier call to the timer_arm hook expires.

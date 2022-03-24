@@ -4,6 +4,7 @@
 #include <kern/task.h>
 
 #include <darlingserver/rpc.h>
+#include <darlingserver/duct-tape/condvar.h>
 
 typedef struct dtape_task dtape_task_t;
 
@@ -13,6 +14,10 @@ struct dtape_task {
 	dserver_rpc_architecture_t architecture;
 	bool has_sigexc;
 	void* p_pthhash;
+	uint64_t dyld_info_addr;
+	uint64_t dyld_info_length;
+	dtape_mutex_t dyld_info_lock;
+	dtape_condvar_t dyld_info_condvar;
 	struct task xnu_task;
 };
 

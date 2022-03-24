@@ -188,6 +188,11 @@ calls = [
 		('console', '@fd'),
 	]),
 
+	('set_dyld_info', [
+		('address', 'uint64_t'),
+		('length', 'uint64_t'),
+	], []),
+
 	('set_tracer', [
 		('target', 'int32_t'),
 		('tracer', 'int32_t'),

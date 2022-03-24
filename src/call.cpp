@@ -781,6 +781,22 @@ void DarlingServer::Call::ConsoleOpen::processCall() {
 	_sendReply(code, sockets[1]);
 };
 
+void DarlingServer::Call::SetDyldInfo::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			dtape_task_set_dyld_info(process->_dtapeTask, _body.address, _body.length);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 void DarlingServer::Call::SetTracer::processCall() {
 	int code = 0;
 	std::shared_ptr<Process> targetProcess = nullptr;
