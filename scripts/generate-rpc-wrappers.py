@@ -193,6 +193,8 @@ calls = [
 		('length', 'uint64_t'),
 	], []),
 
+	('stop_after_exec', [], []),
+
 	('set_tracer', [
 		('target', 'int32_t'),
 		('tracer', 'int32_t'),

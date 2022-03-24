@@ -405,6 +405,7 @@ void DarlingServer::Call::StartedSuspended::processCall() {
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
 			suspended = process->startSuspended();
+			process->setStartSuspended(false);
 		} else {
 			code = -ESRCH;
 		}
@@ -787,6 +788,22 @@ void DarlingServer::Call::SetDyldInfo::processCall() {
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
 			dtape_task_set_dyld_info(process->_dtapeTask, _body.address, _body.length);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::StopAfterExec::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			process->setStartSuspended(true);
 		} else {
 			code = -ESRCH;
 		}
