@@ -92,6 +92,8 @@ void dtape_task_retain(dtape_task_t* task);
 void dtape_task_release(dtape_task_t* task);
 void dtape_task_dying(dtape_task_t* task);
 void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t length);
+void dtape_task_set_sigexc_enabled(dtape_task_t* task, bool enabled);
+bool dtape_task_try_resume(dtape_task_t* task);
 
 /**
  * Invoked when a timer armed by an earlier call to the timer_arm hook expires.

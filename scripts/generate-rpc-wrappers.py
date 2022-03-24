@@ -206,6 +206,11 @@ calls = [
 		('tid', 'int32_t'),
 	]),
 
+	('ptrace_sigexc', [
+		('target', 'int32_t'),
+		('enabled', 'bool'),
+	], []),
+
 	#
 	# kqueue channels
 	#

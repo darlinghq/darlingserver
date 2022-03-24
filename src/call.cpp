@@ -871,4 +871,20 @@ void DarlingServer::Call::TidForThread::processCall() {
 	_sendReply(code, tid);
 };
 
+void DarlingServer::Call::PtraceSigexc::processCall() {
+	int code = 0;
+
+	if (auto maybeProcess = processRegistry().lookupEntryByNSID(_body.target)) {
+		auto process = *maybeProcess;
+
+		dtape_task_set_sigexc_enabled(process->_dtapeTask, _body.enabled);
+		dtape_task_try_resume(process->_dtapeTask);
+	} else {
+		// not negated because this isn't an internal error
+		code = ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;

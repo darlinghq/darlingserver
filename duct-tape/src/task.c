@@ -195,6 +195,19 @@ void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t len
 	dtape_condvar_signal(&task->dyld_info_condvar, SIZE_MAX);
 };
 
+void dtape_task_set_sigexc_enabled(dtape_task_t* task, bool enabled) {
+	// FIXME: we should probably have a lock for this
+	task->has_sigexc = enabled;
+};
+
+bool dtape_task_try_resume(dtape_task_t* task) {
+	if (task->xnu_task.user_stop_count) {
+		dtape_log_debug("sigexc target task is stopped (%d), resuming", task->xnu_task.user_stop_count);
+		return task_resume(&task->xnu_task) == KERN_SUCCESS;
+	}
+	return false;
+};
+
 void task_deallocate(task_t task) {
 	// the managing Task instance is supposed to have the last reference on the duct-taped task
 	os_ref_release_live(&task->ref_count);
