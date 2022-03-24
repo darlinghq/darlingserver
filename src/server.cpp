@@ -238,7 +238,11 @@ struct DTapeHooks {
 	};
 
 	static void dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
-		static_cast<DarlingServer::Process*>(task_context)->memoryInfo(memory_info->virtual_size, memory_info->resident_size);
+		auto info = static_cast<DarlingServer::Process*>(task_context)->memoryInfo();
+		memory_info->virtual_size = info.virtualSize;
+		memory_info->resident_size = info.residentSize;
+		memory_info->page_size = info.pageSize;
+		memory_info->region_count = info.regionCount;
 	};
 
 	static bool dtape_hook_task_get_memory_region_info(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info) {

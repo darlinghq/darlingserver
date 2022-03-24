@@ -31,6 +31,8 @@ typedef void (*dtape_thread_continuation_callback_f)(void* context);
 typedef struct dtape_memory_info {
 	uint64_t virtual_size;
 	uint64_t resident_size;
+	uint64_t page_size;
+	uint64_t region_count;
 } dtape_memory_info_t;
 
 typedef enum dtape_memory_protection {

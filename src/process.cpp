@@ -427,13 +427,22 @@ void DarlingServer::Process::logToStream(Log::Stream& stream) const {
 	stream << "[P:" << _pid << "(" << _nspid << ")]";
 };
 
-void DarlingServer::Process::memoryInfo(uint64_t& virtualSize, uint64_t& residentSize) const {
+DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
+	MemoryInfo info;
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/statm");
 
-	file >> virtualSize >> residentSize;
+	file >> info.virtualSize >> info.residentSize;
 
-	virtualSize *= sysconf(_SC_PAGESIZE);
-	residentSize *= sysconf(_SC_PAGESIZE);
+	info.virtualSize *= sysconf(_SC_PAGESIZE);
+	info.residentSize *= sysconf(_SC_PAGESIZE);
+
+	// CHECKME: can different processes have different page sizes on Linux?
+	info.pageSize = sysconf(_SC_PAGESIZE);
+
+	// TODO
+	info.regionCount = 0;
+
+	return info;
 };
 
 static const std::regex memoryRegionEntryRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)\\s+((?:r|w|x|p|s|\\-)+)\\s+([0-9a-fA-F]+)");

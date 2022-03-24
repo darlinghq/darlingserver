@@ -56,6 +56,13 @@ namespace DarlingServer {
 			ARM64 = dserver_rpc_architecture_arm64,
 		};
 
+		struct MemoryInfo {
+			uint64_t virtualSize;
+			uint64_t residentSize;
+			uint64_t pageSize;
+			uint64_t regionCount;
+		};
+
 	private:
 		pid_t _pid;
 		pid_t _nspid;
@@ -146,7 +153,7 @@ namespace DarlingServer {
 		bool is64Bit() const;
 		Architecture architecture() const;
 
-		void memoryInfo(uint64_t& virtualSize, uint64_t& residentSize) const;
+		MemoryInfo memoryInfo() const;
 		void memoryRegionInfo(uintptr_t address, uintptr_t& startAddress, uint64_t& pageCount, int& protection, uint64_t& mapOffset, bool& shared) const;
 
 		static std::shared_ptr<Process> currentProcess();

@@ -372,6 +372,55 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			return KERN_SUCCESS;
 		};
 
+		case TASK_VM_INFO: {
+			task_vm_info_t info = (task_vm_info_t)task_info_out;
+			mach_msg_type_number_t orig_info_count = *task_info_count;
+
+			if (orig_info_count < TASK_VM_INFO_REV0_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			memset(info, 0, orig_info_count * sizeof(natural_t));
+
+			dtape_memory_info_t meminfo;
+			dtape_hooks->task_get_memory_info(task->context, &meminfo);
+
+			info->page_size = meminfo.page_size;
+			info->resident_size = meminfo.resident_size;
+			info->resident_size_peak = meminfo.resident_size;
+			info->virtual_size = meminfo.virtual_size;
+
+			// TODO: fill in other stuff
+
+			*task_info_count = TASK_VM_INFO_REV0_COUNT;
+
+			if (orig_info_count >= TASK_VM_INFO_REV1_COUNT) {
+
+				*task_info_count = TASK_VM_INFO_REV1_COUNT;
+
+				if (orig_info_count >= TASK_VM_INFO_REV2_COUNT) {
+
+					*task_info_count = TASK_VM_INFO_REV2_COUNT;
+
+					if (orig_info_count >= TASK_VM_INFO_REV3_COUNT) {
+
+						*task_info_count = TASK_VM_INFO_REV3_COUNT;
+
+						if (orig_info_count >= TASK_VM_INFO_REV4_COUNT) {
+
+							*task_info_count = TASK_VM_INFO_REV4_COUNT;
+
+							if (orig_info_count >= TASK_VM_INFO_REV5_COUNT) {
+								*task_info_count = TASK_VM_INFO_REV5_COUNT;
+							}
+						}
+					}
+				}
+			}
+
+			return KERN_SUCCESS;
+		};
+
 		default:
 			dtape_stub_unsafe("unimplemented flavor");
 	}
