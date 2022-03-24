@@ -51,7 +51,7 @@ else()
 	)
 endif()
 
-option(DSERVER_SINGLE_THREADED "Only use a single thread per workqueue in darlingserver" OFF)
+option(DSERVER_SINGLE_THREADED "Only use a single thread per workqueue in darlingserver" ON)
 
 if (DSERVER_SINGLE_THREADED)
 	add_compile_definitions(
