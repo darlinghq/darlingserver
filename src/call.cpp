@@ -417,9 +417,21 @@ void DarlingServer::Call::StartedSuspended::processCall() {
 
 void DarlingServer::Call::GetTracer::processCall() {
 	int code = 0;
-	uint32_t tracer = 0;
+	int32_t tracer = 0;
 
-	callLog.warning() << "GetTracer: TODO" << callLog.endLog;
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			if (auto tracerProcess = process->tracerProcess()) {
+				tracer = tracerProcess->nsid();
+			} else {
+				// leave `tracer` as 0
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
 
 	_sendReply(code, tracer);
 };
@@ -767,6 +779,49 @@ void DarlingServer::Call::ConsoleOpen::processCall() {
 		}
 	}
 	_sendReply(code, sockets[1]);
+};
+
+void DarlingServer::Call::SetTracer::processCall() {
+	int code = 0;
+	std::shared_ptr<Process> targetProcess = nullptr;
+	std::shared_ptr<Process> tracerProcess = nullptr;
+
+	if (_body.target == 0) {
+		if (auto thread = _thread.lock()) {
+			targetProcess = thread->process();
+		}
+	} else {
+		if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.target)) {
+			targetProcess = *maybeTargetProcess;
+		}
+	}
+
+	if (targetProcess) {
+		if (_body.tracer == 0) {
+			// leave tracer process as nullptr
+		} else {
+			if (auto maybeTracerProcess = processRegistry().lookupEntryByNSID(_body.tracer)) {
+				tracerProcess = *maybeTracerProcess;
+			} else {
+				// intentionally not negated because this is not an internal error;
+				// this is a perfectly valid case
+				code = ESRCH;
+			}
+		}
+
+		if (code == 0) {
+			if (!targetProcess->setTracerProcess(tracerProcess)) {
+				// again, not negated because this isn't an internal error;
+				// simply indicates there was already a tracer set for the target
+				code = EPERM;
+			}
+		}
+	} else {
+		// ditto from before
+		code = ESRCH;
+	}
+
+	_sendReply(code);
 };
 
 DSERVER_CLASS_SOURCE_DEFS;

@@ -530,3 +530,17 @@ void DarlingServer::Process::_clearPortSet(dtape_port_set_id_t portSetID) {
 };
 
 #endif
+
+std::shared_ptr<DarlingServer::Process> DarlingServer::Process::tracerProcess() const {
+	std::shared_lock lock(_rwlock);
+	return _tracerProcess.lock();
+};
+
+bool DarlingServer::Process::setTracerProcess(std::shared_ptr<Process> tracerProcess) {
+	std::unique_lock lock(_rwlock);
+	if (!_tracerProcess.expired()) {
+		return false;
+	}
+	_tracerProcess = tracerProcess;
+	return true;
+};

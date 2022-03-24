@@ -131,7 +131,7 @@ calls = [
 	]),
 
 	('get_tracer', [], [
-		('tracer', 'uint32_t'),
+		('tracer', 'int32_t'),
 	]),
 
 	('uidgid', [
@@ -187,6 +187,11 @@ calls = [
 	('console_open', [], [
 		('console', '@fd'),
 	]),
+
+	('set_tracer', [
+		('target', 'int32_t'),
+		('tracer', 'int32_t'),
+	], []),
 
 	#
 	# kqueue channels

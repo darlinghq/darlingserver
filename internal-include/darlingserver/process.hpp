@@ -79,6 +79,7 @@ namespace DarlingServer {
 		std::unordered_map<uintptr_t, std::weak_ptr<Kqchan::Process>> _listeningKqchannels;
 		dtape_semaphore_t* _dtapeForkWaitSemaphore;
 		Architecture _architecture;
+		std::weak_ptr<Process> _tracerProcess;
 
 #if DSERVER_EXTENDED_DEBUG
 		std::unordered_map<uint32_t, uintptr_t> _registeredNames;
@@ -155,6 +156,9 @@ namespace DarlingServer {
 
 		MemoryInfo memoryInfo() const;
 		void memoryRegionInfo(uintptr_t address, uintptr_t& startAddress, uint64_t& pageCount, int& protection, uint64_t& mapOffset, bool& shared) const;
+
+		std::shared_ptr<Process> tracerProcess() const;
+		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();
