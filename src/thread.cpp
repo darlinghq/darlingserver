@@ -1103,6 +1103,12 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 	}
 };
 
+void DarlingServer::Thread::waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
+	loadStateFromUser(threadStateAddress, floatStateAddress);
+	dtape_thread_wait_while_user_suspended(_dtapeThread);
+	saveStateToUser(threadStateAddress, floatStateAddress);
+};
+
 void DarlingServer::Thread::sendSignal(int signal) const {
 	if (auto process = _process.lock()) {
 		if (syscall(SYS_tgkill, process->id(), id(), signal) < 0) {

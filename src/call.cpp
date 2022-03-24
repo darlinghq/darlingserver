@@ -902,4 +902,16 @@ void DarlingServer::Call::PtraceThupdate::processCall() {
 	_sendReply(code);
 };
 
+void DarlingServer::Call::ThreadSuspended::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		thread->waitWhileUserSuspended(_body.thread_state, _body.float_state);
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;

@@ -216,6 +216,12 @@ calls = [
 		('signum', 'int32_t'),
 	], []),
 
+	('thread_suspended', [
+		# these are in/out pointers
+		('thread_state', 'uint64_t'),
+		('float_state', 'uint64_t'),
+	], []),
+
 	#
 	# kqueue channels
 	#

@@ -219,6 +219,7 @@ namespace DarlingServer {
 
 		RunState getRunState() const;
 
+		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;
 
 		/**
