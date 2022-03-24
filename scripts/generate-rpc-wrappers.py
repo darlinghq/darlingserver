@@ -200,6 +200,12 @@ calls = [
 		('tracer', 'int32_t'),
 	], []),
 
+	('tid_for_thread', [
+		('thread', 'uint32_t'),
+	], [
+		('tid', 'int32_t'),
+	]),
+
 	#
 	# kqueue channels
 	#

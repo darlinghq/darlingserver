@@ -857,4 +857,18 @@ void DarlingServer::Call::SetTracer::processCall() {
 	_sendReply(code);
 };
 
+void DarlingServer::Call::TidForThread::processCall() {
+	int code = 0;
+	int32_t tid = 0;
+
+	if (auto thread = Thread::threadForPort(_body.thread)) {
+		tid = thread->nsid();
+	} else {
+		// might be user error (e.g. invalid port number or dead thread), so don't negate it
+		code = ESRCH;
+	}
+
+	_sendReply(code, tid);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;
