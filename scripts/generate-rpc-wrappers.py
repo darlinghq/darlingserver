@@ -211,6 +211,11 @@ calls = [
 		('enabled', 'bool'),
 	], []),
 
+	('ptrace_thupdate', [
+		('target', 'int32_t'),
+		('signum', 'int32_t'),
+	], []),
+
 	#
 	# kqueue channels
 	#

@@ -887,4 +887,19 @@ void DarlingServer::Call::PtraceSigexc::processCall() {
 	_sendReply(code);
 };
 
+void DarlingServer::Call::PtraceThupdate::processCall() {
+	int code = 0;
+
+	if (auto maybeThread = threadRegistry().lookupEntryByNSID(_body.target)) {
+		auto thread = *maybeThread;
+
+		thread->setPendingSignal(_body.signum);
+	} else {
+		// not negated because this isn't an internal error
+		code = ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;
