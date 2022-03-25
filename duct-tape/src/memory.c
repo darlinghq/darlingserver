@@ -595,7 +595,50 @@ region_info_out:
 };
 
 kern_return_t mach_vm_region_recurse(vm_map_t map, mach_vm_address_t* address, mach_vm_size_t* size, uint32_t* depth, vm_region_recurse_info_t info, mach_msg_type_number_t* infoCnt) {
-	dtape_stub_unsafe();
+	kern_return_t kr = KERN_FAILURE;
+	dtape_memory_region_info_t region_info;
+
+	if (depth != NULL) {
+		*depth = 0;
+	}
+
+	if (!dtape_hooks->task_get_memory_region_info(dtape_task_for_xnu_task(current_task())->context, *address, &region_info)) {
+		kr = KERN_INVALID_ADDRESS;
+		goto out;
+	}
+
+	*address = region_info.start_address;
+	*size = region_info.page_count * sysconf(_SC_PAGESIZE);
+
+	if (*infoCnt == VM_REGION_SUBMAP_SHORT_INFO_COUNT_64) {
+		vm_region_submap_info_64_t out = (vm_region_submap_info_64_t)info;
+
+		memset(out, 0, sizeof(*out));
+
+		if (region_info.protection & dtape_memory_protection_read) {
+			out->protection |= VM_PROT_READ;
+		}
+		if (region_info.protection & dtape_memory_protection_write) {
+			out->protection |= VM_PROT_WRITE;
+		}
+		if (region_info.protection & dtape_memory_protection_execute) {
+			out->protection |= VM_PROT_EXECUTE;
+		}
+
+		out->offset = region_info.map_offset;
+		out->share_mode = region_info.shared ? SM_SHARED : SM_PRIVATE;
+		out->max_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+	} else {
+		// in the LKM, only VM_REGION_SUBMAP_SHORT_INFO_COUNT_64 was implemented and everything was fine,
+		// so it's fine to return KERN_INVALID_ARGUMENT here; log a message just in case, though.
+		dtape_stub_safe("unsupported structure size");
+		kr = KERN_INVALID_ARGUMENT;
+	}
+
+	kr = KERN_SUCCESS;
+
+out:
+	return kr;
 };
 
 kern_return_t mach_vm_remap_external(vm_map_t target_map, mach_vm_offset_t* address, mach_vm_size_t size, mach_vm_offset_t mask, int flags, vm_map_t src_map, mach_vm_offset_t memory_address, boolean_t copy, vm_prot_t* cur_protection, vm_prot_t* max_protection, vm_inherit_t inheritance) {
