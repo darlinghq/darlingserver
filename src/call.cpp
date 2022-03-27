@@ -29,6 +29,10 @@
 #include <sys/syscall.h>
 #include <darlingserver/kqchan.hpp>
 
+#if DSERVER_ASAN
+	#include <sanitizer/asan_interface.h>
+#endif
+
 static DarlingServer::Log callLog("calls");
 
 DarlingServer::Log DarlingServer::Call::rpcReplyLog("replies");
@@ -113,10 +117,20 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 		{
 			std::unique_lock lock(thread->_rwlock);
-			if (thread->_savedReply) {
-				throw std::runtime_error("Client-pushed reply overwriting existing saved reply");
+			if (thread->_pendingCall && thread->_pendingCall->number() == Call::Number::InterruptEnter) {
+				// this means the client got interrupted after we had already sent a reply for the interrupted call,
+				// the client saw this unexpected reply while waiting for interrupt_enter to respond and sent it back to us,
+				// and we received both calls (interrupt_enter and push_reply) at the same time
+				thread->_pendingSavedReply = std::move(replyToSave);
+			} else {
+				if (thread->_interrupts.empty()) {
+					throw std::runtime_error("Client tried to push reply outside of interrupt");
+				}
+				if (thread->_interrupts.top().savedReply) {
+					throw std::runtime_error("Client-pushed reply overwriting existing saved reply");
+				}
+				thread->_interrupts.top().savedReply = std::move(replyToSave);
 			}
-			thread->_savedReply = std::move(replyToSave);
 		}
 
 		callLog.debug() << *thread << ": Saved client-pushed reply" << callLog.endLog;
@@ -670,26 +684,62 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 
 void DarlingServer::Call::InterruptEnter::processCall() {
 	// FIXME: we should not be accessing private Thread members
+	// FIXME: this currently does not work properly if the thread was suspended waiting for a lock
 
 	auto thread = _thread.lock();
 
-	thread->_interruptedForSignal = true;
+	std::function<void()> interruptedContinuation = nullptr;
 
-	dtape_thread_sigexc_enter(thread->_dtapeThread);
+	{
+		std::unique_lock lock(thread->_rwlock);
 
-	if (thread->_interruptedContinuation) {
-		thread->_didSyscallReturnDuringInterrupt = false;
-		getcontext(&thread->_syscallReturnHereDuringInterrupt);
-
-		if (!thread->_didSyscallReturnDuringInterrupt) {
-			thread->_interruptedContinuation();
+		if (thread->_pendingSavedReply) {
+			thread->_interrupts.top().savedReply = std::move(*thread->_pendingSavedReply);
+			thread->_pendingSavedReply = std::nullopt;
 		}
 
+		thread->_interruptedForSignal = true;
+
+		interruptedContinuation = thread->_interruptedContinuation;
 		thread->_interruptedContinuation = nullptr;
 	}
 
-	thread->_interruptedForSignal = false;
-	thread->_interruptedCall = nullptr;
+	dtape_thread_sigexc_enter(thread->_dtapeThread);
+
+	thread->_didSyscallReturnDuringInterrupt = false;
+	getcontext(&thread->_syscallReturnHereDuringInterrupt);
+
+	if (!thread->_didSyscallReturnDuringInterrupt) {
+		if (interruptedContinuation) {
+			interruptedContinuation();
+		} else if (thread->_interrupts.top().interruptedCall) {
+			thread->_handlingInterruptedCall = true;
+			thread->_pendingCallOverride = true;
+			thread->jumpToResume(thread->_interrupts.top().savedStack, thread->_interrupts.top().savedStackSize);
+		}
+	} else if (thread->_handlingInterruptedCall) {
+#if DSERVER_ASAN
+		const void* dummy;
+		size_t dummy2;
+		__sanitizer_finish_switch_fiber(nullptr, &dummy, &dummy2);
+#endif
+
+		thread->_handlingInterruptedCall = false;
+		thread->_pendingCallOverride = false;
+	}
+
+	{
+		std::unique_lock lock(thread->_rwlock);
+
+		Thread::freeStack(thread->_interrupts.top().savedStack, thread->_interrupts.top().savedStackSize);
+		thread->_interrupts.top().savedStack = nullptr;
+		thread->_interrupts.top().savedStackSize = 0;
+
+		thread->_interruptedForSignal = false;
+		thread->_interrupts.top().interruptedCall = nullptr;
+	}
+
+	dtape_thread_sigexc_enter2(thread->_dtapeThread);
 
 	_sendReply(0);
 };
@@ -701,10 +751,18 @@ void DarlingServer::Call::InterruptExit::processCall() {
 
 	_sendReply(0);
 
-	if (thread->_savedReply) {
-		callLog.debug() << *thread << ": Going to send saved reply" << callLog.endLog;
-		Server::sharedInstance().sendMessage(std::move(*thread->_savedReply));
-		thread->_savedReply = std::nullopt;
+	{
+		std::unique_lock lock(thread->_rwlock);
+
+		auto tmp = std::move(thread->_interrupts.top());
+
+		thread->_interrupts.pop();
+
+		if (tmp.savedReply) {
+			callLog.debug() << *thread << ": Going to send saved reply" << callLog.endLog;
+			Server::sharedInstance().sendMessage(std::move(*tmp.savedReply));
+			tmp.savedReply = std::nullopt;
+		}
 	}
 };
 

@@ -616,7 +616,8 @@ void DarlingServer::Kqchan::Process::_notify(uint32_t event, int64_t data) {
 
 			auto newKqchan = std::make_shared<Process>(listeningProcess, data & NOTE_PDATAMASK, _flags);
 
-			child->registerListeningKqchan(newKqchan);
+			// `_notify` is called with the process rwlock held
+			child->_registerListeningKqchanLocked(newKqchan);
 			newKqchan->_targetProcess = child;
 			newKqchan->_attached = true;
 

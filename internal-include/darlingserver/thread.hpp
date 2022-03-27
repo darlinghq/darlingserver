@@ -25,6 +25,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <condition_variable>
+#include <stack>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -83,7 +84,6 @@ namespace DarlingServer {
 		bool _terminating = false;
 		std::shared_ptr<Call> _activeCall = nullptr;
 		std::shared_ptr<Thread> _impersonating = nullptr;
-		int _pendingSignal = 0;
 		bool _processingSignal = false;
 		bool _pendingCallOverride = false;
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
@@ -93,11 +93,20 @@ namespace DarlingServer {
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;
 		bool _interruptedForSignal = false;
-		std::optional<Message> _savedReply = std::nullopt;
 		std::function<void()> _interruptedContinuation = nullptr;
 		ucontext_t _syscallReturnHereDuringInterrupt;
 		bool _didSyscallReturnDuringInterrupt = false;
-		std::shared_ptr<Call> _interruptedCall = nullptr;
+		bool _handlingInterruptedCall = false;
+
+		struct InterruptContext {
+			std::optional<Message> savedReply = std::nullopt;
+			std::shared_ptr<Call> interruptedCall = nullptr;
+			void* savedStack = nullptr;
+			size_t savedStackSize = 0;
+			int signal = 0;
+		};
+		std::stack<InterruptContext> _interrupts;
+		std::optional<Message> _pendingSavedReply = std::nullopt;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
@@ -113,6 +122,12 @@ namespace DarlingServer {
 		void _undeferLocked(std::unique_lock<std::shared_mutex>& lock);
 
 		void _deactivateCallLocked(std::shared_ptr<Call> expectedCall);
+
+		static void* allocateStack(size_t stackSize);
+		static void freeStack(void* stack, size_t stackSize);
+
+		[[noreturn]]
+		void jumpToResume(void* stack, size_t stackSize);
 
 	public:
 		using ID = pid_t;

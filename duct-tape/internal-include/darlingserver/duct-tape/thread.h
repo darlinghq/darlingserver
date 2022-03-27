@@ -15,6 +15,17 @@ struct dtape_opaque_ksyn_waitq_element {
 	char opaque[64];
 };
 
+typedef struct dtape_thread_user_state {
+	LIST_ENTRY(dtape_thread_user_state) link;
+
+#if __x86_64__
+	x86_thread_state_t thread_state;
+	x86_float_state_t float_state;
+#endif
+} dtape_thread_user_state_t;
+
+typedef LIST_HEAD(dtape_thread_user_state_head, dtape_thread_user_state) dtape_thread_user_state_head_t;
+
 struct dtape_thread {
 	void* context;
 	dtape_mutex_link_t mutex_link;
@@ -22,10 +33,8 @@ struct dtape_thread {
 	uintptr_t pthread_handle;
 	uintptr_t dispatch_qaddr;
 	struct kevent_ctx_s kevent_ctx;
-#if __x86_64__
-	x86_thread_state_t thread_state;
-	x86_float_state_t float_state;
-#endif
+	dtape_thread_user_state_head_t user_states;
+	dtape_thread_user_state_t default_state;
 	bool processing_signal;
 
 	bool waiting_suspended;

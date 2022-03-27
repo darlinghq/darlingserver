@@ -109,11 +109,8 @@ DarlingServer::Process::~Process() {
 
 	_unregisterThreads();
 
-	{
-		std::shared_lock lock(_rwlock);
-		// TODO: get exit status
-		_notifyListeningKqchannels(NOTE_EXIT, 0);
-	}
+	// TODO: get exit status
+	_notifyListeningKqchannels(NOTE_EXIT, 0);
 
 	dtape_task_dying(_dtapeTask);
 
@@ -348,7 +345,7 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		mainThread->_s2cReplySempahore = dtape_semaphore_create(_dtapeTask, 0);
 
 		// notify listeners that we have exec'd (i.e. been replaced)
-		_notifyListeningKqchannels(NOTE_EXEC, 0);
+		_notifyListeningKqchannelsLocked(NOTE_EXEC, 0);
 	} else {
 		// fork case
 
@@ -391,19 +388,25 @@ void DarlingServer::Process::waitForChildAfterFork() {
 	dtape_semaphore_down_simple(_dtapeForkWaitSemaphore);
 };
 
-void DarlingServer::Process::registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan) {
+void DarlingServer::Process::_registerListeningKqchanLocked(std::shared_ptr<Kqchan::Process> kqchan) {
 	uintptr_t id = static_cast<std::shared_ptr<Kqchan>>(kqchan)->_idForProcess();
 	_listeningKqchannels[id] = kqchan;
 };
 
+void DarlingServer::Process::registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan) {
+	std::unique_lock lock(_rwlock);
+	_registerListeningKqchanLocked(kqchan);
+};
+
 void DarlingServer::Process::unregisterListeningKqchan(uintptr_t kqchanID) {
+	std::unique_lock lock(_rwlock);
 	_listeningKqchannels.erase(kqchanID);
 };
 
 /**
  * @pre Must hold #_rwlock at least for reading.
  */
-void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t data) {
+void DarlingServer::Process::_notifyListeningKqchannelsLocked(uint32_t event, int64_t data) {
 	for (auto& [id, maybeKqchan]: _listeningKqchannels) {
 		auto kqchan = maybeKqchan.lock();
 
@@ -413,6 +416,11 @@ void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t 
 
 		kqchan->_notify(event, data);
 	}
+};
+
+void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t data) {
+	std::shared_lock lock(_rwlock);
+	_notifyListeningKqchannelsLocked(event, data);
 };
 
 bool DarlingServer::Process::is64Bit() const {

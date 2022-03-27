@@ -53,10 +53,14 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	thread->processing_signal = false;
 	thread->name = NULL;
 	thread->waiting_suspended = false;
+	LIST_INIT(&thread->user_states);
 	dtape_mutex_init(&thread->suspension_mutex);
 	dtape_condvar_init(&thread->suspension_condvar);
 	memset(&thread->xnu_thread, 0, sizeof(thread->xnu_thread));
 	memset(&thread->kwe, 0, sizeof(thread->kwe));
+
+	memset(&thread->default_state, 0, sizeof(thread->default_state));
+	LIST_INSERT_HEAD(&thread->user_states, &thread->default_state, link);
 
 	// this next section uses code adapted from XNU's thread_create_internal() in osfmk/kern/thread.c
 
@@ -203,6 +207,11 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 			return -LINUX_EFAULT;
 		}
 
+		// debugging
+		if (tstate.rip == 0) {
+			panic("bad RIP");
+		}
+
 		thread_set_state(current_thread(), x86_THREAD_STATE64, (thread_state_t) &tstate, x86_THREAD_STATE64_COUNT);
 		thread_set_state(current_thread(), x86_FLOAT_STATE64, (thread_state_t) &fstate, x86_FLOAT_STATE64_COUNT);
 	} else if (task->architecture == dserver_rpc_architecture_i386) {
@@ -230,6 +239,11 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 		x86_thread_state64_t tstate;
 		x86_float_state64_t fstate;
 		mach_msg_type_number_t count;
+
+		// debugging
+		if (LIST_FIRST(&thread->user_states)->thread_state.uts.ts64.rip == 0) {
+			panic("bad RIP");
+		}
 
 		count = x86_THREAD_STATE64_COUNT;
 		thread_get_state(current_thread(), x86_THREAD_STATE64, (thread_state_t) &tstate, &count);
@@ -400,6 +414,8 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 
 		// FIXME: possible race condition here between notifying of waiting and actually sleeping
 
+		thread->xnu_thread.wait_result = THREAD_WAITING;
+
 		dtape_hooks->thread_suspend(thread->context, NULL, NULL, NULL);
 
 		dtape_log_debug("sigexc: woken up");
@@ -408,6 +424,10 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 		thread->waiting_suspended = false;
 		dtape_mutex_unlock(&thread->suspension_mutex);
 		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
+
+		if (thread->xnu_thread.wait_result == THREAD_INTERRUPTED) {
+			break;
+		}
 	}
 };
 
@@ -427,8 +447,28 @@ void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 	thread_unlock(&thread->xnu_thread);
 };
 
+void dtape_thread_sigexc_enter2(dtape_thread_t* thread) {
+	dtape_thread_user_state_t* new_user_state = malloc(sizeof(dtape_thread_user_state_t));
+	if (!new_user_state) {
+		panic("ran out of memory");
+	}
+
+	memset(new_user_state, 0, sizeof(*new_user_state));
+
+	thread_lock(&thread->xnu_thread);
+	LIST_INSERT_HEAD(&thread->user_states, new_user_state, link);
+	thread_unlock(&thread->xnu_thread);
+};
+
 void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
-	// nothing for now
+	dtape_thread_user_state_t* user_state = NULL;
+
+	thread_lock(&thread->xnu_thread);
+	user_state = LIST_FIRST(&thread->user_states);
+	LIST_REMOVE(user_state, link);
+	thread_unlock(&thread->xnu_thread);
+
+	free(user_state);
 };
 
 void dtape_thread_dying(dtape_thread_t* thread) {
@@ -585,6 +625,7 @@ thread_set_state(
 {
 	dtape_thread_t* dthread = dtape_thread_for_xnu_thread(thread);
 	dtape_task_t* dtask = dtape_task_for_thread(dthread);
+	dtape_thread_user_state_t* user_state = LIST_FIRST(&dthread->user_states);
 
 	if (dtask->architecture == dserver_rpc_architecture_x86_64 || dtask->architecture == dserver_rpc_architecture_i386) {
 		switch (flavor)
@@ -689,7 +730,7 @@ thread_set_state(
 
 				const x86_thread_state32_t* s = (x86_thread_state32_t*) state;
 
-				memcpy(&dthread->thread_state.uts.ts32, s, sizeof(*s));
+				memcpy(&user_state->thread_state.uts.ts32, s, sizeof(*s));
 				return KERN_SUCCESS;
 			}
 			case x86_THREAD_STATE64:
@@ -703,7 +744,7 @@ thread_set_state(
 
 				// printf("Saving RIP 0x%lx, FLG 0x%lx\n", s->rip, s->rflags);
 
-				memcpy(&dthread->thread_state.uts.ts64, s, sizeof(*s));
+				memcpy(&user_state->thread_state.uts.ts64, s, sizeof(*s));
 				return KERN_SUCCESS;
 			}
 			case x86_FLOAT_STATE32:
@@ -715,7 +756,7 @@ thread_set_state(
 
 				const x86_float_state32_t* s = (x86_float_state32_t*) state;
 
-				memcpy(&dthread->float_state.ufs.fs32, s, sizeof(*s));
+				memcpy(&user_state->float_state.ufs.fs32, s, sizeof(*s));
 				return KERN_SUCCESS;
 			}
 
@@ -728,7 +769,7 @@ thread_set_state(
 
 				const x86_float_state64_t* s = (x86_float_state64_t*) state;
 
-				memcpy(&dthread->float_state.ufs.fs64, s, sizeof(*s));
+				memcpy(&user_state->float_state.ufs.fs64, s, sizeof(*s));
 				return KERN_SUCCESS;
 			}
 			case x86_DEBUG_STATE32:
@@ -807,6 +848,7 @@ thread_set_state(
 				return KERN_SUCCESS;
 #else
 				// TODO
+				dtape_stub("debug state");
 				return KERN_NOT_SUPPORTED;
 #endif
 			}
@@ -827,6 +869,7 @@ thread_get_state_internal(
 {
 	dtape_thread_t* dthread = dtape_thread_for_xnu_thread(thread);
 	dtape_task_t* dtask = dtape_task_for_thread(dthread);
+	dtape_thread_user_state_t* user_state = LIST_FIRST(&dthread->user_states);
 
 	// to_user is used to indicate whether to perform any necessary conversions from kernel to user thread state representations
 	// it currently only does something on ARM64 when the authenticated pointers (`ptrauth_calls`) feature is enabled,
@@ -921,7 +964,7 @@ thread_get_state_internal(
 
 				*state_count = x86_THREAD_STATE32_COUNT;
 
-				memcpy(s, &dthread->thread_state.uts.ts32, sizeof(*s));
+				memcpy(s, &user_state->thread_state.uts.ts32, sizeof(*s));
 
 				return KERN_SUCCESS;
 			}
@@ -935,7 +978,7 @@ thread_get_state_internal(
 				x86_float_state32_t* s = (x86_float_state32_t*) state;
 
 				*state_count = x86_FLOAT_STATE32_COUNT;
-				memcpy(s, &dthread->float_state.ufs.fs32, sizeof(*s));
+				memcpy(s, &user_state->float_state.ufs.fs32, sizeof(*s));
 
 				return KERN_SUCCESS;
 			}
@@ -947,7 +990,7 @@ thread_get_state_internal(
 				x86_float_state64_t* s = (x86_float_state64_t*) state;
 
 				*state_count = x86_FLOAT_STATE64_COUNT;
-				memcpy(s, &dthread->float_state.ufs.fs64, sizeof(*s));
+				memcpy(s, &user_state->float_state.ufs.fs64, sizeof(*s));
 
 				return KERN_SUCCESS;
 			}
@@ -961,7 +1004,7 @@ thread_get_state_internal(
 				x86_thread_state64_t* s = (x86_thread_state64_t*) state;
 				*state_count = x86_THREAD_STATE64_COUNT;
 
-				memcpy(s, &dthread->thread_state.uts.ts64, sizeof(*s));
+				memcpy(s, &user_state->thread_state.uts.ts64, sizeof(*s));
 
 				// printf("Returning RIP 0x%x\n", s->rip);
 

@@ -67,7 +67,7 @@ static thread_local uint64_t interruptDisableCount = 0;
 
 static DarlingServer::Log threadLog("thread");
 
-static void* allocateStack(size_t stackSize) {
+void* DarlingServer::Thread::allocateStack(size_t stackSize) {
 	void* stack = NULL;
 
 #if USE_THREAD_GUARD_PAGES
@@ -89,7 +89,7 @@ static void* allocateStack(size_t stackSize) {
 	return stack;
 };
 
-static void freeStack(void* stack, size_t stackSize) {
+void DarlingServer::Thread::freeStack(void* stack, size_t stackSize) {
 #if USE_THREAD_GUARD_PAGES
 	if (munmap((char*)stack - 1024ULL, stackSize + 2048ULL) < 0) {
 		throw std::system_error(errno, std::generic_category());
@@ -262,10 +262,10 @@ void DarlingServer::Thread::makePendingCallActive() {
 };
 
 void DarlingServer::Thread::_deactivateCallLocked(std::shared_ptr<Call> expectedCall) {
-	if ((_interruptedForSignal ? _interruptedCall : _activeCall).get() != expectedCall.get()) {
+	if ((_interruptedForSignal ? _interrupts.top().interruptedCall : _activeCall).get() != expectedCall.get()) {
 		throw std::runtime_error("Upon deactivating the active call found active/interrupted call != expected call");
 	}
-	(_interruptedForSignal ? _interruptedCall : _activeCall) = nullptr;
+	(_interruptedForSignal ? _interrupts.top().interruptedCall : _activeCall) = nullptr;
 };
 
 void DarlingServer::Thread::deactivateCall(std::shared_ptr<Call> expectedCall) {
@@ -315,12 +315,20 @@ void DarlingServer::Thread::microthreadWorker() {
 	currentThreadVar->makePendingCallActive();
 	currentThreadVar->_activeCall->processCall();
 
+	if (currentThreadVar->_handlingInterruptedCall) {
+		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-	// we're exiting normally, so we might not re-enter this microthread; tell ASAN to drop the fake stack
-	__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack, currentThreadVar->_stackSize);
+#endif
+		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+	} else {
+#if DSERVER_ASAN
+		// we're exiting normally, so we might not re-enter this microthread; tell ASAN to drop the fake stack
+		__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
 #endif
 
-	setcontext(&backToThreadTopContext);
+		setcontext(&backToThreadTopContext);
+	}
 	__builtin_unreachable();
 };
 
@@ -338,12 +346,19 @@ void DarlingServer::Thread::microthreadContinuation() {
 		currentContinuation = nullptr;
 	}
 
+	if (currentThreadVar->_handlingInterruptedCall) {
+		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-	// see microthreadWorker()
-	__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack, currentThreadVar->_stackSize);
 #endif
-
-	setcontext(&backToThreadTopContext);
+		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+	} else {
+#if DSERVER_ASAN
+		// see microthreadWorker()
+		__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+#endif
+		setcontext(&backToThreadTopContext);
+	}
 	__builtin_unreachable();
 };
 
@@ -400,10 +415,15 @@ void DarlingServer::Thread::doWork() {
 
 		_rwlock.lock();
 
-		if (_pendingCall && _pendingCall->number() == Call::Number::InterruptEnter) {
+		if (!_pendingCallOverride && _pendingCall && _pendingCall->number() == Call::Number::InterruptEnter) {
+			_interrupts.emplace();
+			_interrupts.top().savedStack = _stack;
+			_interrupts.top().savedStackSize = _stackSize;
+			_stack = allocateStack(THREAD_STACK_SIZE);
+			_stackSize = THREAD_STACK_SIZE;
 			_interruptedContinuation = _continuationCallback;
 			_continuationCallback = nullptr;
-			_interruptedCall = _activeCall;
+			_interrupts.top().interruptedCall = _activeCall;
 			_activeCall = nullptr;
 		}
 
@@ -438,6 +458,7 @@ void DarlingServer::Thread::doWork() {
 				_rwlock.unlock();
 				goto doneWorking;
 			}
+			_suspended = false;
 			_rwlock.unlock();
 
 			ucontext_t newContext;
@@ -649,7 +670,7 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 	}
 
 	{
-		auto call = (currentThreadVar->_interruptedForSignal) ? currentThreadVar->_interruptedCall : currentThreadVar->_activeCall;
+		auto call = (currentThreadVar->_interruptedForSignal) ? currentThreadVar->_interrupts.top().interruptedCall : currentThreadVar->_activeCall;
 		if (!call || !call->isXNUTrap()) {
 			throw std::runtime_error("Attempt to return from syscall on thread with no active syscall");
 		}
@@ -662,6 +683,11 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 
 	if (currentThreadVar->_interruptedForSignal) {
 		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
+#if DSERVER_ASAN
+		if (currentThreadVar->_handlingInterruptedCall) {
+			__sanitizer_start_switch_fiber(nullptr, currentThreadVar->_stack, currentThreadVar->_stackSize);
+		}
+#endif
 		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
 		__builtin_unreachable();
 	}
@@ -770,13 +796,18 @@ void DarlingServer::Thread::saveStateToUser(uint64_t threadState, uint64_t float
 
 int DarlingServer::Thread::pendingSignal() const {
 	std::shared_lock lock(_rwlock);
-	return _pendingSignal;
+	return (_interrupts.empty()) ? 0 : _interrupts.top().signal;
 };
 
 int DarlingServer::Thread::setPendingSignal(int signal) {
 	std::unique_lock lock(_rwlock);
-	auto pendingSignal = _pendingSignal;
-	_pendingSignal = signal;
+	int pendingSignal;
+	if (_interrupts.empty()) {
+		throw std::runtime_error("Can't set pending signal with no active interrupts");
+	} else {
+		pendingSignal = _interrupts.top().signal;
+		_interrupts.top().signal = signal;
+	}
 	return pendingSignal;
 };
 
@@ -785,7 +816,7 @@ void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNu
 
 	{
 		std::unique_lock lock(_rwlock);
-		_pendingSignal = 0;
+		_interrupts.top().signal = 0;
 		_processingSignal = true;
 	}
 
@@ -807,7 +838,7 @@ void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNu
 void DarlingServer::Thread::handleSignal(int signal) {
 	std::unique_lock lock(_rwlock);
 	if (_processingSignal) {
-		_pendingSignal = signal;
+		_interrupts.top().signal = signal;
 	} else {
 		throw std::runtime_error("Attempt to handle signal while not processing signal");
 	}
@@ -1056,13 +1087,12 @@ void DarlingServer::Thread::logToStream(Log::Stream& stream) const {
 void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply) {
 	std::unique_lock lock(_rwlock);
 
-	_deactivateCallLocked(expectedCall);
+	if (expectedCall) {
+		_deactivateCallLocked(expectedCall);
+	}
 
 	if (_interruptedForSignal) {
-		if (_savedReply) {
-			throw std::runtime_error("Pushed call reply overwriting existing saved reply");
-		}
-		_savedReply = std::move(reply);
+		_interrupts.top().savedReply = std::move(reply);
 	} else {
 		Server::sharedInstance().sendMessage(std::move(reply));
 	}
@@ -1118,4 +1148,12 @@ void DarlingServer::Thread::sendSignal(int signal) const {
 	} else {
 		throw std::system_error(ESRCH, std::generic_category());
 	}
+};
+
+void DarlingServer::Thread::jumpToResume(void* stack, size_t stackSize) {
+#if DSERVER_ASAN
+	__sanitizer_start_switch_fiber(&asanOldFakeStack, stack, stackSize);
+#endif
+	setcontext(&_resumeContext);
+	__builtin_unreachable();
 };

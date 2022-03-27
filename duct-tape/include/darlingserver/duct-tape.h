@@ -85,6 +85,7 @@ void dtape_thread_retain(dtape_thread_t* thread);
 void dtape_thread_release(dtape_thread_t* thread);
 void dtape_thread_sigexc_enter(dtape_thread_t* thread);
 void dtape_thread_sigexc_exit(dtape_thread_t* thread);
+void dtape_thread_sigexc_enter2(dtape_thread_t* thread);
 void dtape_thread_dying(dtape_thread_t* thread);
 
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
