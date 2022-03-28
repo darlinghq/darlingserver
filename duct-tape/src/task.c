@@ -190,6 +190,7 @@ void dtape_task_dying(dtape_task_t* task) {
 
 void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t length) {
 	dtape_mutex_lock(&task->dyld_info_lock);
+	dtape_log_debug("setting dyld info to %llu bytes at %llx", length, address);
 	task->dyld_info_addr = address;
 	task->dyld_info_length = length;
 	dtape_mutex_unlock(&task->dyld_info_lock);
@@ -418,16 +419,22 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			// This call may block, waiting for Darling to provide this information
 			// shortly after startup.
 
+			dtape_log_debug("going to read dyld info for task %p (%d)", task, task->saved_pid);
+
 			dtape_mutex_lock(&task->dyld_info_lock);
 
 			while (task->dyld_info_addr == 0 && task->dyld_info_length == 0) {
+				dtape_log_debug("going to wait for dyld info for task %p (%d)", task, task->saved_pid);
 				dtape_condvar_wait(&task->dyld_info_condvar, &task->dyld_info_lock);
+				dtape_log_debug("awoken from dyld info wait for task %p (%d)", task, task->saved_pid);
 			}
 
 			info->all_image_info_addr = task->dyld_info_addr;
 			info->all_image_info_size = task->dyld_info_length;
 
 			dtape_mutex_unlock(&task->dyld_info_lock);
+
+			dtape_log_debug("got dyld info for task %p (%d): %llu bytes at %llx", task, task->saved_pid, info->all_image_info_addr, info->all_image_info_size);
 
 			/* only set format on output for those expecting it */
 			if (*task_info_count >= TASK_DYLD_INFO_COUNT) {
@@ -436,6 +443,8 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			} else {
 				*task_info_count = TASK_LEGACY_DYLD_INFO_COUNT;
 			}
+
+			return KERN_SUCCESS;
 		};
 
 		case TASK_VM_INFO: {
