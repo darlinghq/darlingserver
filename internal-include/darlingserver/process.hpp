@@ -63,6 +63,14 @@ namespace DarlingServer {
 			uint64_t regionCount;
 		};
 
+		struct MemoryRegionInfo {
+			uintptr_t startAddress;
+			uint64_t pageCount;
+			int protection;
+			uint64_t mapOffset;
+			bool shared;
+		};
+
 	private:
 		pid_t _pid;
 		pid_t _nspid;
@@ -158,7 +166,7 @@ namespace DarlingServer {
 		Architecture architecture() const;
 
 		MemoryInfo memoryInfo() const;
-		void memoryRegionInfo(uintptr_t address, uintptr_t& startAddress, uint64_t& pageCount, int& protection, uint64_t& mapOffset, bool& shared) const;
+		MemoryRegionInfo memoryRegionInfo(uintptr_t address) const;
 
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);

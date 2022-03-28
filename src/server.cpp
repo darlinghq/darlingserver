@@ -248,7 +248,12 @@ struct DTapeHooks {
 	static bool dtape_hook_task_get_memory_region_info(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info) {
 		int protection;
 		try {
-			static_cast<DarlingServer::Process*>(task_context)->memoryRegionInfo(address, memory_region_info->start_address, memory_region_info->page_count, protection, memory_region_info->map_offset, memory_region_info->shared);
+			auto info = static_cast<DarlingServer::Process*>(task_context)->memoryRegionInfo(address);
+			memory_region_info->start_address = info.startAddress;
+			memory_region_info->page_count = info.pageCount;
+			memory_region_info->map_offset = info.mapOffset;
+			protection = info.protection;
+			memory_region_info->shared = info.shared;
 		} catch (...) {
 			return false;
 		}

@@ -455,7 +455,8 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 
 static const std::regex memoryRegionEntryRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)\\s+((?:r|w|x|p|s|\\-)+)\\s+([0-9a-fA-F]+)");
 
-void DarlingServer::Process::memoryRegionInfo(uintptr_t address, uintptr_t& startAddress, uint64_t& pageCount, int& protection, uint64_t& mapOffset, bool& shared) const {
+DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInfo(uintptr_t address) const {
+	MemoryRegionInfo info;
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");
 	std::string line;
 
@@ -469,37 +470,37 @@ void DarlingServer::Process::memoryRegionInfo(uintptr_t address, uintptr_t& star
 			continue;
 		}
 
-		startAddress = std::stoul(match[1].str());
-		endAddress = std::stoul(match[2].str());
+		info.startAddress = std::stoul(match[1].str(), nullptr, 16);
+		endAddress = std::stoul(match[2].str(), nullptr, 16);
 
-		if (endAddress <= address || startAddress > address) {
+		if (endAddress <= address || info.startAddress > address) {
 			continue;
 		}
 
-		pageCount = (endAddress - startAddress) / sysconf(_SC_PAGESIZE);
+		info.pageCount = (endAddress - info.startAddress) / sysconf(_SC_PAGESIZE);
 
-		mapOffset = std::stoul(match[4].str());
+		info.mapOffset = std::stoul(match[4].str(), nullptr, 16);
 
 		auto perms = match[3].str();
 
-		protection = 0;
+		info.protection = 0;
 
 		if (perms.find('r') != std::string::npos) {
-			protection |= PROT_READ;
+			info.protection |= PROT_READ;
 		}
 		if (perms.find('w') != std::string::npos) {
-			protection |= PROT_WRITE;
+			info.protection |= PROT_WRITE;
 		}
 		if (perms.find('x') != std::string::npos) {
-			protection |= PROT_EXEC;
+			info.protection |= PROT_EXEC;
 		}
 
-		shared = perms.find('s') != std::string::npos;
+		info.shared = perms.find('s') != std::string::npos;
 
-		return;
+		return info;
 	}
 
-	processLog.warning() << *this << ": Address " << std::hex << address << " not found in \"/proc/" << _pid << "/maps\"";
+	processLog.warning() << *this << ": Address " << std::hex << address << " not found in \"/proc/" << std::dec << _pid << "/maps\"" << processLog.endLog;
 	throw std::system_error(EFAULT, std::generic_category());
 };
 
