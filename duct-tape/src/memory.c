@@ -515,7 +515,7 @@ kern_return_t mach_vm_region(vm_map_t map, mach_vm_offset_t* address, mach_vm_si
 			kern_return_t kr = KERN_FAILURE;
 			dtape_memory_region_info_t region_info;
 
-			if (!dtape_hooks->task_get_memory_region_info(dtape_task_for_xnu_task(current_task())->context, *address, &region_info)) {
+			if (!dtape_hooks->task_get_memory_region_info(map->dtape_task->context, *address, &region_info)) {
 				kr = KERN_INVALID_ADDRESS;
 				goto region_info_out;
 			}
@@ -602,7 +602,7 @@ kern_return_t mach_vm_region_recurse(vm_map_t map, mach_vm_address_t* address, m
 		*depth = 0;
 	}
 
-	if (!dtape_hooks->task_get_memory_region_info(dtape_task_for_xnu_task(current_task())->context, *address, &region_info)) {
+	if (!dtape_hooks->task_get_memory_region_info(map->dtape_task->context, *address, &region_info)) {
 		kr = KERN_INVALID_ADDRESS;
 		goto out;
 	}
