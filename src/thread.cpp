@@ -964,7 +964,7 @@ uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int pro
 	}
 #endif
 
-	Message callMessage(sizeof(dserver_s2c_call_mmap_t), 0);
+	Message callMessage(sizeof(dserver_s2c_call_mmap_t), (fd < 0) ? 0 : 1);
 	auto call = reinterpret_cast<dserver_s2c_call_mmap_t*>(callMessage.data().data());
 
 	call->header.call_number = dserver_callnum_s2c;
@@ -973,10 +973,19 @@ uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int pro
 	call->length = length;
 	call->protection = protection;
 	call->flags = flags;
-	call->fd = fd;
+	call->fd = (fd < 0) ? -1 : 0;
 	call->offset = offset;
 
-	s2cLog.debug() << "Performing _mmap with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << ", flags=" << call->flags << ", fd=" << call->fd << ", offset=" << call->offset << s2cLog.endLog;
+	if (fd >= 0) {
+		auto dupfd = dup(fd);
+		if (dupfd < 0) {
+			outErrno = errno;
+			return (uintptr_t)MAP_FAILED;
+		}
+		callMessage.pushDescriptor(dupfd);
+	}
+
+	s2cLog.debug() << "Performing _mmap with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << ", flags=" << call->flags << ", fd=" << call->fd << " (" << fd << ")" << ", offset=" << call->offset << s2cLog.endLog;
 
 	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t));
 	auto reply = reinterpret_cast<dserver_s2c_reply_mmap_t*>(replyMessage.data().data());
@@ -1048,6 +1057,21 @@ void DarlingServer::Thread::freePages(uintptr_t address, size_t pageCount) {
 	if (_munmap(address, pageCount * sysconf(_SC_PAGESIZE), err) < 0) {
 		throw std::system_error(err, std::generic_category(), "S2C munmap call failed");
 	}
+};
+
+uintptr_t DarlingServer::Thread::mapFile(int fd, size_t pageCount, int protection, uintptr_t addressHint, size_t pageOffset, bool fixed, bool overwrite) {
+	int err = 0;
+	int flags = MAP_SHARED;
+	if (fixed && overwrite) {
+		flags |= MAP_FIXED;
+	} else if (fixed) {
+		flags |= MAP_FIXED_NOREPLACE;
+	}
+	auto result = _mmap(addressHint, pageCount * sysconf(_SC_PAGESIZE), protection, flags, fd, pageOffset * sysconf(_SC_PAGESIZE), err);
+	if (result == (uintptr_t)MAP_FAILED) {
+		throw std::system_error(err, std::generic_category(), "S2C mmap call failed");
+	}
+	return result;
 };
 
 void DarlingServer::Thread::changeProtection(uintptr_t address, size_t pageCount, int protection) {

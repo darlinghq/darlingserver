@@ -220,6 +220,7 @@ namespace DarlingServer {
 
 		uintptr_t allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite);
 		void freePages(uintptr_t address, size_t pageCount);
+		uintptr_t mapFile(int fd, size_t pageCount, int protection, uintptr_t addressHint, size_t pageOffset, bool fixed, bool overwrite);
 		void changeProtection(uintptr_t address, size_t pageCount, int protection);
 
 		void defer(bool wait = false);
