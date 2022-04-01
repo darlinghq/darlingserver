@@ -1007,6 +1007,27 @@ int DarlingServer::Thread::_munmap(uintptr_t address, size_t length, int& outErr
 	return reply->return_value;
 };
 
+int DarlingServer::Thread::_mprotect(uintptr_t address, size_t length, int protection, int& outErrno) {
+	Message callMessage(sizeof(dserver_s2c_call_mprotect_t), 0);
+	auto call = reinterpret_cast<dserver_s2c_call_mprotect_t*>(callMessage.data().data());
+
+	call->header.call_number = dserver_callnum_s2c;
+	call->header.s2c_number = dserver_s2c_msgnum_mprotect;
+	call->address = address;
+	call->length = length;
+	call->protection = protection;
+
+	s2cLog.debug() << "Performing _mprotect with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << s2cLog.endLog;
+
+	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mprotect, sizeof(dserver_s2c_reply_mprotect_t));
+	auto reply = reinterpret_cast<dserver_s2c_reply_mprotect_t*>(replyMessage.data().data());
+
+	s2cLog.debug() << "_mprotect returned return_value=" << reply->return_value << ", errno_result=" << reply->errno_result << s2cLog.endLog;
+
+	outErrno = reply->errno_result;
+	return reply->return_value;
+};
+
 uintptr_t DarlingServer::Thread::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
 	int err = 0;
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -1026,6 +1047,13 @@ void DarlingServer::Thread::freePages(uintptr_t address, size_t pageCount) {
 	int err = 0;
 	if (_munmap(address, pageCount * sysconf(_SC_PAGESIZE), err) < 0) {
 		throw std::system_error(err, std::generic_category(), "S2C munmap call failed");
+	}
+};
+
+void DarlingServer::Thread::changeProtection(uintptr_t address, size_t pageCount, int protection) {
+	int err = 0;
+	if (_mprotect(address, pageCount * sysconf(_SC_PAGESIZE), protection, err) < 0) {
+		throw std::system_error(err, std::generic_category(), "S2C mprotect call failed");
 	}
 };
 
