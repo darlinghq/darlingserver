@@ -151,10 +151,6 @@ unsigned int ml_wait_max_cpus(void) {
 	return 0;
 };
 
-void mach_destroy_memory_entry(ipc_port_t port) {
-	dtape_stub();
-};
-
 struct turnstile* kqueue_turnstile(struct kqueue* kqu) {
 	dtape_stub();
 	return NULL;

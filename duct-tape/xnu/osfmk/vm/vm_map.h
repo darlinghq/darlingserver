@@ -151,8 +151,13 @@ typedef union vm_map_object {
 	vm_map_t                vmo_submap;     /* belongs to another map */
 } vm_map_object_t;
 
+#ifdef __DARLING__
+#define named_entry_lock_init(object)   lck_mtx_init(&(object)->Lock, LCK_GRP_NULL, LCK_ATTR_NULL)
+#define named_entry_lock_destroy(object)        lck_mtx_destroy(&(object)->Lock, LCK_GRP_NULL)
+#else
 #define named_entry_lock_init(object)   lck_mtx_init(&(object)->Lock, &vm_object_lck_grp, &vm_object_lck_attr)
 #define named_entry_lock_destroy(object)        lck_mtx_destroy(&(object)->Lock, &vm_object_lck_grp)
+#endif // __DARLING__
 #define named_entry_lock(object)                lck_mtx_lock(&(object)->Lock)
 #define named_entry_unlock(object)              lck_mtx_unlock(&(object)->Lock)
 #if VM_NAMED_ENTRY_LIST

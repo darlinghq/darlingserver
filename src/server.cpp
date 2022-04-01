@@ -157,23 +157,6 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Thread*>(thread_context)->setPendingCallOverride(pending_call_override);
 	};
 
-	static uintptr_t dtape_hook_thread_allocate_pages(void* thread_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags) {
-		try {
-			return static_cast<DarlingServer::Thread*>(thread_context)->allocatePages(page_count, protection, address_hint, flags & dtape_memory_flag_fixed, flags & dtape_memory_flag_overwrite);
-		} catch (std::system_error e) {
-			return 0;
-		}
-	};
-
-	static int dtape_hook_thread_free_pages(void* thread_context, uintptr_t address, size_t page_count) {
-		try {
-			static_cast<DarlingServer::Thread*>(thread_context)->freePages(address, page_count);
-			return 0;
-		} catch (std::system_error e) {
-			return -1;
-		}
-	};
-
 	static dtape_thread_t* dtape_hook_thread_lookup(int id, bool id_is_nsid, bool retain) {
 		auto& registry = DarlingServer::threadRegistry();
 		auto maybeThread = (id_is_nsid) ? registry.lookupEntryByNSID(id) : registry.lookupEntryByID(id);
@@ -272,6 +255,44 @@ struct DTapeHooks {
 		return true;
 	};
 
+	static uintptr_t dtape_hook_task_allocate_pages(void* task_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags) {
+		try {
+			return static_cast<DarlingServer::Process*>(task_context)->allocatePages(page_count, protection, address_hint, flags & dtape_memory_flag_fixed, flags & dtape_memory_flag_overwrite);
+		} catch (std::system_error e) {
+			return 0;
+		}
+	};
+
+	static int dtape_hook_task_free_pages(void* task_context, uintptr_t address, size_t page_count) {
+		try {
+			static_cast<DarlingServer::Process*>(task_context)->freePages(address, page_count);
+			return 0;
+		} catch (std::system_error e) {
+			return -1;
+		}
+	};
+
+	static uintptr_t dtape_hook_task_map_file(void* task_context, int fd, size_t page_count, int protection, uintptr_t address_hint, size_t page_offset, dtape_memory_flags_t flags) {
+		try {
+			return static_cast<DarlingServer::Process*>(task_context)->mapFile(fd, page_count, protection, address_hint, page_offset, flags & dtape_memory_flag_fixed, flags & dtape_memory_flag_overwrite);
+		} catch (std::system_error e) {
+			return 0;
+		}
+	};
+
+	static uintptr_t dtape_hook_task_get_next_region(void* task_context, uintptr_t address) {
+		return static_cast<DarlingServer::Process*>(task_context)->getNextRegion(address);
+	};
+
+	static bool dtape_hook_task_change_protection(void* task_context, uintptr_t address, size_t page_count, int protection) {
+		try {
+			static_cast<DarlingServer::Process*>(task_context)->changeProtection(address, page_count, protection);
+			return true;
+		} catch (std::system_error e) {
+			return false;
+		}
+	};
+
 #if DSERVER_EXTENDED_DEBUG
 	static void dtape_hook_task_register_name(void* task_context, uint32_t name, uintptr_t pointer) {
 		static_cast<DarlingServer::Process*>(task_context)->_registerName(name, pointer);
@@ -309,8 +330,6 @@ struct DTapeHooks {
 		.thread_setup = dtape_hook_thread_setup,
 		.thread_set_pending_signal = dtape_hook_thread_set_pending_signal,
 		.thread_set_pending_call_override = dtape_hook_thread_set_pending_call_override,
-		.thread_allocate_pages = dtape_hook_thread_allocate_pages,
-		.thread_free_pages = dtape_hook_thread_free_pages,
 		.thread_lookup = dtape_hook_thread_lookup,
 		.thread_get_state = dtape_hook_thread_get_state,
 		.thread_send_signal = dtape_hook_thread_send_signal,
@@ -325,6 +344,11 @@ struct DTapeHooks {
 		.task_lookup = dtape_hook_task_lookup,
 		.task_get_memory_info = dtape_hook_task_get_memory_info,
 		.task_get_memory_region_info = dtape_hook_task_get_memory_region_info,
+		.task_allocate_pages = dtape_hook_task_allocate_pages,
+		.task_free_pages = dtape_hook_task_free_pages,
+		.task_map_file = dtape_hook_task_map_file,
+		.task_get_next_region = dtape_hook_task_get_next_region,
+		.task_change_protection = dtape_hook_task_change_protection,
 
 #if DSERVER_EXTENDED_DEBUG
 		.task_register_name = dtape_hook_task_register_name,

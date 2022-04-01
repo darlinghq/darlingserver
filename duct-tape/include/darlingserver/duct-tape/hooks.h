@@ -32,8 +32,6 @@ typedef dtape_thread_t* (*dtape_hook_thread_create_kernel_f)(void);
 typedef void (*dtape_hook_thread_setup_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_context);
 typedef void (*dtape_hook_thread_set_pending_signal_f)(void* thread_context, int pending_signal);
 typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_context, bool pending_call_override);
-typedef uintptr_t (*dtape_hook_thread_allocate_pages_f)(void* thread_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
-typedef int (*dtape_hook_thread_free_pages_f)(void* thread_context, uintptr_t address, size_t page_count);
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef dtape_thread_state_t (*dtape_hook_thread_get_state_f)(void* thread_context);
 typedef int (*dtape_hook_thread_send_signal_f)(void* thread_context, int signal);
@@ -48,6 +46,11 @@ typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t rem
 typedef dtape_task_t* (*dtape_hook_task_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef void (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
 typedef bool (*dtape_hook_task_get_memory_region_info_f)(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info);
+typedef uintptr_t (*dtape_hook_task_allocate_pages_f)(void* task_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
+typedef int (*dtape_hook_task_free_pages_f)(void* task_context, uintptr_t address, size_t page_count);
+typedef uintptr_t (*dtape_hook_task_map_file_f)(void* task_context, int fd, size_t page_count, int protection, uintptr_t address_hint, size_t page_offset, dtape_memory_flags_t flags);
+typedef uintptr_t (*dtape_hook_task_get_next_region_f)(void* task_context, uintptr_t address);
+typedef bool (*dtape_hook_task_change_protection_f)(void* task_context, uintptr_t address, size_t page_count, int protection);
 
 #if DSERVER_EXTENDED_DEBUG
 	typedef void (*dtape_hook_task_register_name_f)(void* task_context, uint32_t name, uintptr_t pointer);
@@ -72,8 +75,6 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_setup_f thread_setup;
 	dtape_hook_thread_set_pending_signal_f thread_set_pending_signal;
 	dtape_hook_thread_set_pending_call_override_f thread_set_pending_call_override;
-	dtape_hook_thread_allocate_pages_f thread_allocate_pages;
-	dtape_hook_thread_free_pages_f thread_free_pages;
 	dtape_hook_thread_lookup_f thread_lookup;
 	dtape_hook_thread_get_state_f thread_get_state;
 	dtape_hook_thread_send_signal_f thread_send_signal;
@@ -88,6 +89,11 @@ typedef struct dtape_hooks {
 	dtape_hook_task_lookup_f task_lookup;
 	dtape_hook_task_get_memory_info_f task_get_memory_info;
 	dtape_hook_task_get_memory_region_info_f task_get_memory_region_info;
+	dtape_hook_task_allocate_pages_f task_allocate_pages;
+	dtape_hook_task_free_pages_f task_free_pages;
+	dtape_hook_task_map_file_f task_map_file;
+	dtape_hook_task_get_next_region_f task_get_next_region;
+	dtape_hook_task_change_protection_f task_change_protection;
 
 #if DSERVER_EXTENDED_DEBUG
 	dtape_hook_task_register_name_f task_register_name;
