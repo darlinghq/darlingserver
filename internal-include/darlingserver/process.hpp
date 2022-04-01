@@ -115,6 +115,8 @@ namespace DarlingServer {
 		void _clearPortSet(dtape_port_set_id_t portSetID);
 #endif
 
+		std::shared_ptr<Thread> _pickS2CThread(void) const;
+
 	public:
 		using ID = pid_t;
 		using NSID = ID;
@@ -170,6 +172,13 @@ namespace DarlingServer {
 
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);
+
+		uintptr_t allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite);
+		void freePages(uintptr_t address, size_t pageCount);
+		uintptr_t mapFile(int fd, size_t pageCount, int protection, uintptr_t addressHint, size_t pageOffset, bool fixed, bool overwrite);
+		void changeProtection(uintptr_t address, size_t pageCount, int protection);
+
+		uintptr_t getNextRegion(uintptr_t address) const;
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

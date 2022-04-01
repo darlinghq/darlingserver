@@ -37,6 +37,8 @@
 	#include <sanitizer/asan_interface.h>
 #endif
 
+#include <rtsig.h>
+
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
 #define USE_THREAD_GUARD_PAGES 1
@@ -146,6 +148,8 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 	_dtapeThread = dtape_thread_create(process->_dtapeTask, _nstid, this);
 	_s2cPerformSempahore = dtape_semaphore_create(process->_dtapeTask, 1);
 	_s2cReplySempahore = dtape_semaphore_create(process->_dtapeTask, 0);
+	_s2cInterruptEnterSemaphore = dtape_semaphore_create(process->_dtapeTask, 0);
+	_s2cInterruptExitSemaphore = dtape_semaphore_create(process->_dtapeTask, 0);
 
 	threadLog.info() << "New thread created with ID " << _tid << " and NSID " << _nstid << " for process with ID " << (process ? process->id() : -1) << " and NSID " << (process ? process->nsid() : -1);
 };
@@ -189,12 +193,18 @@ DarlingServer::Thread::~Thread() noexcept(false) {
 
 	// schedule the duct-taped thread to be destroyed
 	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	kernelAsync([dtapeThread = _dtapeThread, s2cPerformSemaphore = _s2cPerformSempahore, s2cReplySemaphore = _s2cReplySempahore]() {
+	kernelAsync([dtapeThread = _dtapeThread, s2cPerformSemaphore = _s2cPerformSempahore, s2cReplySemaphore = _s2cReplySempahore, s2cInterruptEnterSemaphore = _s2cInterruptEnterSemaphore, s2cInterruptExitSemaphore = _s2cInterruptExitSemaphore]() {
 		if (s2cPerformSemaphore) {
 			dtape_semaphore_destroy(s2cPerformSemaphore);
 		}
 		if (s2cReplySemaphore) {
 			dtape_semaphore_destroy(s2cReplySemaphore);
+		}
+		if (s2cInterruptEnterSemaphore) {
+			dtape_semaphore_destroy(s2cInterruptEnterSemaphore);
+		}
+		if (s2cInterruptExitSemaphore) {
+			dtape_semaphore_destroy(s2cInterruptExitSemaphore);
 		}
 		dtape_thread_destroy(dtapeThread);
 	});
@@ -865,35 +875,41 @@ void DarlingServer::Thread::setPendingCallOverride(bool pendingCallOverride) {
  * additionally, if someone else is already ptracing that process, we lose the ability to execute code with this approach.
  * therefore, we have this RPC-based system instead.
  *
- * there is one major drawback to this approach, however: the process we want to execute an S2C call in
- * MUST have at least one thread waiting for a message from the server. two possible solutions:
- *   1. we use a real-time signal to ask the process to execute the S2C call.
- *      note that with this approach we'd have to block the RT signal (or ignore it) while we're waiting for an RPC call
- *      so that we don't accidentally receive a normal RPC reply in the signal handler.
- *      this would probably be a bit tricky to implement correctly (without races).
- *   2. we have each process create a dedicated thread for executing S2C calls.
- * i'm currently leaning towards solution #1 because it avoids wasting extra resources unnecessarily.
+ * in order to perform an S2C call, however, the target thread MUST be waiting for a message from the server.
+ * thus, when we want to perform an S2C call on a thread that isn't waiting for a message, we send it a real-time signal
+ * to ask it to execute the S2C call. the signal is handled with the normal wrappers (interrupt_enter and interrupt_exit)
+ * to properly handle the case when we may be accidentally interrupting an ongoing call in the thread (since we may have raced
+ * with thread trying to perform a server call).
  */
 
 static DarlingServer::Log s2cLog("s2c");
 
 DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize) {
 	std::optional<Message> reply = std::nullopt;
+	bool usingInterrupt = false;
 
 	// make sure we're the only one performing an S2C call on this thread
 	dtape_semaphore_down_simple(_s2cPerformSempahore);
 
-	s2cLog.debug() << _tid << "(" << _nstid << "): Going to perform S2C call" << s2cLog.endLog;
+	s2cLog.debug() << *this << ": Going to perform S2C call" << s2cLog.endLog;
 
-	// at least for now, S2C calls require the target thread to be waiting for an RPC reply
-	//
-	// TODO: allow threads to perform S2C calls at any time
 	{
-		std::shared_lock lock(_rwlock);
+		std::unique_lock lock(_rwlock);
 
 		if (!_activeCall) {
-			dtape_semaphore_up(_s2cPerformSempahore);
-			throw std::runtime_error("Cannot perform S2C call if thread is not waiting for reply");
+			// signal the thread that we want to perform an S2C call and wait for it to give us the green light
+			lock.unlock();
+			s2cLog.debug() << *this << ": Sending S2C signal" << s2cLog.endLog;
+			usingInterrupt = true;
+			sendSignal(LINUX_SIGRTMIN + 1);
+			dtape_semaphore_down_simple(_s2cInterruptEnterSemaphore);
+			s2cLog.debug() << *this << ": Got green light to perform S2C call" << s2cLog.endLog;
+			lock.lock();
+		} else if (currentThread().get() != this) {
+			// we have an active call, so the client is waiting for a reply and is able to perform an S2C call,
+			// but we're not the active thread. thus, in order to guarantee the client doesn't receive a reply
+			// and stop waiting before we get a chance to perform our S2C call, let's make sure replies are deferred.
+			_deferReplyForS2C = true;
 		}
 
 		call.setAddress(_address);
@@ -906,7 +922,7 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 		throw std::runtime_error("Must be in a microthread (any microthread) to wait for S2C reply");
 	}
 
-	s2cLog.debug() << _tid << "(" << _nstid << "): Going to send S2C message" << s2cLog.endLog;
+	s2cLog.debug() << *this << ": Going to send S2C message" << s2cLog.endLog;
 
 	// send the call
 	Server::sharedInstance().sendMessage(std::move(call));
@@ -914,7 +930,7 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 	// now let's wait for the reply
 	dtape_semaphore_down_simple(_s2cReplySempahore);
 
-	s2cLog.debug() << _tid << "(" << _nstid << "): Received S2C reply" << s2cLog.endLog;
+	s2cLog.debug() << *this << ": Received S2C reply" << s2cLog.endLog;
 
 	// extract the reply
 	{
@@ -928,12 +944,28 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 
 		reply = std::move(_s2cReply);
 		_s2cReply = std::nullopt;
+
+		// if we had replies deferred, now's the time to send them
+		if (_deferReplyForS2C) {
+			_deferReplyForS2C = false;
+			if (_deferredReply) {
+				Server::sharedInstance().sendMessage(std::move(*_deferredReply));
+				_deferredReply = std::nullopt;
+			}
+		}
 	}
 
-	s2cLog.debug() << _tid << "(" << _nstid << "): Done performing S2C call" << s2cLog.endLog;
+	s2cLog.debug() << *this << ": Done performing S2C call" << s2cLog.endLog;
 
 	// we're done performing the call; allow others to have a chance at performing an S2C call on this thread
 	dtape_semaphore_up(_s2cPerformSempahore);
+
+	if (usingInterrupt) {
+		// if we used the S2C signal to perform the call, then the s2c_perform call is currently waiting for us to finish;
+		// let it know that we're done
+		s2cLog.debug() << *this << ": Allowing thread to resume from S2C interrupt" << s2cLog.endLog;
+		dtape_semaphore_up(_s2cInterruptExitSemaphore);
+	}
 
 	// partially validate the reply
 
@@ -1145,6 +1177,8 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 
 	if (_interruptedForSignal) {
 		_interrupts.top().savedReply = std::move(reply);
+	} else if (_deferReplyForS2C) {
+		_deferredReply = std::move(reply);
 	} else {
 		Server::sharedInstance().sendMessage(std::move(reply));
 	}

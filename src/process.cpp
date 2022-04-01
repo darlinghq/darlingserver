@@ -235,8 +235,8 @@ bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAd
 			<< "Failed to "
 			<< (isWrite ? "write " : "read ")
 			<< length
-			<< " byte(s) at "
-			<< remoteAddress
+			<< " byte(s) at 0x"
+			<< std::hex << remoteAddress << std::dec
 			<< " in process "
 			<< id()
 			<< " ("
@@ -256,8 +256,8 @@ bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAd
 			<< "Successfully "
 			<< (isWrite ? "wrote " : "read ")
 			<< length
-			<< " byte(s) at "
-			<< remoteAddress
+			<< " byte(s) at 0x"
+			<< std::hex << remoteAddress << std::dec
 			<< " in process "
 			<< id()
 			<< " ("
@@ -326,6 +326,10 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		mainThread->_s2cPerformSempahore = nullptr;
 		dtape_semaphore_destroy(mainThread->_s2cReplySempahore);
 		mainThread->_s2cReplySempahore = nullptr;
+		dtape_semaphore_destroy(mainThread->_s2cInterruptEnterSemaphore);
+		mainThread->_s2cInterruptEnterSemaphore = nullptr;
+		dtape_semaphore_destroy(mainThread->_s2cInterruptExitSemaphore);
+		mainThread->_s2cInterruptExitSemaphore = nullptr;
 
 		// destroy the fork-wait semaphore
 		dtape_semaphore_destroy(_dtapeForkWaitSemaphore);
@@ -343,6 +347,8 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		// create new S2C semaphores for the main thread
 		mainThread->_s2cPerformSempahore = dtape_semaphore_create(_dtapeTask, 1);
 		mainThread->_s2cReplySempahore = dtape_semaphore_create(_dtapeTask, 0);
+		mainThread->_s2cInterruptEnterSemaphore = dtape_semaphore_create(_dtapeTask, 0);
+		mainThread->_s2cInterruptExitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 		// notify listeners that we have exec'd (i.e. been replaced)
 		_notifyListeningKqchannelsLocked(NOTE_EXEC, 0);
@@ -500,7 +506,7 @@ DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInf
 		return info;
 	}
 
-	processLog.warning() << *this << ": Address " << std::hex << address << " not found in \"/proc/" << std::dec << _pid << "/maps\"" << processLog.endLog;
+	processLog.warning() << *this << ": Address 0x" << std::hex << address << " not found in \"/proc/" << std::dec << _pid << "/maps\"" << processLog.endLog;
 	throw std::system_error(EFAULT, std::generic_category());
 };
 
@@ -552,4 +558,96 @@ bool DarlingServer::Process::setTracerProcess(std::shared_ptr<Process> tracerPro
 	}
 	_tracerProcess = tracerProcess;
 	return true;
+};
+
+std::shared_ptr<DarlingServer::Thread> DarlingServer::Process::_pickS2CThread(void) const {
+	// if we're the process for the current thread (i.e. we're the current process), use the current thread
+	if (currentProcess().get() == this) {
+		return Thread::currentThread();
+	}
+
+	// otherwise, pick any thread to perform the call
+
+	std::shared_ptr<Thread> thread = nullptr;
+
+	{
+		std::shared_lock lock(_rwlock);
+		for (auto& [id, weakThread]: _threads) {
+			thread = weakThread.lock();
+			if (thread) {
+				break;
+			}
+		}
+	}
+
+	return thread;
+};
+
+uintptr_t DarlingServer::Process::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
+	auto thread = _pickS2CThread();
+
+	if (!thread) {
+		throw std::system_error(ESRCH, std::generic_category());
+	}
+
+	return thread->allocatePages(pageCount, protection, addressHint, fixed, overwrite);
+};
+
+void DarlingServer::Process::freePages(uintptr_t address, size_t pageCount) {
+	auto thread = _pickS2CThread();
+
+	if (!thread) {
+		throw std::system_error(ESRCH, std::generic_category());
+	}
+
+	return thread->freePages(address, pageCount);
+};
+
+uintptr_t DarlingServer::Process::mapFile(int fd, size_t pageCount, int protection, uintptr_t addressHint, size_t pageOffset, bool fixed, bool overwrite) {
+	auto thread = _pickS2CThread();
+
+	if (!thread) {
+		throw std::system_error(ESRCH, std::generic_category());
+	}
+
+	return thread->mapFile(fd, pageCount, protection, addressHint, pageOffset, fixed, overwrite);
+};
+
+void DarlingServer::Process::changeProtection(uintptr_t address, size_t pageCount, int protection) {
+	auto thread = _pickS2CThread();
+
+	if (!thread) {
+		throw std::system_error(ESRCH, std::generic_category());
+	}
+
+	return thread->changeProtection(address, pageCount, protection);
+};
+
+static const std::regex memoryRegionEntryAddressRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)");
+
+uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
+	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");
+	std::string line;
+
+	while (std::getline(file, line)) {
+		std::smatch match;
+
+		if (!std::regex_search(line, match, memoryRegionEntryAddressRegex)) {
+			processLog.warning() << "Encountered malformed `/proc/<pid>/maps` entry? Definitely a bug (on our part)." << processLog.endLog;
+			continue;
+		}
+
+		auto startAddress = std::stoul(match[1].str(), nullptr, 16);
+		auto endAddress = std::stoul(match[2].str(), nullptr, 16);
+
+		if (startAddress <= address) {
+			continue;
+		}
+
+		// /proc/<pid>/maps is sorted in ascending order, so as soon as we find a line with a starting address greater than `address`, that's the next region
+
+		return startAddress;
+	}
+
+	return 0;
 };

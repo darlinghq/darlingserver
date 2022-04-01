@@ -115,6 +115,7 @@ add_executable(darlingserver
 
 add_dependencies(darlingserver
 	generate_dserver_rpc_wrappers
+	rtsig_h
 )
 
 target_link_libraries(darlingserver PRIVATE

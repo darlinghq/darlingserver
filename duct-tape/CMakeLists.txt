@@ -370,6 +370,7 @@ target_include_directories(darlingserver_duct_tape PUBLIC
 add_dependencies(darlingserver_duct_tape
 	kernel_mig_generate
 	generate_dserver_rpc_wrappers
+	rtsig_h
 )
 
 target_link_libraries(darlingserver_duct_tape PUBLIC

@@ -972,4 +972,17 @@ void DarlingServer::Call::ThreadSuspended::processCall() {
 	_sendReply(code);
 };
 
+void DarlingServer::Call::S2CPerform::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		dtape_semaphore_up(thread->_s2cInterruptEnterSemaphore);
+		dtape_semaphore_down_simple(thread->_s2cInterruptExitSemaphore);
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;

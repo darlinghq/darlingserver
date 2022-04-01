@@ -222,6 +222,8 @@ calls = [
 		('float_state', 'uint64_t'),
 	], []),
 
+	('s2c_perform', [], []),
+
 	#
 	# kqueue channels
 	#
@@ -1241,10 +1243,10 @@ for call in calls:
 
 	library_source.write("\t} reply_msg;\n")
 
-	if max(fd_count_in_call, fd_count_in_reply, max_reply_fd_count if (flags & PUSH_UNKNOWN_REPLIES) != 0 else 0) > 0:
-		library_source.write("\tint fds[" + str(max(fd_count_in_call, fd_count_in_reply, max_reply_fd_count if (flags & PUSH_UNKNOWN_REPLIES) != 0 else 0)) + "];\n")
-		library_source.write("\tint valid_fd_count;\n")
-		library_source.write("\tchar controlbuf[DSERVER_RPC_HOOKS_CMSG_SPACE(sizeof(fds))];\n")
+	# we always allocate space for at least one FD, since S2C calls might send a descriptor
+	library_source.write("\tint fds[" + str(max(1, fd_count_in_call, fd_count_in_reply, max_reply_fd_count if (flags & PUSH_UNKNOWN_REPLIES) != 0 else 0)) + "];\n")
+	library_source.write("\tint valid_fd_count;\n")
+	library_source.write("\tchar controlbuf[DSERVER_RPC_HOOKS_CMSG_SPACE(sizeof(fds))];\n")
 
 	if fd_count_in_call > 0:
 		library_source.write("\tvalid_fd_count = 0;\n")
@@ -1298,14 +1300,9 @@ for call in calls:
 			.msg_namelen = 0,
 			.msg_iov = &reply_data,
 			.msg_iovlen = 1,
+			.msg_control = controlbuf,
+			.msg_controllen = sizeof(controlbuf),
 		"""), '\t'))
-
-	if max(fd_count_in_reply, max_reply_fd_count if (flags & PUSH_UNKNOWN_REPLIES) != 0 else 0) == 0:
-		library_source.write("\t\t.msg_control = NULL,\n")
-		library_source.write("\t\t.msg_controllen = 0,\n")
-	else:
-		library_source.write("\t\t.msg_control = controlbuf,\n")
-		library_source.write("\t\t.msg_controllen = sizeof(controlbuf),\n")
 
 	library_source.write("\t};\n\n")
 
@@ -1313,12 +1310,17 @@ for call in calls:
 		library_source.write("\tdserver_rpc_hooks_atomic_save_t atomic_save;\n")
 		library_source.write("\tdserver_rpc_hooks_atomic_begin(&atomic_save);\n\n")
 
-	library_source.write("\tlong int long_status = dserver_rpc_hooks_send_message(server_socket, &callmsg);\n\n")
+	library_source.write("\tlong int long_status;\n\n")
 
-	if (flags & ALLOW_INTERRUPTIONS) != 0:
-		library_source.write("\tif (long_status == dserver_rpc_hooks_get_interrupt_status()) {\n")
+	library_source.write("retry_send:\n")
+	library_source.write("\tlong_status = dserver_rpc_hooks_send_message(server_socket, &callmsg);\n\n")
+
+	library_source.write("\tif (long_status == dserver_rpc_hooks_get_interrupt_status()) {\n")
+	if (flags & ALLOW_INTERRUPTIONS) == 0:
+		library_source.write("\t\tgoto retry_send;\n")
+	else:
 		library_source.write("\t\treturn (int)long_status;\n")
-		library_source.write("\t}\n\n")
+	library_source.write("\t}\n\n")
 
 	library_source.write("\tif (long_status < 0) {\n")
 	if (flags & ALLOW_INTERRUPTIONS) == 0:
@@ -1334,14 +1336,12 @@ for call in calls:
 	library_source.write("\t\treturn dserver_rpc_hooks_get_communication_error_status();\n")
 	library_source.write("\t}\n\n")
 
-	if (flags & (ALLOW_INTERRUPTIONS | PUSH_UNKNOWN_REPLIES)) != 0:
-		library_source.write("retry_receive:\n")
+	library_source.write("retry_receive:\n")
 	library_source.write("\tlong_status = dserver_rpc_hooks_receive_message(server_socket, &replymsg);\n\n")
 
-	if (flags & ALLOW_INTERRUPTIONS) != 0:
-		library_source.write("\tif (long_status == dserver_rpc_hooks_get_interrupt_status()) {\n")
-		library_source.write("\t\tgoto retry_receive;\n")
-		library_source.write("\t}\n\n")
+	library_source.write("\tif (long_status == dserver_rpc_hooks_get_interrupt_status()) {\n")
+	library_source.write("\t\tgoto retry_receive;\n")
+	library_source.write("\t}\n\n")
 	
 	library_source.write("\tif (long_status < 0) {\n")
 	if (flags & ALLOW_INTERRUPTIONS) == 0:

@@ -97,6 +97,10 @@ namespace DarlingServer {
 		ucontext_t _syscallReturnHereDuringInterrupt;
 		bool _didSyscallReturnDuringInterrupt = false;
 		bool _handlingInterruptedCall = false;
+		dtape_semaphore_t* _s2cInterruptEnterSemaphore = nullptr;
+		dtape_semaphore_t* _s2cInterruptExitSemaphore = nullptr;
+		bool _deferReplyForS2C = false;
+		std::optional<Message> _deferredReply = std::nullopt;
 
 		struct InterruptContext {
 			std::optional<Message> savedReply = std::nullopt;
