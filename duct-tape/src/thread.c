@@ -1188,7 +1188,13 @@ kern_return_t thread_abort(thread_t thread) {
 };
 
 kern_return_t thread_abort_safely(thread_t thread) {
-	dtape_stub_unsafe();
+	// TODO: actually do something?
+	//       in the LKM, we used to call `kick_process` here
+	//       (which would presumably interrupt any syscalls).
+	//       to replicate that, we'd probably have to use another
+	//       real-time signal with SA_RESTART off.
+	dtape_stub();
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {
