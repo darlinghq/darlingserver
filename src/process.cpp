@@ -283,7 +283,9 @@ bool DarlingServer::Process::writeMemory(uintptr_t remoteAddress, const void* lo
 void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 	std::unique_lock lock(_rwlock);
 
-	if (_pendingReplacement) {
+	bool didExec = _pendingReplacement;
+
+	if (didExec) {
 		// exec case
 
 		processLog.info() << "Replacing process " << id() << " (" << nsid() << ") with a new task" << processLog.endLog;
@@ -349,24 +351,28 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		mainThread->_s2cReplySempahore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptEnterSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptExitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
-
-		// notify listeners that we have exec'd (i.e. been replaced)
-		_notifyListeningKqchannelsLocked(NOTE_EXEC, 0);
 	} else {
 		// fork case
 
 		if (architecture != _architecture) {
 			throw std::runtime_error("Impossible: parent process architecture != child process architecture on fork");
 		}
+	}
 
+	_pendingReplacement = false;
+
+	lock.unlock();
+
+	if (didExec) {
+		// notify listeners that we have exec'd (i.e. been replaced)
+		_notifyListeningKqchannels(NOTE_EXEC, 0);
+	} else {
 		// notify the parent process (if we have one) that we've arrived
 		if (auto parent = _parentProcess.lock()) {
 			dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
 			parent->_notifyListeningKqchannels(NOTE_FORK, nsid());
 		}
 	}
-
-	_pendingReplacement = false;
 };
 
 void DarlingServer::Process::setPendingReplacement() {
@@ -394,14 +400,10 @@ void DarlingServer::Process::waitForChildAfterFork() {
 	dtape_semaphore_down_simple(_dtapeForkWaitSemaphore);
 };
 
-void DarlingServer::Process::_registerListeningKqchanLocked(std::shared_ptr<Kqchan::Process> kqchan) {
-	uintptr_t id = static_cast<std::shared_ptr<Kqchan>>(kqchan)->_idForProcess();
-	_listeningKqchannels[id] = kqchan;
-};
-
 void DarlingServer::Process::registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan) {
 	std::unique_lock lock(_rwlock);
-	_registerListeningKqchanLocked(kqchan);
+	uintptr_t id = static_cast<std::shared_ptr<Kqchan>>(kqchan)->_idForProcess();
+	_listeningKqchannels[id] = kqchan;
 };
 
 void DarlingServer::Process::unregisterListeningKqchan(uintptr_t kqchanID) {
@@ -409,11 +411,16 @@ void DarlingServer::Process::unregisterListeningKqchan(uintptr_t kqchanID) {
 	_listeningKqchannels.erase(kqchanID);
 };
 
-/**
- * @pre Must hold #_rwlock at least for reading.
- */
-void DarlingServer::Process::_notifyListeningKqchannelsLocked(uint32_t event, int64_t data) {
-	for (auto& [id, maybeKqchan]: _listeningKqchannels) {
+void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t data) {
+	decltype(_listeningKqchannels) listeningKqchannels;
+
+	// we do NOT want to be holding our rwlock when we notify the kqchannels; that can lead to deadlocks
+	{
+		std::shared_lock lock(_rwlock);
+		listeningKqchannels = _listeningKqchannels;
+	}
+
+	for (auto& [id, maybeKqchan]: listeningKqchannels) {
 		auto kqchan = maybeKqchan.lock();
 
 		if (!kqchan) {
@@ -422,11 +429,6 @@ void DarlingServer::Process::_notifyListeningKqchannelsLocked(uint32_t event, in
 
 		kqchan->_notify(event, data);
 	}
-};
-
-void DarlingServer::Process::_notifyListeningKqchannels(uint32_t event, int64_t data) {
-	std::shared_lock lock(_rwlock);
-	_notifyListeningKqchannelsLocked(event, data);
 };
 
 bool DarlingServer::Process::is64Bit() const {

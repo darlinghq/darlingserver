@@ -168,6 +168,7 @@ void DarlingServer::Kqchan::_sendNotification() {
 	notification->header.pid = 0;
 	notification->header.tid = 0;
 
+	lock.unlock(); // the outbox has its own lock
 	_outbox.push(std::move(msg));
 };
 
@@ -493,6 +494,7 @@ void DarlingServer::Kqchan::Process::_modify(uint32_t flags) {
 
 	kqchanProcLog.debug() << *this << ": Sending modification reply/acknowledgement" << kqchanProcLog.endLog;
 
+	lock.unlock(); // the outbox has its own lock
 	_outbox.push(std::move(msg));
 };
 
@@ -515,7 +517,7 @@ void DarlingServer::Kqchan::Process::_read() {
 		_canSendNotification = true;
 	}
 
-	std::unique_lock lock(_mutex);
+	std::unique_lock lock(_mutex, std::defer_lock);
 	Message msg(sizeof(dserver_kqchan_reply_proc_read_t), 0, _checkForEventsAsyncFactory());
 	auto reply = reinterpret_cast<dserver_kqchan_reply_proc_read_t*>(msg.data().data());
 
@@ -525,7 +527,11 @@ void DarlingServer::Kqchan::Process::_read() {
 	reply->fflags = 0;
 
 	while (true) {
+		lock.lock();
+
 		if (_events.empty()) {
+			lock.unlock();
+
 			// if we don't have any events, tell our peer
 			kqchanProcLog.debug() << *this << ": no events to read" << kqchanProcLog.endLog;
 
@@ -535,8 +541,15 @@ void DarlingServer::Kqchan::Process::_read() {
 			auto event = std::move(_events.front());
 			_events.pop_front();
 
+			auto savedFlags = _flags;
+
+			// drop the lock; we don't need it to set up the new kqchan or to discard it, nor to push the message to the outbox.
+			// additionally, we don't want to hold it if we decide to drop the new kqchan, since that takes its own set of locks
+			// when dying (and the fewer active locks we hold concurrently, the better)
+			lock.unlock();
+
 			reply->data = event.data;
-			reply->fflags = event.events & _flags;
+			reply->fflags = event.events & savedFlags;
 
 			if (reply->fflags == 0) {
 				// if this event contains no events that the user is interested in, drop it
@@ -544,13 +557,8 @@ void DarlingServer::Kqchan::Process::_read() {
 				continue;
 			}
 
-			if (_flags & NOTE_TRACK) {
+			if (savedFlags & NOTE_TRACK) {
 				if (event.newKqchan) {
-					auto savedFlags = _flags;
-
-					// drop the lock; we don't need it to set up the new kqchan
-					lock.unlock();
-
 					try {
 						FD newKqchanSocket(event.newKqchan->setup());
 
@@ -570,9 +578,6 @@ void DarlingServer::Kqchan::Process::_read() {
 						kqchanProcLog.error() << *this << ": failed to setup new kqchan for child process" << kqchanProcLog.endLog;
 						reply->fflags |= NOTE_TRACKERR;
 					}
-
-					// reacquire the lock; we need to check `_events` before we exit
-					lock.lock();
 				} else if (event.events & NOTE_FORK) {
 					kqchanProcLog.error() << *this << ": read NOTE_FORK event and user has requested NOTE_TRACK, but no new kqchan was associated with event" << kqchanProcLog.endLog;
 					reply->fflags |= NOTE_TRACKERR;
@@ -616,10 +621,12 @@ void DarlingServer::Kqchan::Process::_notify(uint32_t event, int64_t data) {
 
 			auto newKqchan = std::make_shared<Process>(listeningProcess, data & NOTE_PDATAMASK, _flags);
 
-			// `_notify` is called with the process rwlock held
-			child->_registerListeningKqchanLocked(newKqchan);
-			newKqchan->_targetProcess = child;
-			newKqchan->_attached = true;
+			child->registerListeningKqchan(newKqchan);
+			{
+				std::unique_lock newLock(newKqchan->_mutex);
+				newKqchan->_targetProcess = child;
+				newKqchan->_attached = true;
+			}
 
 			auto childParent = child->parentProcess();
 

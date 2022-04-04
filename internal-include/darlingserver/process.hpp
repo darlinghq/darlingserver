@@ -102,10 +102,7 @@ namespace DarlingServer {
 
 		bool _readOrWriteMemory(bool isWrite, uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const;
 
-		void _notifyListeningKqchannelsLocked(uint32_t event, int64_t data);
 		void _notifyListeningKqchannels(uint32_t event, int64_t data);
-
-		void _registerListeningKqchanLocked(std::shared_ptr<Kqchan::Process> kqchan);
 
 #if DSERVER_EXTENDED_DEBUG
 		void _registerName(uint32_t name, uintptr_t pointer);
