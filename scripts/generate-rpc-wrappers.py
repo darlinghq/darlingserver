@@ -233,7 +233,9 @@ calls = [
 		('pid', 'int32_t'),
 		('buffer', 'char*', 'uint64_t'),
 		('buffer_size', 'uint64_t')
-	], []),
+	], [
+		('length', 'uint64_t'),
+	]),
 
 	#
 	# kqueue channels

@@ -987,7 +987,6 @@ void DarlingServer::Call::S2CPerform::processCall() {
 
 void DarlingServer::Call::SetExecutablePath::processCall() {
 	int code = 0;
-	int fullLength = 0;
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
@@ -995,8 +994,9 @@ void DarlingServer::Call::SetExecutablePath::processCall() {
 			tmpstr.resize(_body.buffer_size);
 			if (!process->readMemory((uintptr_t)_body.buffer, tmpstr.data(), _body.buffer_size, &code)) {
 				code = -code;
+			} else {
+				process->setExecutablePath(tmpstr.c_str());
 			}
-			process->setExecutablePath(tmpstr.c_str());
 		} else {
 			code = -ESRCH;
 		}
@@ -1004,7 +1004,7 @@ void DarlingServer::Call::SetExecutablePath::processCall() {
 		code = -ESRCH;
 	}
 
-	_sendReply(code == 0 ? fullLength : code);
+	_sendReply(code);
 }
 
 void DarlingServer::Call::GetExecutablePath::processCall() {
@@ -1014,17 +1014,17 @@ void DarlingServer::Call::GetExecutablePath::processCall() {
 	if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.pid)) {
 		auto targetProcess = *maybeTargetProcess;
 		auto path = targetProcess->executablePath();
-		auto len = std::max(path.length() + 1, _body.buffer_size);
+		auto len = std::min(path.length() + 1, _body.buffer_size);
 		if (!targetProcess->writeMemory((uintptr_t)_body.buffer, path.data(), len, &code)) {
 			code = -code;
 		}
 		fullLength = path.length();
 		
 	} else {
-		code = -ESRCH;
+		code = ESRCH;
 	}
 
-	_sendReply(code == 0 ? fullLength : code);
+	_sendReply(code, fullLength);
 }
 
 DSERVER_CLASS_SOURCE_DEFS;

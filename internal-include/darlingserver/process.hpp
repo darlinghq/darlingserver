@@ -171,8 +171,8 @@ namespace DarlingServer {
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);
 
-		const std::string& executablePath() const;
-		void setExecutablePath(const char* path);
+		std::string executablePath() const;
+		void setExecutablePath(std::string path);
 
 		uintptr_t allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite);
 		void freePages(uintptr_t address, size_t pageCount);

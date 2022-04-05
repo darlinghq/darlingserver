@@ -585,14 +585,14 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Process::_pickS2CThread(vo
 	return thread;
 };
 
-const std::string& DarlingServer::Process::executablePath() const {
+std::string DarlingServer::Process::executablePath() const {
 	std::shared_lock lock(_rwlock);
 	return _executablePath;
 };
 
-void DarlingServer::Process::setExecutablePath(const char* path) {
+void DarlingServer::Process::setExecutablePath(std::string path) {
 	std::unique_lock lock(_rwlock);
-	_executablePath = std::string(path);
+	_executablePath = std::move(path);
 };
 
 uintptr_t DarlingServer::Process::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
