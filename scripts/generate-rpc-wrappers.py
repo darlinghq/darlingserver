@@ -224,6 +224,19 @@ calls = [
 
 	('s2c_perform', [], []),
 
+	('set_executable_path', [
+		('buffer', 'const char*', 'uint64_t'),
+		('buffer_size', 'uint64_t')
+	], []),
+
+	('get_executable_path', [
+		('pid', 'int32_t'),
+		('buffer', 'char*', 'uint64_t'),
+		('buffer_size', 'uint64_t')
+	], [
+		('length', 'uint64_t'),
+	]),
+
 	#
 	# kqueue channels
 	#
