@@ -175,63 +175,37 @@ DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
 };
 
 void DarlingServer::Thread::registerWithProcess() {
-	auto process = _process.lock();
-	std::unique_lock lock(process->_rwlock);
-	process->_threads[_nstid] = shared_from_this();
+	std::unique_lock lock(_process->_rwlock);
+	_process->_threads[_nstid] = shared_from_this();
 };
 
 DarlingServer::Thread::~Thread() noexcept(false) {
 	threadLog.info() << *this << ": thread being destroyed" << threadLog.endLog;
 
-	_rwlock.lock();
-	_terminating = true;
-	_rwlock.unlock();
-
-	dtape_thread_dying(_dtapeThread);
-
 	freeStack(_stack, _stackSize);
 
-	// schedule the duct-taped thread to be destroyed
-	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	kernelAsync([dtapeThread = _dtapeThread, s2cPerformSemaphore = _s2cPerformSempahore, s2cReplySemaphore = _s2cReplySempahore, s2cInterruptEnterSemaphore = _s2cInterruptEnterSemaphore, s2cInterruptExitSemaphore = _s2cInterruptExitSemaphore]() {
-		if (s2cPerformSemaphore) {
-			dtape_semaphore_destroy(s2cPerformSemaphore);
-		}
-		if (s2cReplySemaphore) {
-			dtape_semaphore_destroy(s2cReplySemaphore);
-		}
-		if (s2cInterruptEnterSemaphore) {
-			dtape_semaphore_destroy(s2cInterruptEnterSemaphore);
-		}
-		if (s2cInterruptExitSemaphore) {
-			dtape_semaphore_destroy(s2cInterruptExitSemaphore);
-		}
-		dtape_thread_destroy(dtapeThread);
-	});
-
-	auto process = _process.lock();
-	if (!process) {
-		// the process is unregistering us
+	if (!_process) {
 		return;
 	}
 
-	std::unique_lock lock(process->_rwlock);
-	auto it = process->_threads.begin();
-	while (it != process->_threads.end()) {
+	std::unique_lock lock(_process->_rwlock);
+	auto it = _process->_threads.begin();
+	while (it != _process->_threads.end()) {
 		if (it->first == _nstid) {
 			break;
 		}
 		++it;
 	}
-	if (it == process->_threads.end()) {
+	if (it == _process->_threads.end()) {
 		throw std::runtime_error("Thread was not registered with Process");
 	}
-	process->_threads.erase(it);
+	_process->_threads.erase(it);
 
-	if (process->_threads.empty()) {
+	if (_process->_threads.empty()) {
 		// if this was the last thread in the process, it has died, so unregister it.
 		// this should already be handled by the process' pidfd monitor, but just in case, we also handle it here.
-		processRegistry().unregisterEntry(process);
+		lock.unlock();
+		_process->notifyDead();
 	}
 };
 
@@ -244,7 +218,7 @@ DarlingServer::Thread::NSID DarlingServer::Thread::nsid() const {
 };
 
 std::shared_ptr<DarlingServer::Process> DarlingServer::Thread::process() const {
-	return _process.lock();
+	return _process;
 };
 
 std::shared_ptr<DarlingServer::Call> DarlingServer::Thread::pendingCall() const {
@@ -398,6 +372,13 @@ void DarlingServer::Thread::doWork() {
 		goto doneWorking;
 	}
 
+	if (_dead && !_activeCall) {
+		// should be impossible, since this should be handled in `notifyDead`, but just in case
+		_terminating = true;
+		_rwlock.unlock();
+		goto doneWorking;
+	}
+
 	_running = true;
 	currentThreadVar = shared_from_this();
 	dtape_thread_entering(_dtapeThread);
@@ -498,19 +479,32 @@ doneWorking:
 		currentThreadVar = nullptr;
 		_running = false;
 	}
-	if (_terminating) {
-		// unregister ourselves from the thread registry
-		//
+	bool canRelease = false;
+	if (_dead) {
+		threadLog.debug() << *this << ": dead thread returning. active call? " << (!!_activeCall ? "true" : "false") << " terminating? " << (_terminating ? "true" : "false") << threadLog.endLog;
+	}
+	if (_dead && !_activeCall && !_terminating) {
+		// this is the case when `notifyDead` notified us we were dead
+		// but we had an active call and had to finish it first
+		_terminating = true;
+		canRelease = true;
+	}
+	if (_terminating && !_dead) {
 		// this will not destroy our thread immediately;
 		// the worker thread invoker still holds a reference on us
-		threadRegistry().unregisterEntry(shared_from_this());
+		_rwlock.unlock();
+		notifyDead();
+	} else {
+		_rwlock.unlock();
 	}
-	_rwlock.unlock();
 	if (unlockMeWhenSuspending) {
 		libsimple_lock_unlock(unlockMeWhenSuspending);
 		unlockMeWhenSuspending = nullptr;
 	}
 	_runningCondvar.notify_all();
+	if (canRelease) {
+		_scheduleRelease();
+	}
 	return;
 };
 
@@ -578,8 +572,8 @@ void DarlingServer::Thread::resume() {
 };
 
 void DarlingServer::Thread::terminate() {
-	if (auto process = _process.lock()) {
-		if (process.get() != Process::kernelProcess().get()) {
+	if (_process) {
+		if (_process.get() != Process::kernelProcess().get()) {
 			throw std::runtime_error("terminate() called on non-kernel thread");
 		}
 	} else {
@@ -597,13 +591,15 @@ void DarlingServer::Thread::terminate() {
 		suspend();
 		throw std::runtime_error("terminate() on current kernel thread returned");
 	} else {
-		// if it's not the current thread and it's not currently running, just remove it from the thread registry;
+		// if it's not the current thread and it's not currently running, just tell it died;
 		// it should die once the caller releases their reference(s) on us
 		if (!_running) {
-			threadRegistry().unregisterEntry(shared_from_this());
+			_rwlock.unlock();
+			notifyDead();
+		} else {
+			// otherwise, if it IS running, once it returns to the microthread "top" and sees `_terminating = true`, it'll unregister itself
+			_rwlock.unlock();
 		}
-		// otherwise, if it IS running, once it returns to the microthread "top" and sees `_terminating = true`, it'll unregister itself
-		_rwlock.unlock();
 	}
 };
 
@@ -749,10 +745,10 @@ static void kernelAsyncRunnerThreadWorker(bool permanent, std::shared_ptr<Darlin
 			libsimple_lock_unlock(&kernelAsyncRunnerQueueLock);
 
 			if (permanent) {
-			continue;
+				continue;
 			} else {
 				break;
-		}
+			}
 		}
 
 		// we're going to perform some work; we're no longer available
@@ -933,12 +929,15 @@ void DarlingServer::Thread::setPendingCallOverride(bool pendingCallOverride) {
 
 static DarlingServer::Log s2cLog("s2c");
 
-DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize) {
+std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize) {
 	std::optional<Message> reply = std::nullopt;
 	bool usingInterrupt = false;
 
 	// make sure we're the only one performing an S2C call on this thread
-	dtape_semaphore_down_simple(_s2cPerformSempahore);
+	if (!dtape_semaphore_down_simple(_s2cPerformSempahore)) {
+		// got interrupted while waiting
+		return std::nullopt;
+	}
 
 	s2cLog.debug() << *this << ": Going to perform S2C call" << s2cLog.endLog;
 
@@ -951,7 +950,11 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 			s2cLog.debug() << *this << ": Sending S2C signal" << s2cLog.endLog;
 			usingInterrupt = true;
 			sendSignal(LINUX_SIGRTMIN + 1);
-			dtape_semaphore_down_simple(_s2cInterruptEnterSemaphore);
+			if (!dtape_semaphore_down_simple(_s2cInterruptEnterSemaphore)) {
+				// got interrupted while waiting
+				dtape_semaphore_up(_s2cPerformSempahore);
+				return std::nullopt;
+			}
 			s2cLog.debug() << *this << ": Got green light to perform S2C call" << s2cLog.endLog;
 			lock.lock();
 		} else if (currentThread().get() != this) {
@@ -977,7 +980,11 @@ DarlingServer::Message DarlingServer::Thread::_s2cPerform(Message&& call, dserve
 	Server::sharedInstance().sendMessage(std::move(call));
 
 	// now let's wait for the reply
-	dtape_semaphore_down_simple(_s2cReplySempahore);
+	if (!dtape_semaphore_down_simple(_s2cReplySempahore)) {
+		// got interrupted while waiting
+		dtape_semaphore_up(_s2cPerformSempahore);
+		return std::nullopt;
+	}
 
 	s2cLog.debug() << *this << ": Received S2C reply" << s2cLog.endLog;
 
@@ -1068,7 +1075,14 @@ uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int pro
 
 	s2cLog.debug() << "Performing _mmap with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << ", flags=" << call->flags << ", fd=" << call->fd << " (" << fd << ")" << ", offset=" << call->offset << s2cLog.endLog;
 
-	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t));
+	auto maybeReplyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t));
+	if (!maybeReplyMessage) {
+		s2cLog.debug() << "_mmap call interrupted" << s2cLog.endLog;
+		outErrno = EINTR;
+		return (uintptr_t)MAP_FAILED;
+	}
+
+	auto replyMessage = std::move(*maybeReplyMessage);
 	auto reply = reinterpret_cast<dserver_s2c_reply_mmap_t*>(replyMessage.data().data());
 
 	s2cLog.debug() << "_mmap returned address=" << reply->address << ", errno_result=" << reply->errno_result << s2cLog.endLog;
@@ -1088,7 +1102,14 @@ int DarlingServer::Thread::_munmap(uintptr_t address, size_t length, int& outErr
 
 	s2cLog.debug() << "Performing _munmap with address=" << call->address << ", length=" << call->length << s2cLog.endLog;
 
-	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_munmap, sizeof(dserver_s2c_reply_munmap_t));
+	auto maybeReplyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_munmap, sizeof(dserver_s2c_reply_munmap_t));
+	if (!maybeReplyMessage) {
+		s2cLog.debug() << "_munmap call interrupted" << s2cLog.endLog;
+		outErrno = EINTR;
+		return -1;
+	}
+
+	auto replyMessage = std::move(*maybeReplyMessage);
 	auto reply = reinterpret_cast<dserver_s2c_reply_munmap_t*>(replyMessage.data().data());
 
 	s2cLog.debug() << "_munmap returned return_value=" << reply->return_value << ", errno_result=" << reply->errno_result << s2cLog.endLog;
@@ -1109,7 +1130,14 @@ int DarlingServer::Thread::_mprotect(uintptr_t address, size_t length, int prote
 
 	s2cLog.debug() << "Performing _mprotect with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << s2cLog.endLog;
 
-	auto replyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mprotect, sizeof(dserver_s2c_reply_mprotect_t));
+	auto maybeReplyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mprotect, sizeof(dserver_s2c_reply_mprotect_t));
+	if (!maybeReplyMessage) {
+		s2cLog.debug() << "_mprotect call interrupted" << s2cLog.endLog;
+		outErrno = EINTR;
+		return -1;
+	}
+
+	auto replyMessage = std::move(*maybeReplyMessage);
 	auto reply = reinterpret_cast<dserver_s2c_reply_mprotect_t*>(replyMessage.data().data());
 
 	s2cLog.debug() << "_mprotect returned return_value=" << reply->return_value << ", errno_result=" << reply->errno_result << s2cLog.endLog;
@@ -1228,14 +1256,14 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 		_interrupts.top().savedReply = std::move(reply);
 	} else if (_deferReplyForS2C) {
 		_deferredReply = std::move(reply);
-	} else {
+	} else if (!_dead) {
 		Server::sharedInstance().sendMessage(std::move(reply));
 	}
 };
 
 DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 	auto process = this->process();
-	if (!process) {
+	if (!process || isDead()) {
 		return RunState::Dead;
 	}
 
@@ -1275,8 +1303,11 @@ void DarlingServer::Thread::waitWhileUserSuspended(uintptr_t threadStateAddress,
 };
 
 void DarlingServer::Thread::sendSignal(int signal) const {
-	if (auto process = _process.lock()) {
-		if (syscall(SYS_tgkill, process->id(), id(), signal) < 0) {
+	if (isDead()) {
+		return;
+	}
+	if (_process) {
+		if (syscall(SYS_tgkill, _process->id(), id(), signal) < 0) {
 			int code = errno;
 			throw std::system_error(code, std::generic_category());
 		}
@@ -1291,6 +1322,76 @@ void DarlingServer::Thread::jumpToResume(void* stack, size_t stackSize) {
 #endif
 	setcontext(&_resumeContext);
 	__builtin_unreachable();
+};
+
+void DarlingServer::Thread::notifyDead() {
+	bool canRelease = false;
+
+	{
+		std::unique_lock lock(_rwlock);
+		if (_dead) {
+			return;
+		}
+
+		threadLog.info() << *this << ": thread dying" << threadLog.endLog;
+		_dead = true;
+
+		if (!_activeCall) {
+			// if we have no active call, we won't ever need to run again,
+			// so set `_terminating` to make sure that doesn't happen
+			_terminating = true;
+			canRelease = true;
+		}
+	}
+
+	// keep ourselves alive until the duct-taped context is done
+	_selfReference = shared_from_this();
+
+	dtape_thread_dying(_dtapeThread);
+
+	if (canRelease) {
+		_scheduleRelease();
+	} else {
+		resume();
+	}
+
+	threadRegistry().unregisterEntry(shared_from_this());
+};
+
+bool DarlingServer::Thread::isDead() const {
+	std::shared_lock lock(_rwlock);
+	return _dead;
+};
+
+void DarlingServer::Thread::_dispose() {
+	threadLog.debug() << *this << ": dispose thread context" << threadLog.endLog;
+	_selfReference = nullptr;
+};
+
+void DarlingServer::Thread::_scheduleRelease() {
+	// schedule the duct-taped thread to be released
+	// dtape_thread_release needs a microthread context, so we call it within a kernel microthread
+	threadLog.debug() << *this << ": scheduling release" << threadLog.endLog;
+	kernelAsync([self = shared_from_this()]() {
+		if (self->_s2cPerformSempahore) {
+			dtape_semaphore_destroy(self->_s2cPerformSempahore);
+			self->_s2cPerformSempahore = nullptr;
+		}
+		if (self->_s2cReplySempahore) {
+			dtape_semaphore_destroy(self->_s2cReplySempahore);
+			self->_s2cReplySempahore = nullptr;
+		}
+		if (self->_s2cInterruptEnterSemaphore) {
+			dtape_semaphore_destroy(self->_s2cInterruptEnterSemaphore);
+			self->_s2cInterruptEnterSemaphore = nullptr;
+		}
+		if (self->_s2cInterruptExitSemaphore) {
+			dtape_semaphore_destroy(self->_s2cInterruptExitSemaphore);
+			self->_s2cInterruptExitSemaphore = nullptr;
+		}
+		dtape_thread_release(self->_dtapeThread);
+		self->_dtapeThread = nullptr;
+	});
 };
 
 static thread_local std::function<void()> interruptedContinuation = nullptr;

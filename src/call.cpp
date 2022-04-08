@@ -298,8 +298,7 @@ void DarlingServer::Call::Checkout::processCall() {
 								} else {
 									// the Darling process was replaced with a non-Darling process
 									// treat it like death
-									process->_unregisterThreads();
-									processRegistry().unregisterEntry(process);
+									process->notifyDead();
 								}
 							} else {
 								// the execve failed
@@ -309,7 +308,7 @@ void DarlingServer::Call::Checkout::processCall() {
 					}
 				}
 			} else {
-				threadRegistry().unregisterEntry(thread);
+				thread->notifyDead();
 
 				// if this was the last thread in the process, it'll be automatically unregistered
 			}

@@ -70,7 +70,7 @@ namespace DarlingServer {
 
 		pid_t _tid;
 		pid_t _nstid;
-		std::weak_ptr<Process> _process;
+		std::shared_ptr<Process> _process;
 		std::shared_ptr<Call> _pendingCall;
 		Address _address;
 		mutable std::shared_mutex _rwlock;
@@ -111,13 +111,15 @@ namespace DarlingServer {
 		};
 		std::stack<InterruptContext> _interrupts;
 		std::optional<Message> _pendingSavedReply = std::nullopt;
+		bool _dead = false;
+		std::shared_ptr<Thread> _selfReference = nullptr;
 
 		static void microthreadWorker();
 		static void microthreadContinuation();
 
 		friend struct ::DTapeHooks;
 
-		Message _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
+		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);
@@ -133,6 +135,9 @@ namespace DarlingServer {
 
 		[[noreturn]]
 		void jumpToResume(void* stack, size_t stackSize);
+
+		void _dispose();
+		void _scheduleRelease();
 
 		static void _handleInterruptEnterForCurrentThread();
 
@@ -245,6 +250,12 @@ namespace DarlingServer {
 
 		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;
+
+		/**
+		 * Informs this Thread instance that the thread it was managing has died.
+		 */
+		void notifyDead();
+		bool isDead() const;
 
 		/**
 		 * @note Only to be used by direct XNU traps! (e.g. Mach IPC, psynch, etc.)

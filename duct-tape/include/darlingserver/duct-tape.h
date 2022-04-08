@@ -56,13 +56,6 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context);
 dtape_semaphore_t* dtape_semaphore_create(dtape_task_t* owning_task, int initial_value);
 
-/**
- * Destroys the given duct-tape task. The caller loses their reference on the task.
- *
- * Additionally, if the caller's reference on the task is not the last reference, this function will abort.
- */
-void dtape_task_destroy(dtape_task_t* task);
-void dtape_thread_destroy(dtape_thread_t* thread);
 void dtape_kqchan_mach_port_destroy(dtape_kqchan_mach_port_t* kqchan);
 void dtape_semaphore_destroy(dtape_semaphore_t* semaphore);
 

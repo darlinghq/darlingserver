@@ -129,13 +129,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 };
 
 void dtape_task_destroy(dtape_task_t* task) {
-	if (IIT_NULL != task->xnu_task.task_imp_base) {
-		ipc_importance_disconnect_task(&task->xnu_task);
-	}
-
-	if (os_ref_release(&task->xnu_task.ref_count) != 0) {
-		panic("Duct-taped task over-retained or still in-use at destruction");
-	}
+	dtape_log_debug("%d: task being destroyed", task->saved_pid);
 
 	dtape_psynch_task_destroy(task);
 
@@ -155,6 +149,8 @@ void dtape_task_destroy(dtape_task_t* task) {
 	dtape_vm_map_destroy(task->xnu_task.map);
 
 	lck_mtx_destroy(&task->xnu_task.lock, LCK_GRP_NULL);
+
+	dtape_hooks->task_context_dispose(task->context);
 
 	free(task);
 };
@@ -210,9 +206,19 @@ bool dtape_task_try_resume(dtape_task_t* task) {
 	return false;
 };
 
-void task_deallocate(task_t task) {
-	// the managing Task instance is supposed to have the last reference on the duct-taped task
-	os_ref_release_live(&task->ref_count);
+void task_deallocate(task_t xtask) {
+	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
+	os_ref_count_t count = os_ref_release(&xtask->ref_count);
+	if (count > 0) {
+		// IPC importance info might be holding the last reference on the task
+		if (count == 1) {
+			if (IIT_NULL != task->xnu_task.task_imp_base) {
+				ipc_importance_disconnect_task(&task->xnu_task);
+			}
+		}
+		return;
+	}
+	dtape_task_destroy(task);
 };
 
 int pid_from_task(task_t xtask) {

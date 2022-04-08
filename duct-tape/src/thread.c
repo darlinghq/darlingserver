@@ -106,9 +106,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 };
 
 void dtape_thread_destroy(dtape_thread_t* thread) {
-	if (os_ref_release(&thread->xnu_thread.ref_count) != 0) {
-		panic("Duct-taped thread over-retained or still in-use at destruction");
-	}
+	dtape_log_debug("%llu: thread being destroyed", thread->xnu_thread.thread_id);
 
 	dtape_psynch_thread_destroy(thread);
 
@@ -157,6 +155,8 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 	task_unlock(thread->xnu_thread.task);
 
 	task_deallocate(thread->xnu_thread.task);
+
+	dtape_hooks->thread_context_dispose(thread->context);
 
 	free(thread);
 };
@@ -475,6 +475,7 @@ void dtape_thread_dying(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
 	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
 	thread->xnu_thread.state |= TH_TERMINATE;
+	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
 	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
 	thread_unlock(&thread->xnu_thread);
 };
@@ -488,9 +489,12 @@ void (thread_reference)(thread_t thread) {
 	os_ref_retain(&thread->ref_count);
 };
 
-void thread_deallocate(thread_t thread) {
-	// the managing Thread instance is supposed to have the last reference on the duct-taped thread
-	os_ref_release_live(&thread->ref_count);
+void thread_deallocate(thread_t xthread) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	if (os_ref_release(&xthread->ref_count) > 0) {
+		return;
+	}
+	dtape_thread_destroy(thread);
 };
 
 void thread_deallocate_safe(thread_t thread) {

@@ -105,39 +105,7 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 };
 
 DarlingServer::Process::~Process() {
-	processLog.info() << "Process with ID " << _pid << " and NSID " << _nspid << " being destroyed" << processLog.endLog;
-
-	_unregisterThreads();
-
-	// TODO: get exit status
-	_notifyListeningKqchannels(NOTE_EXIT, 0);
-
-	dtape_task_dying(_dtapeTask);
-
-	// schedule the duct-taped task to be destroyed
-	// dtape_thread_destroy needs a microthread context, so we call it within a kernel microthread
-	// also destroy the fork-wait semaphore here
-	Thread::kernelAsync([dtapeTask = _dtapeTask, dtapeForkWaitSemaphore = _dtapeForkWaitSemaphore]() {
-		if (dtapeForkWaitSemaphore) {
-			dtape_semaphore_destroy(dtapeForkWaitSemaphore);
-		}
-		dtape_task_destroy(dtapeTask);
-	});
-};
-
-void DarlingServer::Process::_unregisterThreads() {
-	std::unique_lock lock(_rwlock);
-	while (!_threads.empty()) {
-		auto it = _threads.begin();
-		auto thread = it->second.lock();
-		lock.unlock();
-		if (thread) {
-			thread->_process = std::weak_ptr<Process>();
-			threadRegistry().unregisterEntry(thread);
-		}
-		lock.lock();
-		_threads.erase(it);
-	}
+	processLog.info() << *this << ": process being destroyed" << processLog.endLog;
 };
 
 DarlingServer::Process::ID DarlingServer::Process::id() const {
@@ -223,6 +191,25 @@ bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAd
 	const auto func = isWrite ? process_vm_writev : process_vm_readv;
 	static DarlingServer::Log processMemoryAccessLog("procmem");
 
+	if (isDead()) {
+		processMemoryAccessLog.error()
+			<< "Failed to "
+			<< (isWrite ? "write " : "read ")
+			<< length
+			<< " byte(s) at 0x"
+			<< std::hex << remoteAddress << std::dec
+			<< " in process "
+			<< id()
+			<< " ("
+			<< nsid()
+			<< "): process dead"
+			<< processMemoryAccessLog.endLog;
+		if (errorCode) {
+			*errorCode = ESRCH;
+		}
+		return false;
+	}
+
 	local.iov_base = localBuffer;
 	local.iov_len = length;
 
@@ -288,10 +275,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 	if (didExec) {
 		// exec case
 
-		processLog.info() << "Replacing process " << id() << " (" << nsid() << ") with a new task" << processLog.endLog;
+		processLog.info() << *this << ": replacing process with a new task" << processLog.endLog;
 
-		// also, clear all threads except the main thread
-		// (see _unregisterThreads)
+		// clear all threads except the main thread
 		std::shared_ptr<Thread> mainThread = nullptr;
 		while (!_threads.empty()) {
 			auto it = _threads.begin();
@@ -301,8 +287,8 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 				if (thread->_nstid == _nspid) {
 					mainThread = thread;
 				} else {
-					thread->_process = std::weak_ptr<Process>();
-					threadRegistry().unregisterEntry(thread);
+					thread->_process = nullptr;
+					thread->notifyDead();
 				}
 			}
 			lock.lock();
@@ -337,11 +323,11 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		dtape_semaphore_destroy(_dtapeForkWaitSemaphore);
 		_dtapeForkWaitSemaphore = nullptr;
 
-		// destroy the main thread's old duct-taped thread
-		dtape_thread_destroy(oldThread);
+		// release the main thread's old duct-taped thread
+		dtape_thread_release(oldThread);
 
-		// destroy the old task
-		dtape_task_destroy(oldTask);
+		// release the old task
+		dtape_task_release(oldTask);
 
 		// create a new fork-wait semaphore for the new task
 		_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
@@ -444,6 +430,10 @@ void DarlingServer::Process::logToStream(Log::Stream& stream) const {
 };
 
 DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
+	if (isDead()) {
+		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryInfo");
+	}
+
 	MemoryInfo info;
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/statm");
 
@@ -464,6 +454,10 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 static const std::regex memoryRegionEntryRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)\\s+((?:r|w|x|p|s|\\-)+)\\s+([0-9a-fA-F]+)");
 
 DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInfo(uintptr_t address) const {
+	if (isDead()) {
+		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryRegionInfo");
+	}
+
 	MemoryRegionInfo info;
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");
 	std::string line;
@@ -563,6 +557,10 @@ bool DarlingServer::Process::setTracerProcess(std::shared_ptr<Process> tracerPro
 };
 
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Process::_pickS2CThread(void) const {
+	if (isDead()) {
+		return nullptr;
+	}
+
 	// if we're the process for the current thread (i.e. we're the current process), use the current thread
 	if (currentProcess().get() == this) {
 		return Thread::currentThread();
@@ -638,6 +636,10 @@ void DarlingServer::Process::changeProtection(uintptr_t address, size_t pageCoun
 static const std::regex memoryRegionEntryAddressRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)");
 
 uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
+	if (isDead()) {
+		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call getNextRegion");
+	}
+
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");
 	std::string line;
 
@@ -662,4 +664,58 @@ uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
 	}
 
 	return 0;
+};
+
+void DarlingServer::Process::notifyDead() {
+	decltype(_threads) threads;
+	{
+		std::unique_lock lock(_rwlock);
+		if (_dead) {
+			return;
+		}
+
+		processLog.info() << *this << ": process dying" << processLog.endLog;
+		_dead = true;
+		threads = _threads;
+	}
+
+	// keep ourselves alive until the duct-taped context is done
+	_selfReference = shared_from_this();
+
+	// TODO: get exit status
+	_notifyListeningKqchannels(NOTE_EXIT, 0);
+
+	dtape_task_dying(_dtapeTask);
+
+	// notify all our threads that we're dead
+	for (auto [id, maybeThread]: threads) {
+		auto thread = maybeThread.lock();
+		if (!thread) {
+			continue;
+		}
+		thread->notifyDead();
+	}
+
+	// schedule the duct-taped task to be released
+	// dtape_thread_release needs a microthread context, so we call it within a kernel microthread
+	// also destroy the fork-wait semaphore here
+	Thread::kernelAsync([self = shared_from_this()]() {
+		if (self->_dtapeForkWaitSemaphore) {
+			dtape_semaphore_destroy(self->_dtapeForkWaitSemaphore);
+			self->_dtapeForkWaitSemaphore = nullptr;
+		}
+		dtape_task_release(self->_dtapeTask);
+		self->_dtapeTask = nullptr;
+	});
+
+	processRegistry().unregisterEntry(shared_from_this());
+};
+
+void DarlingServer::Process::_dispose() {
+	_selfReference = nullptr;
+};
+
+bool DarlingServer::Process::isDead() const {
+	std::shared_lock lock(_rwlock);
+	return _dead;
 };

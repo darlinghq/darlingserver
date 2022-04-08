@@ -41,7 +41,7 @@ namespace DarlingServer {
 	class Server;
 	class Call;
 
-	class Process: public Loggable {
+	class Process: public Loggable, public std::enable_shared_from_this<Process> {
 		friend class Thread;
 		friend class Server;
 		friend class Call; // HACK; see Call.cpp
@@ -89,13 +89,13 @@ namespace DarlingServer {
 		Architecture _architecture;
 		std::weak_ptr<Process> _tracerProcess;
 		std::string _executablePath;
+		bool _dead = false;
+		std::shared_ptr<Process> _selfReference = nullptr;
 
 #if DSERVER_EXTENDED_DEBUG
 		std::unordered_map<uint32_t, uintptr_t> _registeredNames;
 		std::unordered_map<dtape_port_set_id_t, std::unordered_set<dtape_port_id_t>> _portSetMembers;
 #endif
-
-		void _unregisterThreads();
 
 		struct KernelProcessConstructorTag {};
 
@@ -114,6 +114,8 @@ namespace DarlingServer {
 #endif
 
 		std::shared_ptr<Thread> _pickS2CThread(void) const;
+
+		void _dispose();
 
 	public:
 		using ID = pid_t;
@@ -180,6 +182,12 @@ namespace DarlingServer {
 		void changeProtection(uintptr_t address, size_t pageCount, int protection);
 
 		uintptr_t getNextRegion(uintptr_t address) const;
+
+		/**
+		 * Informs this Process instance that the process it was managing has died.
+		 */
+		void notifyDead();
+		bool isDead() const;
 
 		static std::shared_ptr<Process> currentProcess();
 		static std::shared_ptr<Process> kernelProcess();

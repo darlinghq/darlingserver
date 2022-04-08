@@ -183,6 +183,10 @@ struct DTapeHooks {
 		}
 	};
 
+	static void dtape_hook_thread_context_dispose(void* thread_context) {
+		static_cast<DarlingServer::Thread*>(thread_context)->_dispose();
+	};
+
 	static void dtape_hook_current_thread_interrupt_disable(void) {
 		DarlingServer::Thread::interruptDisable();
 	};
@@ -293,6 +297,10 @@ struct DTapeHooks {
 		}
 	};
 
+	static void dtape_hook_task_context_dispose(void* task_context) {
+		static_cast<DarlingServer::Process*>(task_context)->_dispose();
+	};
+
 #if DSERVER_EXTENDED_DEBUG
 	static void dtape_hook_task_register_name(void* task_context, uint32_t name, uintptr_t pointer) {
 		static_cast<DarlingServer::Process*>(task_context)->_registerName(name, pointer);
@@ -333,6 +341,7 @@ struct DTapeHooks {
 		.thread_lookup = dtape_hook_thread_lookup,
 		.thread_get_state = dtape_hook_thread_get_state,
 		.thread_send_signal = dtape_hook_thread_send_signal,
+		.thread_context_dispose = dtape_hook_thread_context_dispose,
 
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
@@ -349,6 +358,7 @@ struct DTapeHooks {
 		.task_map_file = dtape_hook_task_map_file,
 		.task_get_next_region = dtape_hook_task_get_next_region,
 		.task_change_protection = dtape_hook_task_change_protection,
+		.task_context_dispose = dtape_hook_task_context_dispose,
 
 #if DSERVER_EXTENDED_DEBUG
 		.task_register_name = dtape_hook_task_register_name,
@@ -587,8 +597,7 @@ void DarlingServer::Server::monitorProcess(std::shared_ptr<Process> process) {
 			return;
 		}
 
-		process->_unregisterThreads();
-		processRegistry().unregisterEntry(process);
+		process->notifyDead();
 	});
 
 	addMonitor(monitor);
