@@ -839,6 +839,7 @@ static kern_return_t mach_vm_remap_external_shared(vm_map_t target_map, mach_vm_
 		// special case for what LLDB does with dyld info
 		dtape_map_shared_descriptor_retain(src_existing_entries[0]->descriptor);
 		descriptor = src_existing_entries[0]->descriptor;
+		dtape_mutex_unlock(&src_map->shared_entry_lock);
 		goto src_setup_done;
 	} else if (src_existing_entry_count != 0) {
 		// TODO: handle this case gracefully
