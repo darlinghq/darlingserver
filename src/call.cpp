@@ -29,10 +29,6 @@
 #include <sys/syscall.h>
 #include <darlingserver/kqchan.hpp>
 
-#if DSERVER_ASAN
-	#include <sanitizer/asan_interface.h>
-#endif
-
 static DarlingServer::Log callLog("calls");
 
 DarlingServer::Log DarlingServer::Call::rpcReplyLog("replies");
@@ -683,63 +679,7 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 };
 
 void DarlingServer::Call::InterruptEnter::processCall() {
-	// FIXME: we should not be accessing private Thread members
-	// FIXME: this currently does not work properly if the thread was suspended waiting for a lock
-
-	auto thread = _thread.lock();
-
-	std::function<void()> interruptedContinuation = nullptr;
-
-	{
-		std::unique_lock lock(thread->_rwlock);
-
-		if (thread->_pendingSavedReply) {
-			thread->_interrupts.top().savedReply = std::move(*thread->_pendingSavedReply);
-			thread->_pendingSavedReply = std::nullopt;
-		}
-
-		thread->_interruptedForSignal = true;
-
-		interruptedContinuation = thread->_interruptedContinuation;
-		thread->_interruptedContinuation = nullptr;
-	}
-
-	dtape_thread_sigexc_enter(thread->_dtapeThread);
-
-	thread->_didSyscallReturnDuringInterrupt = false;
-	getcontext(&thread->_syscallReturnHereDuringInterrupt);
-
-	if (!thread->_didSyscallReturnDuringInterrupt) {
-		if (interruptedContinuation) {
-			interruptedContinuation();
-		} else if (thread->_interrupts.top().interruptedCall) {
-			thread->_handlingInterruptedCall = true;
-			thread->_pendingCallOverride = true;
-			thread->jumpToResume(thread->_interrupts.top().savedStack, thread->_interrupts.top().savedStackSize);
-		}
-	} else if (thread->_handlingInterruptedCall) {
-#if DSERVER_ASAN
-		const void* dummy;
-		size_t dummy2;
-		__sanitizer_finish_switch_fiber(nullptr, &dummy, &dummy2);
-#endif
-
-		thread->_handlingInterruptedCall = false;
-		thread->_pendingCallOverride = false;
-	}
-
-	{
-		std::unique_lock lock(thread->_rwlock);
-
-		Thread::freeStack(thread->_interrupts.top().savedStack, thread->_interrupts.top().savedStackSize);
-		thread->_interrupts.top().savedStack = nullptr;
-		thread->_interrupts.top().savedStackSize = 0;
-
-		thread->_interruptedForSignal = false;
-		thread->_interrupts.top().interruptedCall = nullptr;
-	}
-
-	dtape_thread_sigexc_enter2(thread->_dtapeThread);
+	Thread::_handleInterruptEnterForCurrentThread();
 
 	_sendReply(0);
 };

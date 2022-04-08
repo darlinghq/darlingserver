@@ -1292,3 +1292,62 @@ void DarlingServer::Thread::jumpToResume(void* stack, size_t stackSize) {
 	setcontext(&_resumeContext);
 	__builtin_unreachable();
 };
+
+static thread_local std::function<void()> interruptedContinuation = nullptr;
+
+void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
+	// FIXME: this currently does not work properly if the thread was suspended waiting for a lock
+
+	{
+		std::unique_lock lock(currentThreadVar->_rwlock);
+
+		if (currentThreadVar->_pendingSavedReply) {
+			currentThreadVar->_interrupts.top().savedReply = std::move(*currentThreadVar->_pendingSavedReply);
+			currentThreadVar->_pendingSavedReply = std::nullopt;
+		}
+
+		currentThreadVar->_interruptedForSignal = true;
+
+		interruptedContinuation = currentThreadVar->_interruptedContinuation;
+		currentThreadVar->_interruptedContinuation = nullptr;
+	}
+
+	dtape_thread_sigexc_enter(currentThreadVar->_dtapeThread);
+
+	currentThreadVar->_didSyscallReturnDuringInterrupt = false;
+	getcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+
+	if (!currentThreadVar->_didSyscallReturnDuringInterrupt) {
+		if (interruptedContinuation) {
+			interruptedContinuation();
+		} else if (currentThreadVar->_interrupts.top().interruptedCall) {
+			currentThreadVar->_handlingInterruptedCall = true;
+			currentThreadVar->_pendingCallOverride = true;
+			currentThreadVar->jumpToResume(currentThreadVar->_interrupts.top().savedStack, currentThreadVar->_interrupts.top().savedStackSize);
+		}
+	} else if (currentThreadVar->_handlingInterruptedCall) {
+#if DSERVER_ASAN
+		const void* dummy;
+		size_t dummy2;
+		__sanitizer_finish_switch_fiber(nullptr, &dummy, &dummy2);
+#endif
+
+		currentThreadVar->_handlingInterruptedCall = false;
+		currentThreadVar->_pendingCallOverride = false;
+	}
+
+	interruptedContinuation = nullptr;
+
+	{
+		std::unique_lock lock(currentThreadVar->_rwlock);
+
+		Thread::freeStack(currentThreadVar->_interrupts.top().savedStack, currentThreadVar->_interrupts.top().savedStackSize);
+		currentThreadVar->_interrupts.top().savedStack = nullptr;
+		currentThreadVar->_interrupts.top().savedStackSize = 0;
+
+		currentThreadVar->_interruptedForSignal = false;
+		currentThreadVar->_interrupts.top().interruptedCall = nullptr;
+	}
+
+	dtape_thread_sigexc_enter2(currentThreadVar->_dtapeThread);
+};

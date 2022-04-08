@@ -134,6 +134,8 @@ namespace DarlingServer {
 		[[noreturn]]
 		void jumpToResume(void* stack, size_t stackSize);
 
+		static void _handleInterruptEnterForCurrentThread();
+
 	public:
 		using ID = pid_t;
 		using NSID = ID;
