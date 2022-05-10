@@ -60,7 +60,11 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 			basic_info->memory_size = memsize;
 #if __x86_64__ || __i386__
 			basic_info->cpu_type = CPU_TYPE_X86;
-			basic_info->cpu_subtype = CPU_SUBTYPE_X86_ARCH1;
+#if __x86_64__
+			basic_info->cpu_subtype = CPU_SUBTYPE_X86_64_ALL;
+#else
+			basic_info->cpu_subtype = CPU_SUBTYPE_I386_ALL;
+#endif
 #else
 			#error Unknown CPU type
 #endif
@@ -126,10 +130,15 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 
 			user_arch_info = (void*)info;
 
+#if __x86_64__ || __i386__
+			user_arch_info->cpu_type = CPU_TYPE_X86;
 #if __x86_64__
-			user_arch_info->cpu_type = CPU_TYPE_X86_64;
 			user_arch_info->cpu_subtype = CPU_SUBTYPE_X86_64_ALL;
+#else
+			user_arch_info->cpu_subtype = CPU_SUBTYPE_I386_ALL;
+#endif
 #elif __aarch64__
+			// TODO: check whether this is actually what ARM64 macOS returns
 			user_arch_info->cpu_type = CPU_TYPE_ARM64;
 			user_arch_info->cpu_subtype = CPU_SUBTYPE_ARM64_ALL;
 #else
