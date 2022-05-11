@@ -120,7 +120,6 @@ add_dependencies(darlingserver
 
 target_link_libraries(darlingserver PRIVATE
 	darlingserver_duct_tape
-	cap
 )
 
 target_compile_options(darlingserver PRIVATE
@@ -159,11 +158,6 @@ install(TARGETS darlingserver DESTINATION bin)
 #	"${DARLING_ROOT_RELATIVE_TO_SDK}/../../../src/darlingserver/include/darlingserver/rpc.h"
 #	"${CMAKE_BINARY_DIR}/${DARLING_SDK_RELATIVE_PATH}/usr/include/darlingserver/rpc.h"
 #)
-
-include(setcap)
-
-# necessary because mldr has these capabilities, so in order to access it for ptracing, we need the same set or a superset
-setcap(bin/darlingserver cap_sys_rawio,cap_sys_resource+ep)
 
 if (NOT "${DARLINGSERVER_INIT_PROCESS}" STREQUAL "")
 	target_compile_definitions(darlingserver PRIVATE

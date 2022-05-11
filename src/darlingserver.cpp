@@ -37,7 +37,6 @@
 #include <linux/sched.h>
 #include <sys/syscall.h>
 #include <sys/signal.h>
-#include <sys/capability.h>
 
 #include <darling-config.h>
 
@@ -370,9 +369,6 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
-	// make sure we don't lose capabilities when doing UID/GID stuff
-	prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
-
 	// temporarily drop privileges to perform some prefix work
 	temp_drop_privileges(originalUID, originalGID);
 	setupUserHome(prefix, originalUID);
@@ -549,16 +545,6 @@ mount_ok:
 	// drop our privileges
 	perma_drop_privileges(originalUID, originalGID);
 	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
-
-	// regain our capabilities
-	cap_value_t regainCaps[] = { CAP_SYS_RAWIO, CAP_SYS_RESOURCE };
-	cap_t caps = cap_get_proc();
-	cap_set_flag(caps, CAP_EFFECTIVE, sizeof(regainCaps) / sizeof(*regainCaps), regainCaps, CAP_SET);
-	if (cap_set_proc(caps) < 0) {
-		fprintf(stderr, "Failed to regain capabilities: %s\n", strerror(errno));
-		exit(1);
-	}
-	cap_free(caps);
 
 	// create the server
 	auto server = new DarlingServer::Server(prefix);
