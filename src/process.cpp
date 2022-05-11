@@ -677,6 +677,9 @@ void DarlingServer::Process::notifyDead() {
 		processLog.info() << *this << ": process dying" << processLog.endLog;
 		_dead = true;
 		threads = _threads;
+
+		// clear out all kqchannels we own
+		_kqchannels.clear();
 	}
 
 	// keep ourselves alive until the duct-taped context is done

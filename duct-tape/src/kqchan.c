@@ -16,7 +16,7 @@ extern int filt_machporttouch(struct knote *kn, struct kevent_qos_s *kev);
 extern int filt_machportprocess(struct knote *kn, struct kevent_qos_s *kev);
 extern int filt_machportpeek(struct knote *kn);
 
-dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context) {
+dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(dtape_task_t* owning_task, uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context) {
 	dtape_kqchan_mach_port_t* kqchan = malloc(sizeof(dtape_kqchan_mach_port_t));
 	if (!kqchan) {
 		return NULL;
@@ -26,6 +26,10 @@ dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(uint32_t port, uint64_t 
 
 	kqchan->callback = notification_callback;
 	kqchan->context = context;
+	kqchan->task = owning_task;
+
+	// keep a reference to the task
+	task_reference(&kqchan->task->xnu_task);
 
 	os_ref_init(&kqchan->refcount, NULL);
 
@@ -52,6 +56,8 @@ void dtape_kqchan_mach_port_destroy(dtape_kqchan_mach_port_t* kqchan) {
 	}
 
 	filt_machportdetach(&kqchan->knote);
+
+	task_deallocate(&kqchan->task->xnu_task);
 
 	free(kqchan);
 };

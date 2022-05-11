@@ -224,12 +224,18 @@ std::shared_ptr<DarlingServer::Kqchan> DarlingServer::Kqchan::MachPort::sharedFr
 };
 
 int DarlingServer::Kqchan::MachPort::setup() {
+	auto proc = _process.lock();
+
+	if (!proc) {
+		throw std::system_error(ESRCH, std::generic_category());
+	}
+
 	kqchanMachPortLog.debug() << *this << ": Setting up Mach port kqchan" << kqchanMachPortLog.endLog;
 
 	// NOTE: the duct-taped kqchan will never notify us after we die
 	//       since we disable notifications upon destruction,
 	//       so using `this` here is safe
-	_dtapeKqchan = dtape_kqchan_mach_port_create(_port, _receiveBuffer, _receiveBufferSize, _savedFilterFlags, [](void* context) {
+	_dtapeKqchan = dtape_kqchan_mach_port_create(proc->_dtapeTask, _port, _receiveBuffer, _receiveBufferSize, _savedFilterFlags, [](void* context) {
 		auto self = reinterpret_cast<MachPort*>(context);
 		self->_notify();
 	}, this);
