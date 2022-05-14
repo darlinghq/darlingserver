@@ -87,6 +87,18 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 
 	dtape_log_debug("trying to fill kevent for kqchan %p with mqueue %p", kqchan, kqchan->knote.kn_mqueue);
 
+	if (kqchan->knote.kn_status & KN_VANISHED) {
+		// create a fake event
+		memset(&reply->kev, 0, sizeof(reply->kev));
+
+		reply->kev.filter = kqchan->knote.kn_filter;
+		reply->kev.ident = kqchan->knote.kn_id;
+		reply->kev.flags = EV_DISPATCH2 | EV_ONESHOT | EV_VANISHED;
+		reply->kev.udata = kqchan->knote.kn_udata;
+
+		return true;
+	}
+
 	bool has_events = dtape_kqchan_mach_port_has_events(kqchan);
 
 	dtape_log_debug("has events before process? %s", has_events ? "yes" : "no");
@@ -150,7 +162,17 @@ void knote(struct klist* list, long hint) {
 };
 
 void knote_vanish(struct klist* list, bool make_active) {
-	dtape_stub();
+	struct knote* kn;
+	struct knote* tmp;
+
+	dtape_log_debug("klist %p is vanishing", list);
+
+	SLIST_FOREACH_SAFE(kn, list, kn_selnext, tmp) {
+		dtape_log_debug("knote %p is vanishing", kn);
+		// TODO: handle the old style of vanishing (i.e. `EV_EOF | EV_ONESHOT`)
+		kn->kn_status |= KN_VANISHED;
+		knote_post(kn, 0);
+	}
 };
 
 static void kqchan_waitq_waiter_entry(void* context, wait_result_t wait_result) {
