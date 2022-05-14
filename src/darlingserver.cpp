@@ -336,6 +336,7 @@ int main(int argc, char** argv) {
 	struct rlimit increased_limit;
 	FILE* nr_open_file = NULL;
 	int childWaitFDs[2];
+	struct rlimit core_limit;
 
 	char *opts;
 	char putOld[4096];
@@ -401,6 +402,17 @@ int main(int argc, char** argv) {
 				fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
 				//exit(1);
 			}
+		}
+	}
+
+	if (getrlimit(RLIMIT_CORE, &core_limit) != 0) {
+		fprintf(stderr, "Failed to read default core rlimit: %s\n", strerror(errno));
+	} else {
+		// increase the core limit to the maximum
+		core_limit.rlim_cur = core_limit.rlim_max;
+
+		if (setrlimit(RLIMIT_CORE, &core_limit) != 0) {
+			fprintf(stderr, "Warning: failed to increase core limit: %s\n", strerror(errno));
 		}
 	}
 
