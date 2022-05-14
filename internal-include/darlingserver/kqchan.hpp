@@ -40,6 +40,8 @@ namespace DarlingServer {
 		bool _canSend = false;
 		std::mutex _notificationMutex;
 		bool _canSendNotification = true;
+		bool _deferNotification = false;
+		std::optional<Message> _deferredNotification = std::nullopt;
 		std::mutex _sendingMutex;
 		uint64_t _notificationCount = 0;
 
@@ -52,6 +54,7 @@ namespace DarlingServer {
 		virtual std::shared_ptr<Kqchan> sharedFromRoot();
 
 		void _sendNotification();
+		void _sendDeferredNotification();
 
 	public:
 		virtual ~Kqchan();
