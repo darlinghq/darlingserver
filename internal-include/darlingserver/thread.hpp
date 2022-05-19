@@ -26,6 +26,7 @@
 #include <shared_mutex>
 #include <condition_variable>
 #include <stack>
+#include <queue>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -110,6 +111,7 @@ namespace DarlingServer {
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
+		std::queue<std::shared_ptr<Call>> _pendingInterrupts;
 		std::optional<Message> _pendingSavedReply = std::nullopt;
 		bool _dead = false;
 		std::shared_ptr<Thread> _selfReference = nullptr;

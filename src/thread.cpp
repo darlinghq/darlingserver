@@ -69,6 +69,10 @@ static thread_local uint64_t interruptDisableCount = 0;
 
 static DarlingServer::Log threadLog("thread");
 
+// TODO: create a stack pool to minimize the number of active stacks (and memory usage).
+//       threads could then request a stack when they need one (e.g. to begin
+//       handling a call) and release it when they're done (e.g. when the call is completed).
+
 void* DarlingServer::Thread::allocateStack(size_t stackSize) {
 	void* stack = NULL;
 
@@ -229,7 +233,15 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Thread::pendingCall() const 
 void DarlingServer::Thread::setPendingCall(std::shared_ptr<Call> newPendingCall) {
 	std::unique_lock lock(_rwlock);
 	if (newPendingCall && _pendingCall) {
-		throw std::runtime_error("Thread's pending call overwritten while active");
+		if (newPendingCall->number() == Call::Number::InterruptEnter) {
+			// InterruptEnter calls can occur after we receive a call but before we start processing it,
+			// so we need to handle this case gracefully. we do so by saving the interrupt and scheduling
+			// it to be processed once the pending call becomes active and suspends or exits.
+			_pendingInterrupts.push(newPendingCall);
+			return;
+		} else {
+			throw std::runtime_error("Thread's pending call overwritten while active");
+		}
 	}
 	_pendingCall = newPendingCall;
 };
@@ -495,6 +507,19 @@ doneWorking:
 		_rwlock.unlock();
 		notifyDead();
 	} else {
+		// if we have any pending interrupts, schedule them to be processed now
+		// (we've just finished or suspended a call, so now's the time to handle interrupts)
+		if (!_terminating && !_dead && !_pendingInterrupts.empty()) {
+			if (_pendingCall) {
+				throw std::runtime_error("Need to schedule interrupt for processing, but thread has pending call");
+			}
+
+			_pendingCall = _pendingInterrupts.front();
+			_pendingInterrupts.pop();
+
+			Server::sharedInstance().scheduleThread(shared_from_this());
+		}
+
 		_rwlock.unlock();
 	}
 	if (unlockMeWhenSuspending) {
