@@ -950,17 +950,26 @@ void DarlingServer::Call::GetExecutablePath::processCall() {
 	int code = 0;
 	uint64_t fullLength;
 
-	if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.pid)) {
-		auto targetProcess = *maybeTargetProcess;
-		auto path = targetProcess->executablePath();
-		auto len = std::min(path.length() + 1, _body.buffer_size);
-		if (!targetProcess->writeMemory((uintptr_t)_body.buffer, path.data(), len, &code)) {
-			code = -code;
+	if (auto callingThread = _thread.lock()) {
+		if (auto callingProcess = callingThread->process()) {
+			if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.pid)) {
+				auto targetProcess = *maybeTargetProcess;
+				auto path = targetProcess->executablePath();
+				auto len = std::min(path.length() + 1, _body.buffer_size);
+				if (!callingProcess->writeMemory((uintptr_t)_body.buffer, path.c_str(), len, &code)) {
+					code = -code;
+				}
+				fullLength = path.length();
+			} else {
+				// not negated because this is an acceptable case.
+				// e.g. the target process may have died before the call was processed.
+				code = ESRCH;
+			}
+		} else {
+			code = -ESRCH;
 		}
-		fullLength = path.length();
-		
 	} else {
-		code = ESRCH;
+		code = -ESRCH;
 	}
 
 	_sendReply(code, fullLength);
