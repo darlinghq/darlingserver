@@ -633,6 +633,16 @@ void DarlingServer::Process::changeProtection(uintptr_t address, size_t pageCoun
 	return thread->changeProtection(address, pageCount, protection);
 };
 
+void DarlingServer::Process::syncMemory(uintptr_t address, size_t size, int sync_flags) {
+	auto thread = _pickS2CThread();
+
+	if (!thread) {
+		throw std::system_error(ESRCH, std::generic_category());
+	}
+
+	return thread->syncMemory(address, size, sync_flags);
+};
+
 static const std::regex memoryRegionEntryAddressRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)");
 
 uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {

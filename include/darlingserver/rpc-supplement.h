@@ -149,6 +149,7 @@ enum dserver_s2c_msgnum {
 	dserver_s2c_msgnum_mmap,
 	dserver_s2c_msgnum_munmap,
 	dserver_s2c_msgnum_mprotect,
+	dserver_s2c_msgnum_msync,
 };
 
 typedef enum dserver_s2c_msgnum dserver_s2c_msgnum_t;
@@ -207,10 +208,24 @@ typedef struct dserver_s2c_reply_mprotect {
 	int errno_result;
 } dserver_s2c_reply_mprotect_t;
 
+typedef struct dserver_s2c_call_msync {
+	dserver_s2c_callhdr_t header;
+	uint64_t address;
+	uint64_t size;
+	int sync_flags;
+} dserver_s2c_call_msync_t;
+
+typedef struct dserver_s2c_reply_msync {
+	dserver_s2c_replyhdr_t header;
+	int return_value;
+	int errno_result;
+} dserver_s2c_reply_msync_t;
+
 typedef union dserver_s2c_call {
 	dserver_s2c_call_mmap_t mmap;
 	dserver_s2c_call_munmap_t munmap;
 	dserver_s2c_call_mprotect_t mprotect;
+        dserver_s2c_call_msync_t msync;
 } dserver_s2c_call_t;
 
 #if __cplusplus

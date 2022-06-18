@@ -1171,6 +1171,34 @@ int DarlingServer::Thread::_mprotect(uintptr_t address, size_t length, int prote
 	return reply->return_value;
 };
 
+int DarlingServer::Thread::_msync(uintptr_t address, size_t size, int sync_flags, int& outErrno) {
+	Message callMessage(sizeof(dserver_s2c_call_msync_t), 0);
+	auto call = reinterpret_cast<dserver_s2c_call_msync_t*>(callMessage.data().data());
+
+	call->header.call_number = dserver_callnum_s2c;
+	call->header.s2c_number = dserver_s2c_msgnum_msync;
+	call->address = address;
+	call->size = size;
+	call->sync_flags = sync_flags;
+
+	s2cLog.debug() << "Performing _msync with address=" << call->address << ", size=" << call->size << ", sync_flags=" << call->sync_flags << s2cLog.endLog;
+
+	auto maybeReplyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_msync, sizeof(dserver_s2c_reply_msync_t));
+	if (!maybeReplyMessage) {
+		s2cLog.debug() << "_msync call interrupted" << s2cLog.endLog;
+		outErrno = EINTR;
+		return -1;
+	}
+
+	auto replyMessage = std::move(*maybeReplyMessage);
+	auto reply = reinterpret_cast<dserver_s2c_reply_msync_t*>(replyMessage.data().data());
+
+	s2cLog.debug() << "_msync returned return_value=" << reply->return_value << ", errno_result=" << reply->errno_result << s2cLog.endLog;
+
+	outErrno = reply->errno_result;
+	return reply->return_value;
+};
+
 uintptr_t DarlingServer::Thread::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
 	int err = 0;
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -1212,6 +1240,13 @@ void DarlingServer::Thread::changeProtection(uintptr_t address, size_t pageCount
 	int err = 0;
 	if (_mprotect(address, pageCount * sysconf(_SC_PAGESIZE), protection, err) < 0) {
 		throw std::system_error(err, std::generic_category(), "S2C mprotect call failed");
+	}
+};
+
+void DarlingServer::Thread::syncMemory(uintptr_t address, size_t size, int sync_flags) {
+	int err = 0;
+	if (_msync(address, size, sync_flags, err) < 0) {
+		throw std::system_error(err, std::generic_category(), "S2C msync call failed");
 	}
 };
 

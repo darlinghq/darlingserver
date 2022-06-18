@@ -126,6 +126,7 @@ namespace DarlingServer {
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);
 		int _mprotect(uintptr_t address, size_t length, int protection, int& outErrno);
+		int _msync(uintptr_t address, size_t size, int sync_flags, int& outErrno);
 
 		void _deferLocked(bool wait, std::unique_lock<std::shared_mutex>& lock);
 		void _undeferLocked(std::unique_lock<std::shared_mutex>& lock);
@@ -235,6 +236,7 @@ namespace DarlingServer {
 		void freePages(uintptr_t address, size_t pageCount);
 		uintptr_t mapFile(int fd, size_t pageCount, int protection, uintptr_t addressHint, size_t pageOffset, bool fixed, bool overwrite);
 		void changeProtection(uintptr_t address, size_t pageCount, int protection);
+		void syncMemory(uintptr_t address, size_t size, int sync_flags);
 
 		void defer(bool wait = false);
 		void undefer();
