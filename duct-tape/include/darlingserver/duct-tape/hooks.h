@@ -20,8 +20,12 @@ typedef dtape_thread_t* (*dtape_hook_current_thread_f)(void);
  * The deadline is given as an absolute timepoint with respect to the system's monotonic clock.
  *
  * When called with 0 or UINT64_MAX, the timer should instead be disarmed.
+ *
+ * Normally, the deadline will only be updated if the given deadline is less than
+ * the current deadline (with an exception for 0/UINT64_MAX). If @p override is `true`,
+ * this will forcibly update the timer deadline, even if it is later than the current deadline.
  */
-typedef void (*dtape_hook_timer_arm_f)(uint64_t absolute_ns);
+typedef void (*dtape_hook_timer_arm_f)(uint64_t absolute_ns, bool override);
 
 typedef void (*dtape_hook_log_f)(dtape_log_level_t level, const char* message);
 

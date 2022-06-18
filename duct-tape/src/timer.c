@@ -54,7 +54,7 @@ uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
 
 void dtape_timer_fired(void) {
 	uint64_t next_deadline = timer_queue_expire(&timer_queue, mach_absolute_time());
-	dtape_hooks->timer_arm(next_deadline);
+	dtape_hooks->timer_arm(next_deadline, true);
 };
 
 void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
@@ -62,12 +62,12 @@ void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
 };
 
 mpqueue_head_t* timer_queue_assign(uint64_t deadline) {
-	dtape_hooks->timer_arm(deadline);
+	dtape_hooks->timer_arm(deadline, false);
 	return &timer_queue;
 };
 
 void timer_queue_cancel(mpqueue_head_t* queue, uint64_t deadline, uint64_t new_deadline) {
-	dtape_hooks->timer_arm(new_deadline);
+	dtape_hooks->timer_arm(new_deadline, true);
 };
 
 mpqueue_head_t* timer_queue_cpu(int cpu) {

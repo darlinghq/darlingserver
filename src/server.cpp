@@ -87,7 +87,7 @@ struct DTapeHooks {
 		return thread->_dtapeThread;
 	};
 
-	static void dtape_hook_timer_arm(uint64_t deadline_ns) {
+	static void dtape_hook_timer_arm(uint64_t deadline_ns, bool override) {
 		auto& server = DarlingServer::Server::sharedInstance();
 
 		if (deadline_ns == UINT64_MAX) {
@@ -100,11 +100,16 @@ struct DTapeHooks {
 		newSpec.it_value.tv_nsec = deadline_ns % 1000000000ull;
 
 		std::unique_lock lock(server._timerLock);
+
+		if (!override && server._currentTimerDeadline != 0 && deadline_ns >= server._currentTimerDeadline) {
+			return;
+		}
+
+		server._currentTimerDeadline = deadline_ns;
+
 		if (timerfd_settime(server._timerFD, TFD_TIMER_ABSTIME, &newSpec, NULL) < 0) {
 			throw std::system_error(errno, std::generic_category(), "Failed to set timerfd expiration deadline");
 		}
-
-		// TODO: verify that the timer will fire if the new deadline is in the past
 	};
 
 	static void dtape_hook_log(dtape_log_level_t level, const char* message) {
