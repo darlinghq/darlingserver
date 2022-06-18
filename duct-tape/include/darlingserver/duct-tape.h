@@ -91,6 +91,8 @@ bool dtape_task_try_resume(dtape_task_t* task);
 
 /**
  * Invoked when a timer armed by an earlier call to the timer_arm hook expires.
+ *
+ * It is allowed to be invoked spuriously.
  */
 void dtape_timer_fired(void);
 
