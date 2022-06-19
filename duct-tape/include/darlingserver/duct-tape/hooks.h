@@ -56,6 +56,7 @@ typedef int (*dtape_hook_task_free_pages_f)(void* task_context, uintptr_t addres
 typedef uintptr_t (*dtape_hook_task_map_file_f)(void* task_context, int fd, size_t page_count, int protection, uintptr_t address_hint, size_t page_offset, dtape_memory_flags_t flags);
 typedef uintptr_t (*dtape_hook_task_get_next_region_f)(void* task_context, uintptr_t address);
 typedef bool (*dtape_hook_task_change_protection_f)(void* task_context, uintptr_t address, size_t page_count, int protection);
+typedef bool (*dtape_hook_task_sync_memory_f)(void* task_context, uintptr_t address, size_t size, int sync_flags);
 typedef void (*dtape_hook_task_context_dispose_f)(void* task_context);
 
 #if DSERVER_EXTENDED_DEBUG
@@ -101,6 +102,7 @@ typedef struct dtape_hooks {
 	dtape_hook_task_map_file_f task_map_file;
 	dtape_hook_task_get_next_region_f task_get_next_region;
 	dtape_hook_task_change_protection_f task_change_protection;
+	dtape_hook_task_sync_memory_f task_sync_memory;
 	dtape_hook_task_context_dispose_f task_context_dispose;
 
 #if DSERVER_EXTENDED_DEBUG

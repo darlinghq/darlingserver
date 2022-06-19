@@ -302,6 +302,15 @@ struct DTapeHooks {
 		}
 	};
 
+	static bool dtape_hook_task_sync_memory(void* task_context, uintptr_t address, size_t size, int sync_flags) {
+		try {
+			static_cast<DarlingServer::Process*>(task_context)->syncMemory(address, size, sync_flags);
+			return true;
+		} catch (std::system_error e) {
+			return false;
+		}
+	};
+
 	static void dtape_hook_task_context_dispose(void* task_context) {
 		static_cast<DarlingServer::Process*>(task_context)->_dispose();
 	};
@@ -363,6 +372,7 @@ struct DTapeHooks {
 		.task_map_file = dtape_hook_task_map_file,
 		.task_get_next_region = dtape_hook_task_get_next_region,
 		.task_change_protection = dtape_hook_task_change_protection,
+		.task_sync_memory = dtape_hook_task_sync_memory,
 		.task_context_dispose = dtape_hook_task_context_dispose,
 
 #if DSERVER_EXTENDED_DEBUG

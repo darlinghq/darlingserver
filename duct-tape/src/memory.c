@@ -594,8 +594,28 @@ kern_return_t mach_vm_map_external(vm_map_t target_map, mach_vm_offset_t* addres
 	dtape_stub_unsafe();
 };
 
-kern_return_t mach_vm_msync(vm_map_t map, mach_vm_address_t address, mach_vm_size_t size, vm_sync_t sync_flags) {
-	dtape_stub_unsafe();
+kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size_t size, vm_sync_t sync_flags) {
+	int linux_flags = 0;
+
+	// TODO: give the Linux bits names/macros
+
+	if (sync_flags & VM_SYNC_ASYNCHRONOUS) {
+		linux_flags |= 1 << 0;
+	}
+
+	if (sync_flags & VM_SYNC_SYNCHRONOUS) {
+		linux_flags |= 1 << 2;
+	}
+
+	if (sync_flags & VM_SYNC_INVALIDATE) {
+		linux_flags |= 1 << 1;
+	}
+
+	if (!dtape_hooks->task_sync_memory(map->dtape_task->context, address, size, linux_flags)) {
+		return KERN_FAILURE;
+	}
+
+	return KERN_SUCCESS;
 };
 
 kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t* count) {
