@@ -724,7 +724,7 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 	}
 
 	while (true) {
-	currentThreadVar->suspend();
+		currentThreadVar->suspend();
 
 		threadLog.error() << "Thread was resumed after syscall without changing running context" << threadLog.endLog;
 	}
@@ -1316,6 +1316,10 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 	}
 
 	if (_interruptedForSignal) {
+		if (_interrupts.top().savedReply) {
+			throw std::runtime_error("New reply would overwrite existing saved reply");
+		}
+
 		_interrupts.top().savedReply = std::move(reply);
 	} else if (_deferReplyForS2C) {
 		_deferredReply = std::move(reply);
@@ -1466,6 +1470,10 @@ void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
 		std::unique_lock lock(currentThreadVar->_rwlock);
 
 		if (currentThreadVar->_pendingSavedReply) {
+			if (currentThreadVar->_interrupts.top().savedReply) {
+				throw std::runtime_error("Pending saved reply would overwrite saved reply");
+			}
+
 			currentThreadVar->_interrupts.top().savedReply = std::move(*currentThreadVar->_pendingSavedReply);
 			currentThreadVar->_pendingSavedReply = std::nullopt;
 		}
