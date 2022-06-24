@@ -93,7 +93,7 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std:
 	_header.msg_flags = 0;
 
 	_dataDescriptor.iov_base = _buffer.data();
-	_dataDescriptor.iov_len = _buffer.capacity();
+	_dataDescriptor.iov_len = _buffer.size();
 };
 
 void DarlingServer::Message::_initWithOther(Message&& other) {
@@ -111,7 +111,7 @@ void DarlingServer::Message::_initWithOther(Message&& other) {
 	_header.msg_iov = &_dataDescriptor;
 
 	_dataDescriptor.iov_base = _buffer.data();
-	_dataDescriptor.iov_len = _buffer.capacity();
+	_dataDescriptor.iov_len = _buffer.size();
 };
 
 void DarlingServer::Message::_cleanupSelf() {
@@ -393,13 +393,15 @@ void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
 
 	_header.msg_controllen = controlLen;
 
-	fdHeader->cmsg_len = CMSG_LEN(sizeof(int) * newSpace);
-	fdHeader->cmsg_level = SOL_SOCKET;
-	fdHeader->cmsg_type = SCM_RIGHTS;
+	if (newSpace > 0) {
+		fdHeader->cmsg_len = CMSG_LEN(sizeof(int) * newSpace);
+		fdHeader->cmsg_level = SOL_SOCKET;
+		fdHeader->cmsg_type = SCM_RIGHTS;
 
-	for (size_t i = oldSpace; i < newSpace; ++i) {
-		int fd = -1;
-		memcpy(CMSG_DATA(fdHeader) + (sizeof(int) * i), &fd, sizeof(int));
+		for (size_t i = oldSpace; i < newSpace; ++i) {
+			int fd = -1;
+			memcpy(CMSG_DATA(fdHeader) + (sizeof(int) * i), &fd, sizeof(int));
+		}
 	}
 };
 
