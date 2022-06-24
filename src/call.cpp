@@ -57,16 +57,47 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	if ((header->number & DSERVER_CALL_UNMANAGED_FLAG) == 0) {
 		// now let's lookup (and possibly create) the process and thread making this call
 		process = processRegistry().registerIfAbsent(header->pid, [&]() {
-			auto tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture));
+			std::shared_ptr<Process> tmp = nullptr;
+
+			try {
+				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture));
+			} catch (std::system_error e) {
+				return tmp;
+			}
+
 			Server::sharedInstance().monitorProcess(tmp);
 			return tmp;
 		});
+
+		if (!process) {
+			callLog.error() << "Received call from non-existent process?" << callLog.endLog;
+
+			// ignore this call
+			// TODO: instead of ignoring it, we should return a generic reply indicating `-ESRCH` or something like that.
+			return nullptr;
+		}
+
 		thread = threadRegistry().registerIfAbsent(header->tid, [&]() {
-			auto tmp = std::make_shared<Thread>(process, header->tid);
+			std::shared_ptr<Thread> tmp = nullptr;
+
+			try {
+				tmp = std::make_shared<Thread>(process, header->tid);
+			} catch (std::system_error e) {
+				return tmp;
+			}
+
 			tmp->setAddress(requestMessage.address());
 			tmp->registerWithProcess();
 			return tmp;
 		});
+
+		if (!thread) {
+			callLog.error() << "Received call from non-existent thread?" << callLog.endLog;
+
+			// ignore this call
+			// TODO: instead of ignoring it, we should return a generic reply indicating `-ESRCH` or something like that.
+			return nullptr;
+		}
 
 		thread->setAddress(requestMessage.address());
 

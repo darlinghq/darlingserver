@@ -142,7 +142,7 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 	}
 
 	if (_tid == -1) {
-		throw std::runtime_error("Failed to find thread ID within darlingserver's namespace");
+		throw std::system_error(ESRCH, std::generic_category(), "Failed to find thread ID within darlingserver's namespace");
 	}
 
 	_stackSize = THREAD_STACK_SIZE;

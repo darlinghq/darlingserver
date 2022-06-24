@@ -61,8 +61,14 @@ namespace DarlingServer {
 			_registeringWithLockHeld = true;
 			auto entry = entryFactory();
 			_registeringWithLockHeld = false;
+
+			if (!entry) {
+				return nullptr;
+			}
+
 			_map[entry->id()] = entry;
 			_nsmap[entry->nsid()] = entry;
+
 			return entry;
 		};
 
