@@ -133,6 +133,14 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		auto pushReplyCall = reinterpret_cast<const dserver_rpc_call_push_reply_t*>(requestMessage.data().data());
 		Message replyToSave(pushReplyCall->reply_size, 0);
 
+		// extract the reply-push synchronization pipe
+		auto pipeDesc = requestMessage.extractDescriptorAtIndex(requestMessage.descriptors().size() - 1);
+		char tmp = 1;
+
+		if (pipeDesc < 0) {
+			throw std::runtime_error("Failed to extract reply-push synchronization pipe");
+		}
+
 		if (!process->readMemory(pushReplyCall->reply, replyToSave.data().data(), pushReplyCall->reply_size)) {
 			throw std::runtime_error("Failed to read client-pushed reply body");
 		}
@@ -160,7 +168,12 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			}
 		}
 
-		callLog.debug() << *thread << ": Saved client-pushed reply" << callLog.endLog;
+		callLog.debug() << *thread << ": Saved client-pushed reply (" << ((thread->_pendingSavedReply) ? "pending" : "normal") << ")" << callLog.endLog;
+
+		// write a byte to the pipe so the caller can continue
+		write(pipeDesc, &tmp, sizeof(tmp));
+		// and close it
+		close(pipeDesc);
 
 		return nullptr;
 	}
