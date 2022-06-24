@@ -723,8 +723,11 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 		__builtin_unreachable();
 	}
 
+	while (true) {
 	currentThreadVar->suspend();
-	throw std::runtime_error("Thread should not continue normally after syscall return");
+
+		threadLog.error() << "Thread was resumed after syscall without changing running context" << threadLog.endLog;
+	}
 };
 
 static std::queue<std::function<void()>> kernelAsyncRunnerQueue;
