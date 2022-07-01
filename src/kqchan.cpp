@@ -717,3 +717,16 @@ std::function<void()> DarlingServer::Kqchan::Process::_checkForEventsAsyncFactor
 		self->_checkForEventsAsync();
 	};
 };
+
+void DarlingServer::Kqchan::Process::logToStream(Log::Stream& stream) const {
+	auto proc = _targetProcess.lock();
+
+	Kqchan::logToStream(stream);
+
+	stream << ":";
+	if (proc) {
+		stream << *proc;
+	} else {
+		stream << "<null>";
+	}
+};

@@ -157,6 +157,8 @@ namespace DarlingServer {
 		Process& operator=(Process&&) = delete;
 
 		virtual int setup();
+
+		virtual void logToStream(Log::Stream& stream) const;
 	};
 };
 
