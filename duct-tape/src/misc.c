@@ -162,7 +162,6 @@ void dtape_init_in_thread(void) {
 	dtape_log_debug("thread_deallocate_daemon_init");
 	thread_deallocate_daemon_init();
 
-	ux_handler_init();
 	ux_handler_setup();
 
 	dtape_psynch_init();
@@ -209,7 +208,7 @@ void Assert(const char* file, int line, const char* expression) {
 };
 
 unsigned int waitq_held(struct waitq* wq) {
-	return wq->dtape_waitq_interlock.dtape_interlock.dtape_interlock.dtape_mutex->dtape_owner == (uintptr_t)current_thread();
+	return wq->dtape_waitq_interlock.dtape_interlock.dtape_interlock.dtape_mutex.dtape_owner == (uintptr_t)current_thread();
 };
 
 #if __x86_64__

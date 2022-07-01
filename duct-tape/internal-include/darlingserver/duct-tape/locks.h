@@ -19,9 +19,7 @@ typedef struct dtape_mutex {
 } dtape_mutex_t;
 
 typedef struct lck_mtx {
-	// the actual mutex is allocated separately because the lck_mtx structure needs to be pointer-sized
-	// for compatibility with the actual XNU lck_mtx structure (particularly necessary for XNU waitqs).
-	dtape_mutex_t* dtape_mutex;
+	dtape_mutex_t dtape_mutex;
 } lck_mtx_t;
 
 typedef struct lck_spin {

@@ -95,7 +95,12 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	// since i'm not sure where it's normally acquired in XNU.
 	// (this is necessary ipc_importance_send() needs the task to have a valid `task_imp_base`)
 	if (task->xnu_task.task_imp_base == IIT_NULL) {
-		ipc_importance_for_task(&task->xnu_task, false);
+		ipc_importance_task_t imp = ipc_importance_for_task(&task->xnu_task, false);
+		// the new IPC importance structure has 2 references:
+		//   * one that the task gets,
+		//   * and another one that we (the caller) get
+		// we don't actually want a reference; we only want the task to have one.
+		ipc_importance_task_release(imp);
 	}
 
 	if (parent_task != NULL) {
@@ -147,6 +152,8 @@ void dtape_task_destroy(dtape_task_t* task) {
 	ipc_task_terminate(&task->xnu_task);
 
 	dtape_vm_map_destroy(task->xnu_task.map);
+
+	is_release(task->xnu_task.itk_space);
 
 	lck_mtx_destroy(&task->xnu_task.lock, LCK_GRP_NULL);
 

@@ -159,32 +159,25 @@ out:
 };
 
 void lck_mtx_init(lck_mtx_t* lock, lck_grp_t* grp, lck_attr_t* attr) {
-	lock->dtape_mutex = malloc(sizeof(dtape_mutex_t));
-	if (!lock->dtape_mutex) {
-		panic("Insufficient memory to allocate mutex");
-	}
-	dtape_mutex_init(lock->dtape_mutex);
+	dtape_mutex_init(&lock->dtape_mutex);
 };
 
 void lck_mtx_destroy(lck_mtx_t* lock, lck_grp_t* grp) {
-	if (lock->dtape_mutex->dtape_owner != 0) {
+	if (lock->dtape_mutex.dtape_owner != 0) {
 		panic("Attempt to destroy lock while being held");
 	}
-
-	free(lock->dtape_mutex);
-	lock->dtape_mutex = NULL;
 };
 
 void lck_mtx_assert(lck_mtx_t* lock, unsigned int type) {
-	dtape_mutex_assert(lock->dtape_mutex, type == LCK_ASSERT_OWNED);
+	dtape_mutex_assert(&lock->dtape_mutex, type == LCK_ASSERT_OWNED);
 };
 
 void lck_mtx_lock(lck_mtx_t* lock) {
-	dtape_mutex_lock(lock->dtape_mutex);
+	dtape_mutex_lock(&lock->dtape_mutex);
 };
 
 boolean_t lck_mtx_try_lock(lck_mtx_t* lock) {
-	return dtape_mutex_try_lock(lock->dtape_mutex);
+	return dtape_mutex_try_lock(&lock->dtape_mutex);
 };
 
 void lck_mtx_lock_spin_always(lck_mtx_t* lock) {
@@ -196,7 +189,7 @@ void lck_mtx_lock_spin(lck_mtx_t* lock) {
 };
 
 void lck_mtx_unlock(lck_mtx_t* lock) {
-	dtape_mutex_unlock(lock->dtape_mutex);
+	dtape_mutex_unlock(&lock->dtape_mutex);
 };
 
 void lck_mtx_init_ext(lck_mtx_t* lck, struct _lck_mtx_ext_* lck_ext, lck_grp_t* grp, lck_attr_t* attr) {

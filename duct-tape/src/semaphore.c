@@ -26,6 +26,8 @@ void dtape_semaphore_destroy(dtape_semaphore_t* semaphore) {
 	if (semaphore_destroy(&semaphore->owning_task->xnu_task, semaphore->xnu_semaphore) != KERN_SUCCESS) {
 		panic("Failed to destroy duct-taped XNU semaphore");
 	}
+
+	free(semaphore);
 };
 
 void dtape_semaphore_up(dtape_semaphore_t* semaphore) {

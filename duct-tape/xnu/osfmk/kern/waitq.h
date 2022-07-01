@@ -73,8 +73,13 @@ typedef enum e_waitq_lock_state {
 #elif __x86_64__
 	#define WQ_OPAQUE_ALIGN   8
 	#define WQS_OPAQUE_ALIGN  8
-	#define WQ_OPAQUE_SIZE   48
-	#define WQS_OPAQUE_SIZE  64
+	#ifdef __DARLING__
+		#define WQ_OPAQUE_SIZE   72
+		#define WQS_OPAQUE_SIZE  88
+	#else
+		#define WQ_OPAQUE_SIZE   48
+		#define WQS_OPAQUE_SIZE  64
+	#endif
 #else
 	#error Unknown size requirement
 #endif
