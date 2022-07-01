@@ -47,6 +47,10 @@
 	#define DARLINGSERVER_INIT_PROCESS "/sbin/launchd"
 #endif
 
+#if DSERVER_ASAN
+	#include <sanitizer/lsan_interface.h>
+#endif
+
 // TODO: most of the code here was ported over from startup/darling.c; we should C++-ify it.
 
 void fixPermissionsRecursive(const char* path, uid_t originalUID, gid_t originalGID)
@@ -324,6 +328,12 @@ static void regain_privileges() {
 	}
 };
 
+#if DSERVER_ASAN
+static void handle_sigusr1(int signum) {
+	__lsan_do_recoverable_leak_check();
+};
+#endif
+
 int main(int argc, char** argv) {
 	const char* prefix = NULL;
 	uid_t originalUID = -1;
@@ -381,6 +391,9 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Failed to read default FD rlimit: %s\n", strerror(errno));
 		//exit(1);
 	} else {
+		// ASAN uses a rather obtuse way of closing descriptors for child processes it spawns,
+		// and increasing the FD limit screws with it (it tries to close every single descriptor up to the FD limit).
+#if !DSERVER_ASAN
 		// read the system maximum
 		nr_open_file = fopen("/proc/sys/fs/nr_open", "r");
 		if (nr_open_file == NULL) {
@@ -403,6 +416,7 @@ int main(int argc, char** argv) {
 				//exit(1);
 			}
 		}
+#endif
 	}
 
 	if (getrlimit(RLIMIT_CORE, &core_limit) != 0) {
@@ -557,6 +571,15 @@ mount_ok:
 	// drop our privileges
 	perma_drop_privileges(originalUID, originalGID);
 	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+
+#if DSERVER_ASAN
+	// set up a signal handler to print leak info
+	struct sigaction leak_info_action;
+	leak_info_action.sa_handler = handle_sigusr1;
+	leak_info_action.sa_flags = SA_RESTART;
+	sigemptyset(&leak_info_action.sa_mask);
+	sigaction(SIGUSR1, &leak_info_action, NULL);
+#endif
 
 	// create the server
 	auto server = new DarlingServer::Server(prefix);
