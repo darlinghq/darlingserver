@@ -39,11 +39,12 @@
 
 #include <rtsig.h>
 
+#include <assert.h>
+
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
 #define USE_THREAD_GUARD_PAGES 1
-
-#define THREAD_SIGNAL_STACK_SIZE (THREAD_STACK_SIZE / 4)
+#define IDLE_THREAD_STACK_COUNT 8
 
 static thread_local std::shared_ptr<DarlingServer::Thread> currentThreadVar = nullptr;
 static thread_local bool returningToThreadTop = false;
@@ -69,43 +70,7 @@ static thread_local uint64_t interruptDisableCount = 0;
 
 static DarlingServer::Log threadLog("thread");
 
-// TODO: create a stack pool to minimize the number of active stacks (and memory usage).
-//       threads could then request a stack when they need one (e.g. to begin
-//       handling a call) and release it when they're done (e.g. when the call is completed).
-
-void* DarlingServer::Thread::allocateStack(size_t stackSize) {
-	void* stack = NULL;
-
-#if USE_THREAD_GUARD_PAGES
-	stack = mmap(NULL, stackSize + 2048ULL, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-#else
-	stack = mmap(NULL, stackSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-#endif
-
-	if (stack == MAP_FAILED) {
-		throw std::system_error(errno, std::generic_category());
-	}
-
-#if USE_THREAD_GUARD_PAGES
-	mprotect(stack, 1024ULL, PROT_NONE);
-	stack = (char*)stack + 1024ULL;
-	mprotect((char*)stack + stackSize, 1024ULL, PROT_NONE);
-#endif
-
-	return stack;
-};
-
-void DarlingServer::Thread::freeStack(void* stack, size_t stackSize) {
-#if USE_THREAD_GUARD_PAGES
-	if (munmap((char*)stack - 1024ULL, stackSize + 2048ULL) < 0) {
-		throw std::system_error(errno, std::generic_category());
-	}
-#else
-	if (munmap(stack, stackSize) < 0) {
-		throw std::system_error(errno, std::generic_category());
-	}
-#endif
-};
+DarlingServer::StackPool DarlingServer::Thread::stackPool(IDLE_THREAD_STACK_COUNT, THREAD_STACK_SIZE, USE_THREAD_GUARD_PAGES);
 
 DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 	_nstid(nsid),
@@ -145,9 +110,6 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 		throw std::system_error(ESRCH, std::generic_category(), "Failed to find thread ID within darlingserver's namespace");
 	}
 
-	_stackSize = THREAD_STACK_SIZE;
-	_stack = allocateStack(_stackSize);
-
 	// NOTE: it's okay to use raw `this` without a shared pointer because the duct-taped thread will always live for less time than this Thread instance
 	_dtapeThread = dtape_thread_create(process->_dtapeTask, _nstid, this);
 	_s2cPerformSempahore = dtape_semaphore_create(process->_dtapeTask, 1);
@@ -172,9 +134,6 @@ DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
 	}
 	idLock.unlock();
 
-	_stackSize = THREAD_STACK_SIZE;
-	_stack = allocateStack(_stackSize);
-
 	_dtapeThread = dtape_thread_create(Process::kernelProcess()->_dtapeTask, _nstid, this);
 };
 
@@ -186,7 +145,9 @@ void DarlingServer::Thread::registerWithProcess() {
 DarlingServer::Thread::~Thread() noexcept(false) {
 	threadLog.info() << *this << ": thread being destroyed" << threadLog.endLog;
 
-	freeStack(_stack, _stackSize);
+	if (_stack.isValid()) {
+		stackPool.free(_stack);
+	}
 
 	if (!_process) {
 		return;
@@ -314,7 +275,7 @@ void DarlingServer::Thread::microthreadWorker() {
 	if (currentThreadVar->_handlingInterruptedCall) {
 		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack, currentThreadVar->_stackSize);
+		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack.base, currentThreadVar->_stack.size);
 #endif
 		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
 	} else {
@@ -345,7 +306,7 @@ void DarlingServer::Thread::microthreadContinuation() {
 	if (currentThreadVar->_handlingInterruptedCall) {
 		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack, currentThreadVar->_stackSize);
+		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack.base, currentThreadVar->_stack.size);
 #endif
 		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
 	} else {
@@ -380,14 +341,12 @@ void DarlingServer::Thread::doWork() {
 	}
 
 	if (_terminating) {
-		_rwlock.unlock();
 		goto doneWorking;
 	}
 
 	if (_dead && !_activeCall) {
 		// should be impossible, since this should be handled in `notifyDead`, but just in case
 		_terminating = true;
-		_rwlock.unlock();
 		goto doneWorking;
 	}
 
@@ -411,6 +370,15 @@ void DarlingServer::Thread::doWork() {
 		asanOldFakeStack = nullptr;
 #endif
 
+		_rwlock.lock();
+
+		if (!_suspended || _continuationCallback) {
+			// we discard the old stack when either:
+			//   * we exit normally (i.e. without suspending); this includes syscall returns.
+			//   * or when we suspend with a continuation callback.
+			stackPool.free(_stack);
+		}
+
 		//microthreadLog.debug() << _tid << "(" << _nstid << "): microthread returned to top" << microthreadLog.endLog;
 		goto doneWorking;
 	} else {
@@ -421,9 +389,7 @@ void DarlingServer::Thread::doWork() {
 		if (!_pendingCallOverride && _pendingCall && _pendingCall->number() == Call::Number::InterruptEnter) {
 			_interrupts.emplace();
 			_interrupts.top().savedStack = _stack;
-			_interrupts.top().savedStackSize = _stackSize;
-			_stack = allocateStack(THREAD_STACK_SIZE);
-			_stackSize = THREAD_STACK_SIZE;
+			_stack = StackPool::Stack();
 			_interruptedContinuation = _continuationCallback;
 			_continuationCallback = nullptr;
 			_interrupts.top().interruptedCall = _activeCall;
@@ -444,37 +410,52 @@ void DarlingServer::Thread::doWork() {
 			_resumeContext.uc_link = &backToThreadTopContext;
 			_rwlock.unlock();
 
-#if DSERVER_ASAN
 			if (_continuationCallback) {
-				// only un-poison the stack if we're entering a continuation;
-				// if we're resuming from a previous suspension, we're not creating a new set of stack frames,
-				// we're reusing the same ones (and we want to detect errors in them).
-				__asan_unpoison_memory_region(_stack, _stackSize);
+				// for continuations, we discard the old stack and start with a new one
+				assert(!_stack.isValid());
+				stackPool.allocate(_stack);
+
+				// we also ahve to set up the resume context properly with the new stack
+				_resumeContext.uc_stack.ss_sp = _stack.base;
+				_resumeContext.uc_stack.ss_size = _stack.size;
+				_resumeContext.uc_stack.ss_flags = 0;
+				_resumeContext.uc_link = &backToThreadTopContext;
+				makecontext(&_resumeContext, microthreadContinuation, 0);
+			} else {
+				// otherwise, we expect to have a valid stack to continue where we left off
+				assert(_stack.isValid());
 			}
-			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack, _stackSize);
+
+#if DSERVER_ASAN
+			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack.base, _stack.size);
 #endif
 
 			setcontext(&_resumeContext);
 		} else {
 			if (!_pendingCall) {
 				// if we don't actually have a pending call, we have nothing to do
-				_rwlock.unlock();
 				goto doneWorking;
 			}
 			_suspended = false;
 			_rwlock.unlock();
 
+			// we might've had a valid stack if we're overwriting a previous suspension, so handle that.
+			if (_stack.isValid()) {
+				stackPool.free(_stack);
+			}
+
+			stackPool.allocate(_stack);
+
 			ucontext_t newContext;
 			getcontext(&newContext);
-			newContext.uc_stack.ss_sp = _stack;
-			newContext.uc_stack.ss_size = _stackSize;
+			newContext.uc_stack.ss_sp = _stack.base;
+			newContext.uc_stack.ss_size = _stack.size;
 			newContext.uc_stack.ss_flags = 0;
 			newContext.uc_link = &backToThreadTopContext;
 			makecontext(&newContext, microthreadWorker, 0);
 
 #if DSERVER_ASAN
-			__asan_unpoison_memory_region(_stack, _stackSize);
-			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack, _stackSize);
+			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack.base, _stack.size);
 #endif
 
 			setcontext(&newContext);
@@ -485,7 +466,7 @@ void DarlingServer::Thread::doWork() {
 	}
 
 doneWorking:
-	_rwlock.lock();
+	// we must be holding `_rwlock` when we get here
 	if (_running) {
 		dtape_thread_exiting(_dtapeThread);
 		currentThreadVar = nullptr;
@@ -557,11 +538,6 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 			currentContinuation = nullptr;
 
 			_continuationCallback = continuationCallback;
-			_resumeContext.uc_stack.ss_sp = _stack;
-			_resumeContext.uc_stack.ss_size = _stackSize;
-			_resumeContext.uc_stack.ss_flags = 0;
-			_resumeContext.uc_link = &backToThreadTopContext;
-			makecontext(&_resumeContext, microthreadContinuation, 0);
 		}
 		// jump back to the top of the microthread
 		_rwlock.unlock();
@@ -575,6 +551,11 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 		__builtin_unreachable();
 	} else {
 		// we've been resumed
+
+		// make sure we don't have a continuation when we get here;
+		// if we do, that means that doWork() failed to do its job for the continuation case
+		assert(!_continuationCallback);
+
 		_rwlock.unlock();
 
 #if DSERVER_ASAN
@@ -637,11 +618,6 @@ void DarlingServer::Thread::setupKernelThread(std::function<void()> startupCallb
 	_continuationCallback = startupCallback;
 	_suspended = true;
 	getcontext(&_resumeContext);
-	_resumeContext.uc_stack.ss_sp = _stack;
-	_resumeContext.uc_stack.ss_size = _stackSize;
-	_resumeContext.uc_stack.ss_flags = 0;
-	_resumeContext.uc_link = &backToThreadTopContext;
-	makecontext(&_resumeContext, microthreadContinuation, 0);
 };
 
 void DarlingServer::Thread::startKernelThread(std::function<void()> startupCallback) {
@@ -716,18 +692,19 @@ void DarlingServer::Thread::syscallReturn(int resultCode) {
 		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
 		if (currentThreadVar->_handlingInterruptedCall) {
-			__sanitizer_start_switch_fiber(nullptr, currentThreadVar->_stack, currentThreadVar->_stackSize);
+			__sanitizer_start_switch_fiber(nullptr, currentThreadVar->_stack.base, currentThreadVar->_stack.size);
 		}
 #endif
 		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
 		__builtin_unreachable();
 	}
 
-	while (true) {
-		currentThreadVar->suspend();
-
-		threadLog.error() << "Thread was resumed after syscall without changing running context" << threadLog.endLog;
-	}
+	// jump back to the top of the thread
+#if DSERVER_ASAN
+	__sanitizer_start_switch_fiber(nullptr, asanOldStackBottom, asanOldStackSize);
+#endif
+	setcontext(&backToThreadTopContext);
+	__builtin_unreachable();
 };
 
 static std::queue<std::function<void()>> kernelAsyncRunnerQueue;
@@ -1495,7 +1472,7 @@ void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
 		} else if (currentThreadVar->_interrupts.top().interruptedCall) {
 			currentThreadVar->_handlingInterruptedCall = true;
 			currentThreadVar->_pendingCallOverride = true;
-			currentThreadVar->jumpToResume(currentThreadVar->_interrupts.top().savedStack, currentThreadVar->_interrupts.top().savedStackSize);
+			currentThreadVar->jumpToResume(currentThreadVar->_interrupts.top().savedStack.base, currentThreadVar->_interrupts.top().savedStack.size);
 		}
 	} else if (currentThreadVar->_handlingInterruptedCall) {
 #if DSERVER_ASAN
@@ -1513,9 +1490,9 @@ void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
 	{
 		std::unique_lock lock(currentThreadVar->_rwlock);
 
-		Thread::freeStack(currentThreadVar->_interrupts.top().savedStack, currentThreadVar->_interrupts.top().savedStackSize);
-		currentThreadVar->_interrupts.top().savedStack = nullptr;
-		currentThreadVar->_interrupts.top().savedStackSize = 0;
+		if (currentThreadVar->_interrupts.top().savedStack.isValid()) {
+			stackPool.free(currentThreadVar->_interrupts.top().savedStack);
+		}
 
 		currentThreadVar->_interruptedForSignal = false;
 		currentThreadVar->_interrupts.top().interruptedCall = nullptr;

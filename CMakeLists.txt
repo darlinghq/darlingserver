@@ -111,6 +111,7 @@ add_executable(darlingserver
 	src/utility.cpp
 	src/kqchan.cpp
 	src/async-writer.cpp
+	src/stack-pool.cpp
 )
 
 add_dependencies(darlingserver

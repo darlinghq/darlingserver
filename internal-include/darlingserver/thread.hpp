@@ -31,6 +31,7 @@
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/logging.hpp>
+#include <darlingserver/stack-pool.hpp>
 
 #include <ucontext.h>
 
@@ -75,8 +76,7 @@ namespace DarlingServer {
 		std::shared_ptr<Call> _pendingCall;
 		Address _address;
 		mutable std::shared_mutex _rwlock;
-		void* _stack;
-		size_t _stackSize;
+		StackPool::Stack _stack;
 		bool _suspended = false;
 		ucontext_t _resumeContext;
 		dtape_thread_t* _dtapeThread;
@@ -106,8 +106,7 @@ namespace DarlingServer {
 		struct InterruptContext {
 			std::optional<Message> savedReply = std::nullopt;
 			std::shared_ptr<Call> interruptedCall = nullptr;
-			void* savedStack = nullptr;
-			size_t savedStackSize = 0;
+			StackPool::Stack savedStack;
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
@@ -133,9 +132,6 @@ namespace DarlingServer {
 
 		void _deactivateCallLocked(std::shared_ptr<Call> expectedCall);
 
-		static void* allocateStack(size_t stackSize);
-		static void freeStack(void* stack, size_t stackSize);
-
 		[[noreturn]]
 		void jumpToResume(void* stack, size_t stackSize);
 
@@ -143,6 +139,8 @@ namespace DarlingServer {
 		void _scheduleRelease();
 
 		static void _handleInterruptEnterForCurrentThread();
+
+		static StackPool stackPool;
 
 	public:
 		using ID = pid_t;
