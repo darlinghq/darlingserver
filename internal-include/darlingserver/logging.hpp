@@ -34,10 +34,10 @@ namespace DarlingServer {
 		std::string _category;
 
 		enum class Type {
-			Debug,
-			Info,
-			Warning,
-			Error,
+			Debug = 1,
+			Info = 2,
+			Warning = 3,
+			Error = 4,
 		};
 
 		void _log(Type type, std::string message) const;

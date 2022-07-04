@@ -598,7 +598,7 @@ void DarlingServer::Call::PthreadKill::processCall() {
 void DarlingServer::Call::PthreadCanceled::processCall() {
 	int code = 0;
 
-	callLog.error() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
+	callLog.warning() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
 	code = -ENOSYS;
 
 	_sendReply(code);
@@ -608,7 +608,7 @@ void DarlingServer::Call::PthreadMarkcancel::processCall() {
 	int code = 0;
 
 	if (auto targetThread = Thread::threadForPort(_body.thread_port)) {
-		callLog.error() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
+		callLog.warning() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
 		code = -ENOSYS;
 	} else {
 		code = -ESRCH;

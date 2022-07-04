@@ -25,6 +25,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#define DEFAULT_LOG_CUTOFF DarlingServer::Log::Type::Error
+
 DarlingServer::Log::Log(std::string category):
 	_category(category)
 	{};
@@ -97,6 +99,27 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 		auto val = getenv("DSERVER_LOG_STDERR");
 		return val && strlen(val) >= 1 && (val[0] == 't' || val[0] == 'T' || val[0] == '1');
 	}();
+
+	static Type logMinLevel = []() {
+		auto val = getenv("DSERVER_LOG_LEVEL");
+		Type level = DEFAULT_LOG_CUTOFF;
+		if (val) {
+			if (strncmp(val, "err", 3) == 0) {
+				level = Type::Error;
+			} else if (strncmp(val, "warn", 4) == 0) {
+				level = Type::Warning;
+			} else if (strncmp(val, "info", 4) == 0) {
+				level = Type::Info;
+			} else if (strncmp(val, "debug", 5) == 0) {
+				level = Type::Debug;
+			}
+		}
+		return level;
+	}();
+
+	if (type < logMinLevel) {
+		return;
+	}
 
 	struct timespec time;
 	clock_gettime(CLOCK_REALTIME, &time);
