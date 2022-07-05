@@ -1311,7 +1311,7 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 		return RunState::Dead;
 	}
 
-	std::ifstream file("/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id()));
+	std::ifstream file("/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id()) + "/stat");
 	std::string line;
 	if (!std::getline(file, line)) {
 		return RunState::Dead;

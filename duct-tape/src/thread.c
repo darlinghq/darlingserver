@@ -1248,6 +1248,7 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			*thread_info_count = THREAD_BASIC_INFO_COUNT;
 
 			thread_basic_info_t info = (thread_basic_info_t) thread_info_out;
+			dtape_thread_state_t thread_state = -1;
 
 			thread_lock(xthread);
 
@@ -1265,7 +1266,38 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 
 			thread_unlock(xthread);
 
-			info->run_state = dtape_hooks->thread_get_state(thread->context);
+			// check if the thread is currently waiting suspended; in that case, the `thread_get_state` hook will
+			// report that it is waiting interruptibly (because that's what Linux sees), but we know that it's
+			// actually "stopped" waiting for us to resume it.
+			dtape_mutex_lock(&thread->suspension_mutex);
+			if (thread->waiting_suspended) {
+				thread_state = dtape_thread_state_stopped;
+			}
+			dtape_mutex_unlock(&thread->suspension_mutex);
+
+			if (thread_state == -1) {
+				thread_state = dtape_hooks->thread_get_state(thread->context);
+			}
+
+			switch (thread_state) {
+				case dtape_thread_state_dead:
+					info->run_state = 0;
+					break;
+				case dtape_thread_state_running:
+					info->run_state = TH_STATE_RUNNING;
+					break;
+				case dtape_thread_state_stopped:
+					info->run_state = TH_STATE_STOPPED;
+					break;
+				case dtape_thread_state_interruptible:
+					info->run_state = TH_STATE_WAITING;
+					break;
+				case dtape_thread_state_uninterruptible:
+					info->run_state = TH_STATE_UNINTERRUPTIBLE;
+					break;
+				default:
+					panic("invalid thread state: %d; this should be impossible", thread_state);
+			}
 
 			return KERN_SUCCESS;
 		};
