@@ -137,6 +137,11 @@ struct DTapeHooks {
 		}
 	};
 
+	static void dtape_hook_get_load_info(dtape_load_info_t* load_info) {
+		load_info->task_count = DarlingServer::processRegistry().size();
+		load_info->thread_count = DarlingServer::threadRegistry().size();
+	};
+
 	static void dtape_hook_thread_terminate(void* thread_context) {
 		static_cast<DarlingServer::Thread*>(thread_context)->terminate();
 	};
@@ -344,6 +349,7 @@ struct DTapeHooks {
 		.timer_arm = dtape_hook_timer_arm,
 
 		.log = dtape_hook_log,
+		.get_load_info = dtape_hook_get_load_info,
 
 		.thread_suspend = dtape_hook_thread_suspend,
 		.thread_resume = dtape_hook_thread_resume,

@@ -18,6 +18,7 @@
 #include <kern/sync_sema.h>
 #include <kern/ux_handler.h>
 #include <ipc/ipc_importance.h>
+#include <kern/ipc_host.h>
 
 #include <sys/types.h>
 
@@ -126,6 +127,15 @@ void dtape_init(const dtape_hooks_t* hooks) {
 
 	dtape_log_debug("ipc_init");
 	ipc_init();
+
+	for (size_t i = 0; i < processor_count; ++i) {
+		if (processor_array[i] == master_processor) {
+			continue;
+		}
+
+		ipc_processor_init(processor_array[i]);
+		ipc_processor_enable(processor_array[i]);
+	}
 
 	dtape_log_debug("mig_init");
 	mig_init();

@@ -69,6 +69,11 @@ typedef enum dtape_thread_state {
 	dtape_thread_state_uninterruptible,
 } dtape_thread_state_t;
 
+typedef struct dtape_load_info {
+	uint64_t task_count;
+	uint64_t thread_count;
+} dtape_load_info_t;
+
 #ifdef __cplusplus
 };
 #endif

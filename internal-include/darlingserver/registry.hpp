@@ -210,6 +210,11 @@ namespace DarlingServer {
 		ScopedLock scopedLock() const {
 			return ScopedLock(_rwlock);
 		};
+
+		size_t size() const {
+			std::shared_lock lock(_rwlock);
+			return _map.size();
+		};
 	};
 
 	Registry<Process>& processRegistry();
