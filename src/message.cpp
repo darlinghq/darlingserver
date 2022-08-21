@@ -507,6 +507,21 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 		for (size_t i = 0; i < _messages.size() && i < sizeof(mmsgs) / sizeof(*mmsgs); ++i) {
 			mmsgs[i].msg_hdr = _messages[i].rawHeader();
 			mmsgs[i].msg_len = 0;
+
+			// some systems report EINVAL when sending to an address filled with null bytes.
+			auto address = reinterpret_cast<sockaddr_un*>(mmsgs[i].msg_hdr.msg_name);
+			bool isAddressEmpty = true;
+			for (size_t j = 0; j < sizeof(address->sun_path); ++j) {
+				if (address->sun_path[j] != '\0') {
+					isAddressEmpty = false;
+					break;
+				}
+			}
+			if (isAddressEmpty) {
+				mmsgs[i].msg_hdr.msg_name = nullptr;
+				mmsgs[i].msg_hdr.msg_namelen = 0;
+			}
+
 			++len;
 		}
 

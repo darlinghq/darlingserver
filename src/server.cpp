@@ -34,6 +34,8 @@
 #include <darlingserver/duct-tape.h>
 #include <sys/timerfd.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <darlingserver/logging.hpp>
 
@@ -609,7 +611,7 @@ void DarlingServer::Server::start() {
 void DarlingServer::Server::monitorProcess(std::shared_ptr<Process> process) {
 	// the this-capture here is safe because the Server will always out-live everything else
 	std::weak_ptr<Process> weakProcess = process;
-	auto monitor = std::make_shared<Monitor>(process->_pidfd, Monitor::Event::Readable, false, false, [this, weakProcess](std::shared_ptr<Monitor> thisMonitor, Monitor::Event events) {
+	auto monitor = std::make_shared<Monitor>(process->_pidfd, Monitor::Event::Readable | Monitor::Event::HangUp, false, false, [this, weakProcess](std::shared_ptr<Monitor> thisMonitor, Monitor::Event events) {
 		removeMonitor(thisMonitor);
 
 		auto process = weakProcess.lock();

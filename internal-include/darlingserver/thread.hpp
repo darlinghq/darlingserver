@@ -148,7 +148,7 @@ namespace DarlingServer {
 
 		struct KernelThreadConstructorTag {};
 
-		Thread(std::shared_ptr<Process> process, NSID nsid);
+		Thread(std::shared_ptr<Process> process, NSID nsid, void* stackHint = nullptr);
 		Thread(KernelThreadConstructorTag tag);
 		~Thread() noexcept(false);
 

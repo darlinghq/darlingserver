@@ -31,12 +31,12 @@
 
 static DarlingServer::Log processLog("process");
 
-DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture):
+DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe):
 	_pid(id),
 	_nspid(nsid),
 	_architecture(architecture)
 {
-	int pidfd = syscall(SYS_pidfd_open, _pid, 0);
+	int pidfd = (pipe >= 0) ? pipe : syscall(SYS_pidfd_open, _pid, 0);
 	if (pidfd < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to open pidfd for process");
 	}

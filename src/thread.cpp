@@ -41,6 +41,12 @@
 
 #include <assert.h>
 
+#include <limits>
+#include <sys/ptrace.h>
+#include <sys/user.h>
+#include <sys/wait.h>
+#include <vector>
+
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
 #define USE_THREAD_GUARD_PAGES 1
@@ -72,7 +78,7 @@ static DarlingServer::Log threadLog("thread");
 
 DarlingServer::StackPool DarlingServer::Thread::stackPool(IDLE_THREAD_STACK_COUNT, THREAD_STACK_SIZE, USE_THREAD_GUARD_PAGES);
 
-DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
+DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void* stackHint):
 	_nstid(nsid),
 	_process(process)
 {
@@ -103,6 +109,64 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid):
 
 				break;
 			}
+		}
+	}
+
+	// if we can't determine the thread id from procfs, try some other more costly methods.
+	if (_tid == -1) {
+		std::vector<pid_t> ids;
+		auto& registry = threadRegistry();
+		for (const auto& entry: std::filesystem::directory_iterator("/proc/" + std::to_string(process->id()) + "/task")) {
+			pid_t currentId = std::stoi(entry.path().filename().string());
+			// Skip threads that are already registered, as we're sure they're not the ones we want.
+			if (registry.lookupEntryByID(currentId).has_value()) {
+				continue;
+			}
+			ids.push_back(currentId);
+		}
+
+		// we're sure this is the thread we want as this is the only unregistered thread.
+		if (ids.size() == 1) {
+			_tid = ids[0];
+		} else if (stackHint != nullptr) {
+			pid_t chosenId = -1;
+			intptr_t nearest = std::numeric_limits<intptr_t>::max();
+
+			for (auto id : ids) {
+				if (ptrace(PTRACE_ATTACH, id, 0, 0) == -1) {
+					continue;
+				}
+
+				int status;
+				int waitStatus = waitpid(id, &status, 0);
+
+				if (waitStatus < 0) {
+					continue;
+				}
+
+				struct user_regs_struct regs;
+				if (ptrace(PTRACE_GETREGS, id, 0, &regs) == -1) {
+					continue;
+				}
+
+#ifdef __x86_64__
+				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.rsp;
+				if (stackDiff >= 0 && stackDiff < nearest) {
+#else
+	#warning Unsupported architecture
+				if (true) {
+#endif
+					chosenId = id;
+					nearest = stackDiff;
+				}
+
+				// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
+				if (ptrace(PTRACE_DETACH, id, 0, 0) == -1) {
+					throw std::system_error(errno, std::generic_category(), "Failed to detach from process.");
+				}
+			}
+
+			_tid = chosenId;
 		}
 	}
 
