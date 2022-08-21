@@ -211,6 +211,10 @@ kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t inf
 			dtape_stub_safe("HOST_VM_INFO");
 			return KERN_INVALID_ARGUMENT;
 
+		case HOST_CPU_LOAD_INFO:
+			dtape_stub_safe("HOST_CPU_LOAD_INFO");
+			return KERN_INVALID_ARGUMENT;
+
 		default:
 			dtape_stub_unsafe();
 	}
