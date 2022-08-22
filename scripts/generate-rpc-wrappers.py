@@ -107,6 +107,8 @@ calls = [
 
 	('checkin', [
 		('is_fork', 'bool'),
+		('stack_hint', 'void*', 'uint64_t'),
+		('lifetime_listener_pipe', '@fd')
 	], []),
 
 	('checkout', [

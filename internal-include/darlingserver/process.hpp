@@ -121,7 +121,7 @@ namespace DarlingServer {
 		using ID = pid_t;
 		using NSID = ID;
 
-		Process(ID id, NSID nsid, Architecture architecture);
+		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1);
 		Process(KernelProcessConstructorTag tag);
 		~Process();
 

@@ -59,8 +59,18 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		process = processRegistry().registerIfAbsent(header->pid, [&]() {
 			std::shared_ptr<Process> tmp = nullptr;
 
+			int lifetimePipe = -1;
+
+			if (header->number == dserver_callnum_checkin) {
+				auto checkinCall = reinterpret_cast<dserver_rpc_call_checkin_t*>(header);
+				if (checkinCall->body.lifetime_listener_pipe != -1) {
+					lifetimePipe = requestMessage.extractDescriptorAtIndex(checkinCall->body.lifetime_listener_pipe);
+					checkinCall->body.lifetime_listener_pipe = -1;
+				}
+			}
+
 			try {
-				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture));
+				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe);
 			} catch (std::system_error e) {
 				return tmp;
 			}
@@ -80,8 +90,15 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		thread = threadRegistry().registerIfAbsent(header->tid, [&]() {
 			std::shared_ptr<Thread> tmp = nullptr;
 
+			void* stackHint = nullptr;
+
+			if (header->number == dserver_callnum_checkin) {
+				auto checkinCall = reinterpret_cast<dserver_rpc_call_checkin_t*>(header);
+				stackHint = reinterpret_cast<void*>(checkinCall->body.stack_hint);
+			}
+
 			try {
-				tmp = std::make_shared<Thread>(process, header->tid);
+				tmp = std::make_shared<Thread>(process, header->tid, stackHint);
 			} catch (std::system_error e) {
 				return tmp;
 			}

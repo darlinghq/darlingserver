@@ -179,7 +179,7 @@ void setupUserHome(const char* prefix, uid_t originalUID)
 		const char* dir = xdgDirectory(xdgmap[i][0]);
 		if (!dir)
 			continue;
-		
+
 		snprintf(buf2, sizeof(buf2), "/Volumes/SystemRoot%s", dir);
 		snprintf(buf, sizeof(buf), "%s/Users/%s/%s", prefix, login, xdgmap[i][1]);
 
@@ -398,6 +398,7 @@ int main(int argc, char** argv) {
 		nr_open_file = fopen("/proc/sys/fs/nr_open", "r");
 		if (nr_open_file == NULL) {
 			fprintf(stderr, "Warning: failed to open /proc/sys/fs/nr_open: %s\n", strerror(errno));
+			increased_limit.rlim_cur = increased_limit.rlim_max = default_limit.rlim_max;
 			//exit(1);
 		} else {
 			if (fscanf(nr_open_file, "%lu", &increased_limit.rlim_max) != 1) {
@@ -409,13 +410,14 @@ int main(int argc, char** argv) {
 				fprintf(stderr, "Failed to close /proc/sys/fs/nr_open: %s\n", strerror(errno));
 				exit(1);
 			}
-
-			// now set our increased rlimit
-			if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
-				fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
-				//exit(1);
-			}
 		}
+
+		// now set our increased rlimit
+		if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
+			fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
+			//exit(1);
+		}
+
 #endif
 	}
 
