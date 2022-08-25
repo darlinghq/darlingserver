@@ -37,6 +37,7 @@
 #include <linux/sched.h>
 #include <sys/syscall.h>
 #include <sys/signal.h>
+#include <filesystem>
 
 #include <darling-config.h>
 
@@ -285,6 +286,153 @@ static bool testEnvVar(const char* var_name) {
 	return false;
 };
 
+static bool shouldUseOverlayFs() {
+	bool shouldUse = true;
+	bool explicitlySet = false;
+
+	if (testEnvVar("DARLING_NOOVERLAYFS")) {
+		shouldUse = false;
+		explicitlySet = true;
+	} else if (getenv("DARLING_NOOVERLAYFS")) {
+		shouldUse = true;
+		explicitlySet = true;
+	}
+
+	// https://github.com/microsoft/WSL/issues/8748
+	// Microsoft is being dumb with its overlayfs implementation and they don't seem to be willing to be fix WSL1-related bugs.
+	// We therefore have to enable this hack on WSL1.
+	// All WSL systems have WSLENV set by default, while WSL_INTEROP is WSL2-specific.
+	if (!explicitlySet && getenv("WSLENV") && !getenv("WSL_INTEROP")) {
+		shouldUse = false;
+	}
+
+	return shouldUse;
+}
+
+static int compareTimespec(const timespec& a, const timespec& b) {
+	if (a.tv_sec != b.tv_sec) {
+		return (a.tv_sec > b.tv_sec) ? 1 : -1;
+	} else if (a.tv_nsec != b.tv_nsec) {
+		return (a.tv_nsec > b.tv_nsec) ? 1 : -1;
+	} else {
+		return 0;
+	}
+}
+
+static void copyAndSetAttributes(std::string& fromPath, std::string& toPath) {
+	struct stat fromStat, toStat;
+	if (lstat(fromPath.c_str(), &fromStat) == -1) {
+		fprintf(stderr, "Failed to stat file %s: %s\n", fromPath.c_str(), strerror(errno));
+		abort();
+	}
+	bool destinationExists = true;
+	bool updateAttributes = false;
+	if (lstat(toPath.c_str(), &toStat) == -1) {
+		if (errno != ENOENT) {
+			fprintf(stderr, "Failed to stat file %s: %s\n", toPath.c_str(), strerror(errno));
+			abort();
+		}
+		destinationExists = false;
+	}
+
+	if (S_ISDIR(fromStat.st_mode)) {
+		if (destinationExists && !S_ISDIR(toStat.st_mode)) {
+			return;
+		} else {
+			if (!destinationExists) {
+				if (mkdir(toPath.c_str(), fromStat.st_mode & ALLPERMS) == -1) {
+					fprintf(stderr, "Failed to create directory %s: %s\n", toPath.c_str(), strerror(errno));
+					abort();
+				}
+				updateAttributes = true;
+			}
+			DIR* fromDir = opendir(fromPath.c_str());
+			if (fromDir == NULL) {
+				fprintf(stderr, "Failed to open directory %s: %s\n", fromPath.c_str(), strerror(errno));
+				abort();
+			}
+
+			struct dirent* entry = NULL;
+			while ((errno = 0) || ((entry = readdir(fromDir)) != NULL)) {
+				if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+					continue;
+				}
+
+				size_t oldFromSize = fromPath.size();
+				size_t oldToSize = toPath.size();
+
+				fromPath.push_back('/');
+				toPath.push_back('/');
+
+				fromPath.append(entry->d_name);
+				toPath.append(entry->d_name);
+
+				copyAndSetAttributes(fromPath, toPath);
+
+				fromPath.resize(oldFromSize);
+				toPath.resize(oldToSize);
+			}
+
+			if (errno) {
+				fprintf(stderr, "Failed to read directory %s: %s\n", fromPath.c_str(), strerror(errno));
+				abort();
+			}
+
+			if (closedir(fromDir) == -1) {
+				fprintf(stderr, "Failed to close directory %s: %s\n", fromPath.c_str(), strerror(errno));
+			}
+		}
+	} else {
+		if (destinationExists) {
+			if ((fromStat.st_mode & S_IFMT) != (toStat.st_mode & S_IFMT)) {
+				return;
+			} else {
+				int compareResult = compareTimespec(fromStat.st_mtim, toStat.st_mtim);
+				// the lower file is older, don't touch the newer file.
+				if (compareResult == -1) {
+					return;
+				// the lower file and the newer files should be the same.
+				// we still update the attributes though, in case ownership or permission changes.
+				} else if (compareResult == 0) {
+					updateAttributes = true;
+				} else if (compareResult == 1) {
+					if (unlink(toPath.c_str()) == -1) {
+						fprintf(stderr, "Failed to delete old destination file %s: %s\n", toPath.c_str(), strerror(errno));
+						abort();
+					}
+					std::filesystem::copy(fromPath, toPath, std::filesystem::copy_options::copy_symlinks);
+					updateAttributes = true;
+				}
+			}
+		} else {
+			std::filesystem::copy(fromPath, toPath, std::filesystem::copy_options::copy_symlinks);
+			updateAttributes = true;
+		}
+	}
+
+	if (updateAttributes) {
+		struct timespec times[] = {
+			fromStat.st_atim,
+			fromStat.st_mtim
+		};
+		if (utimensat(-1, toPath.c_str(), times, AT_SYMLINK_NOFOLLOW) == -1) {
+			fprintf(stderr, "Failed to set timestamp for %s: %s\n", toPath.c_str(), strerror(errno));
+			abort();
+    	}
+		if (fchownat(-1, toPath.c_str(), fromStat.st_uid, fromStat.st_gid, AT_SYMLINK_NOFOLLOW) == -1) {
+			fprintf(stderr, "Failed to set owner for %s: %s\n", toPath.c_str(), strerror(errno));
+			abort();
+		}
+		// POSIX said that AT_SYMLINK_NOFOLLOW is acceptable for links, but on Linux all calls with AT_SYMLINK_NOFOLLOW fails with ENOTSUP.
+		if (fchmodat(-1, toPath.c_str(), fromStat.st_mode & ALLPERMS, S_ISLNK(fromStat.st_mode) ? AT_SYMLINK_NOFOLLOW : 0) == -1) {
+			if (!(S_ISLNK(fromStat.st_mode) && (errno == ENOTSUP))) {
+				fprintf(stderr, "Failed to set permissions for %s: %s\n", toPath.c_str(), strerror(errno));
+				abort();
+			}
+		}
+	}
+}
+
 static void temp_drop_privileges(uid_t uid, gid_t gid) {
 	// it's important to drop GID first, because non-root users can't change their GID
 	if (setresgid(gid, gid, 0) < 0) {
@@ -440,14 +588,6 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
-	// Because systemd marks / as MS_SHARED and we would inherit this into the overlay mount,
-	// causing it not to be unmounted once the init process dies.
-	if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
-	{
-		fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
-		exit(1);
-	}
-
 	umount("/dev/shm");
 	if (mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
 	{
@@ -455,28 +595,42 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
-	opts = (char*) malloc(strlen(prefix)*2 + sizeof(LIBEXEC_PATH) + 100);
-
-	const char* opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir,index=off";
-
-	sprintf(opts, opts_fmt, LIBEXEC_PATH, prefix, prefix);
-
-	// Mount overlay onto our prefix
-	if (mount("overlay", prefix, "overlay", 0, opts) != 0)
-	{
-		if (errno == EINVAL) {
-			opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir";
-			sprintf(opts, opts_fmt, LIBEXEC_PATH, prefix, prefix);
-			if (mount("overlay", prefix, "overlay", 0, opts) == 0) {
-				goto mount_ok;
-			}
+	if (shouldUseOverlayFs()) {
+		// Because systemd marks / as MS_SHARED and we would inherit this into the overlay mount,
+		// causing it not to be unmounted once the init process dies.
+		if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
+		{
+			fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
+			exit(1);
 		}
-		fprintf(stderr, "Cannot mount overlay: %s\n", strerror(errno));
-		exit(1);
-	}
 
-mount_ok:
-	free(opts);
+		opts = (char*) malloc(strlen(prefix)*2 + sizeof(LIBEXEC_PATH) + 100);
+
+		const char* opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir,index=off";
+
+		sprintf(opts, opts_fmt, LIBEXEC_PATH, prefix, prefix);
+
+		// Mount overlay onto our prefix
+		if (mount("overlay", prefix, "overlay", 0, opts) != 0)
+		{
+			if (errno == EINVAL) {
+				opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir";
+				sprintf(opts, opts_fmt, LIBEXEC_PATH, prefix, prefix);
+				if (mount("overlay", prefix, "overlay", 0, opts) == 0) {
+					goto mount_ok;
+				}
+			}
+			fprintf(stderr, "Cannot mount overlay: %s\n", strerror(errno));
+			exit(1);
+		}
+
+	mount_ok:
+		free(opts);
+	} else {
+		std::string fromPath = LIBEXEC_PATH;
+		std::string toPath = prefix;
+		copyAndSetAttributes(fromPath, toPath);
+	}
 
 	// This is executed once at prefix creation
 	if (fix_permissions) {
