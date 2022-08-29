@@ -286,6 +286,18 @@ static bool testEnvVar(const char* var_name) {
 	return false;
 };
 
+static bool isOnWsl1() {
+	static bool initialized = false;
+	static bool result = false;
+	if (!initialized) {
+		initialized = true;
+		// All WSL systems have WSLENV set by default, while WSL_INTEROP is WSL2-specific.
+		result = getenv("WSLENV") && !getenv("WSL_INTEROP");
+	}
+
+	return result;
+}
+
 static bool shouldUseOverlayFs() {
 	bool shouldUse = true;
 	bool explicitlySet = false;
@@ -301,8 +313,7 @@ static bool shouldUseOverlayFs() {
 	// https://github.com/microsoft/WSL/issues/8748
 	// Microsoft is being dumb with its overlayfs implementation and they don't seem to be willing to be fix WSL1-related bugs.
 	// We therefore have to enable this hack on WSL1.
-	// All WSL systems have WSLENV set by default, while WSL_INTEROP is WSL2-specific.
-	if (!explicitlySet && getenv("WSLENV") && !getenv("WSL_INTEROP")) {
+	if (!explicitlySet && isOnWsl1()) {
 		shouldUse = false;
 	}
 
@@ -588,8 +599,15 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
+	int shmMountFlags = MS_NOSUID | MS_NODEV;
+	// Workaround for dumb Microsoft bug: https://github.com/microsoft/WSL/issues/8777
+	if (!isOnWsl1())
+	{
+		shmMountFlags |= MS_NOEXEC;
+	}
+
 	umount("/dev/shm");
-	if (mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
+	if (mount("tmpfs", "/dev/shm", "tmpfs", shmMountFlags, NULL) != 0)
 	{
 		fprintf(stderr, "Cannot mount new /dev/shm: %s\n", strerror(errno));
 		exit(1);
