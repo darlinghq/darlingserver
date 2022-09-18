@@ -1034,8 +1034,72 @@ out:
 	return kr;
 };
 
+// Code copied from xnu/osfmk/vm/vm_user.c
 kern_return_t mach_vm_remap_new_external(vm_map_t target_map, mach_vm_offset_t* address, mach_vm_size_t size, mach_vm_offset_t mask, int flags, mach_port_t src_tport, mach_vm_offset_t memory_address, boolean_t copy, vm_prot_t* cur_protection, vm_prot_t* max_protection, vm_inherit_t inheritance) {
-	dtape_stub_unsafe();
+	vm_tag_t tag;
+	vm_map_offset_t         map_addr;
+	kern_return_t           kr;
+	vm_map_t src_map;
+
+	flags |= VM_FLAGS_RETURN_DATA_ADDR;
+	VM_GET_FLAGS_ALIAS(flags, tag);
+
+	/* filter out any kernel-only flags */
+	if (flags & ~VM_FLAGS_USER_REMAP) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (target_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if ((*cur_protection & ~VM_PROT_ALL) ||
+	    (*max_protection & ~VM_PROT_ALL) ||
+	    (*cur_protection & *max_protection) != *cur_protection) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if ((*max_protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
+	    (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+		/*
+		 * XXX FBDP TODO
+		 * enforce target's "wx" policies
+		 */
+		return KERN_PROTECTION_FAILURE;
+	}
+
+	if (copy || *max_protection == VM_PROT_READ || *max_protection == VM_PROT_NONE) {
+		src_map = convert_port_to_map_read(src_tport);
+	} else {
+		src_map = convert_port_to_map(src_tport);
+	}
+
+	if (src_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	map_addr = (vm_map_offset_t)*address;
+	
+	// I wasn't able to find an reimplementation of vm_map_remap in darlingserver,
+	// so we will use mach_vm_remap_external for the time being.
+	kr = mach_vm_remap_external(target_map,
+	    &map_addr,
+	    size,
+	    mask,
+	    flags,
+	    src_map,
+	    memory_address,
+	    copy,
+	    cur_protection,    /* IN/OUT */
+	    max_protection,    /* IN/OUT */
+	    inheritance);
+
+	*address = map_addr;
+	vm_map_deallocate(src_map);
+
+	if (kr == KERN_SUCCESS) {
+		ipc_port_release_send(src_tport);  /* consume on success */
+	}
+	return kr;
 };
 
 kern_return_t mach_vm_wire_external(host_priv_t host_priv, vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, vm_prot_t access) {
