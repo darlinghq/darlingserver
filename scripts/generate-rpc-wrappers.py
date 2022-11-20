@@ -1238,6 +1238,11 @@ for call in calls:
 				val = "(" + param_name + " < 0) ? -1 : " + str(fd_index)
 				fd_index += 1
 
+			# On recent versions of clang, the compiler will throw out an error if there is
+			# a mismatch with certain integer types. 
+			if len(param) > 2: 
+				val = "(" + param[2] + ")" + val
+
 			library_source.write("\t\t\t." + param_name + " = " + val + ",\n")
 		library_source.write("\t\t},\n")
 
