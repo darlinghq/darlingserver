@@ -132,6 +132,7 @@ add_compile_options(
 	-ffunction-sections
 	-fdata-sections
 	-Wno-incompatible-library-redeclaration
+	-Wno-error=int-conversion
 )
 
 if (DSERVER_ASAN OR DSERVER_UBSAN)
