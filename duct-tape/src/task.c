@@ -460,6 +460,20 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			return KERN_SUCCESS;
 		};
 
+		case TASK_AUDIT_TOKEN: {
+			audit_token_t   *audit_token_p;
+
+			if (*task_info_count < TASK_AUDIT_TOKEN_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			audit_token_p = (audit_token_t *) task_info_out;
+			*audit_token_p = task->xnu_task.audit_token;
+			*task_info_count = TASK_AUDIT_TOKEN_COUNT;
+
+			return KERN_SUCCESS;
+		};
+
 		case TASK_VM_INFO: {
 			task_vm_info_t info = (task_vm_info_t)task_info_out;
 			mach_msg_type_number_t orig_info_count = *task_info_count;
