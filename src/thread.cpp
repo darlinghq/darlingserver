@@ -1407,7 +1407,13 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 void DarlingServer::Thread::waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
 	loadStateFromUser(threadStateAddress, floatStateAddress);
 	dtape_thread_wait_while_user_suspended(_dtapeThread);
-	saveStateToUser(threadStateAddress, floatStateAddress);
+	try {
+		saveStateToUser(threadStateAddress, floatStateAddress);
+	} catch (std::system_error e) {
+		// if we fail to save the state back to the process, that likely means the process died or was killed while waiting.
+		// it's nothing to worry about. just log it and move on.
+		threadLog.warning() << *this << ": failed to save state back to user in waitWhileUserSuspended: " << e.code() << " (" << e.what() << ")" << threadLog.endLog;
+	}
 };
 
 void DarlingServer::Thread::sendSignal(int signal) const {
