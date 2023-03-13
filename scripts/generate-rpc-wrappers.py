@@ -604,15 +604,48 @@ calls = [
 	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF | ALLOW_INTERRUPTIONS),
 ]
 
+ALLOWED_PRIVATE_TYPES = [
+	'bool',
+	'int8_t',
+	'uint8_t',
+	'int16_t',
+	'uint16_t',
+	'int32_t',
+	'uint32_t',
+	'int64_t',
+	'uint64_t',
+]
+
 def parse_type(param_tuple, is_public):
 	type_str = param_tuple[1].strip()
+
 	if type_str == '@fd':
-		return 'int'
+		type_str = 'int' if is_public else 'int32_t'
 	else:
 		if not is_public and len(param_tuple) > 2:
-			return param_tuple[2].strip()
-		else:
-			return type_str
+			type_str = param_tuple[2].strip()
+
+	if not is_public and type_str not in ALLOWED_PRIVATE_TYPES:
+		raise ValueError('Invalid private type: ' + type_str)
+
+	return type_str
+
+# we have to specify alignment for structures members greater than 4 bytes wide because on 32-bit architectures,
+# these are 4-byte aligned, but on 64-bit architectures, these are 8-byte aligned. however, we want the same structure
+# definitions across architectures, so we specify 8-byte alignment for 8-byte types.
+
+def alignment_for_type(type):
+	if type == 'int64_t' or type == 'uint64_t':
+		return 8
+	else:
+		return 0
+
+def alignment_str_for_type(type):
+	alignment = alignment_for_type(type)
+	if alignment > 0:
+		return ' __attribute__((aligned(' + str(alignment) + ')))'
+	else:
+		return ''
 
 def is_fd(param_tuple):
 	return param_tuple[1] == '@fd'
@@ -1159,7 +1192,8 @@ for call in calls:
 			if is_fd(param):
 				fd_count_in_call += 1
 
-			public_header.write("\t" + parse_type(param, False) + " " + param_name + ";\n")
+			parsed_type = parse_type(param, False)
+			public_header.write("\t" + parsed_type + " " + param_name + alignment_str_for_type(parsed_type) + ";\n")
 		public_header.write("};\n")
 
 	# define the RPC call structure
@@ -1182,7 +1216,8 @@ for call in calls:
 			if is_fd(param):
 				fd_count_in_reply += 1
 
-			public_header.write("\t" + parse_type(param, False) + " " + param_name + ";\n")
+			parsed_type = parse_type(param, False)
+			public_header.write("\t" + parsed_type + " " + param_name + alignment_str_for_type(parsed_type) + ";\n")
 		public_header.write("};\n")
 
 	# define the RPC reply structure
