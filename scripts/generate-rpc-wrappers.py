@@ -1331,18 +1331,20 @@ for call in calls:
 		library_source.write("\t\t.msg_control = NULL,\n")
 		library_source.write("\t\t.msg_controllen = 0,\n")
 	else:
-		library_source.write("\t\t.msg_control = controlbuf,\n")
-		library_source.write("\t\t.msg_controllen = sizeof(controlbuf),\n")
+		library_source.write("\t\t.msg_control = (valid_fd_count > 0) ? controlbuf : NULL,\n")
+		library_source.write("\t\t.msg_controllen = (valid_fd_count > 0) ? sizeof(controlbuf) : 0,\n")
 
 	library_source.write("\t};\n")
 
 	if fd_count_in_call > 0:
 		library_source.write(textwrap.indent(textwrap.dedent("""\
-			dserver_rpc_hooks_cmsghdr_t* call_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&callmsg);
-			call_cmsg->cmsg_level = DSERVER_RPC_HOOKS_SOL_SOCKET;
-			call_cmsg->cmsg_type = DSERVER_RPC_HOOKS_SCM_RIGHTS;
-			call_cmsg->cmsg_len = DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * valid_fd_count);
-			dserver_rpc_hooks_memcpy(DSERVER_RPC_HOOKS_CMSG_DATA(call_cmsg), fds, sizeof(int) * valid_fd_count);
+			if (valid_fd_count > 0) {
+				dserver_rpc_hooks_cmsghdr_t* call_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&callmsg);
+				call_cmsg->cmsg_level = DSERVER_RPC_HOOKS_SOL_SOCKET;
+				call_cmsg->cmsg_type = DSERVER_RPC_HOOKS_SCM_RIGHTS;
+				call_cmsg->cmsg_len = DSERVER_RPC_HOOKS_CMSG_LEN(sizeof(int) * valid_fd_count);
+				dserver_rpc_hooks_memcpy(DSERVER_RPC_HOOKS_CMSG_DATA(call_cmsg), fds, sizeof(int) * valid_fd_count);
+			}
 			"""), '\t'))
 
 	library_source.write(textwrap.indent(textwrap.dedent("""\
