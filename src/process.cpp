@@ -275,7 +275,7 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 	if (didExec) {
 		// exec case
 
-		processLog.info() << *this << ": replacing process with a new task" << processLog.endLog;
+		processLog.info() << *this << ": replacing process with a new task (with architecture \"" << architectureToString(architecture) << "\")" << processLog.endLog;
 
 		// clear all threads except the main thread
 		std::shared_ptr<Thread> mainThread = nullptr;
@@ -298,6 +298,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 			throw std::runtime_error("Main thread for process died?");
 		}
 		_threads[mainThread->nsid()] = mainThread;
+
+		// update the process architecture
+		_architecture = architecture;
 
 		// replace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;

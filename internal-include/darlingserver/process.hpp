@@ -56,6 +56,16 @@ namespace DarlingServer {
 			ARM64 = dserver_rpc_architecture_arm64,
 		};
 
+		static constexpr const char* architectureToString(Architecture architecture) {
+			switch (architecture) {
+				case Architecture::i386:    return "i386";
+				case Architecture::x86_64:  return "x86_64";
+				case Architecture::ARM32:   return "ARM32";
+				case Architecture::ARM64:   return "ARM64";
+				default: return "Unknown";
+			}
+		}
+
 		struct MemoryInfo {
 			uint64_t virtualSize;
 			uint64_t residentSize;
