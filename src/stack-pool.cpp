@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <assert.h>
+#include <system_error>
 
 #if DSERVER_ASAN
 	#include <sanitizer/asan_interface.h>
