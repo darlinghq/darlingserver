@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <new>
 #include <mutex>
+#include <system_error>
 
 DarlingServer::Address::Address() {
 	_address.sun_family = AF_UNIX;
