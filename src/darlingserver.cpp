@@ -48,6 +48,10 @@
 	#define DARLINGSERVER_INIT_PROCESS "/sbin/launchd"
 #endif
 
+#ifndef DARLINGSERVER_XDG_USER_DIR_CMD
+	#define DARLINGSERVER_XDG_USER_DIR_CMD "xdg-user-dir"
+#endif
+
 #if DSERVER_ASAN
 	#include <sanitizer/lsan_interface.h>
 #endif
@@ -90,9 +94,9 @@ void fixPermissionsRecursive(const char* path, uid_t originalUID, gid_t original
 const char* xdgDirectory(const char* name)
 {
 	static char dir[4096];
-	char* cmd = (char*) malloc(16 + strlen(name));
+	char* cmd = (char*) malloc(sizeof(DARLINGSERVER_XDG_USER_DIR_CMD) + 1 + strlen(name));
 
-	sprintf(cmd, "xdg-user-dir %s", name);
+	sprintf(cmd, DARLINGSERVER_XDG_USER_DIR_CMD " %s", name);
 
 	FILE* proc = popen(cmd, "r");
 
