@@ -1,3 +1,6 @@
+#include "darlingserver/rpc.h"
+#include "mach/kern_return.h"
+#include "mach/task_info.h"
 #include <darlingserver/duct-tape/stubs.h>
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/duct-tape/task.h>
@@ -518,6 +521,23 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 						}
 					}
 				}
+			}
+
+			return KERN_SUCCESS;
+		};
+
+		case TASK_FLAGS_INFO: {
+			task_flags_info_t info = (task_flags_info_t)task_info_out;
+			mach_msg_type_number_t orig_info_count = *task_info_count;
+
+			if (orig_info_count < TASK_FLAGS_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			info->flags = 0;
+
+			if (task->architecture == dserver_rpc_architecture_x86_64 || task->architecture == dserver_rpc_architecture_arm64) {
+				info->flags = TF_LP64 | TF_64B_DATA;
 			}
 
 			return KERN_SUCCESS;
