@@ -32,6 +32,7 @@ namespace DarlingServer {
 	class Log {
 	private:
 		std::string _category;
+		bool _alwaysLog = false;
 
 		enum class Type {
 			Debug = 1,

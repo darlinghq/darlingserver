@@ -27,9 +27,20 @@
 
 #define DEFAULT_LOG_CUTOFF DarlingServer::Log::Type::Error
 
+static const char* alwaysLoggedCategories[] = {
+	//"kprintf",
+};
+
 DarlingServer::Log::Log(std::string category):
 	_category(category)
-	{};
+{
+	for (size_t i = 0; i < sizeof(alwaysLoggedCategories) / sizeof(*alwaysLoggedCategories); ++i) {
+		if (strcmp(alwaysLoggedCategories[i], _category.c_str()) == 0) {
+			_alwaysLog = true;
+			break;
+		}
+	}
+};
 
 DarlingServer::Log::Stream::Stream(Type type, const Log& log):
 	_type(type),
@@ -117,7 +128,7 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 		return level;
 	}();
 
-	if (type < logMinLevel) {
+	if (type < logMinLevel && !_alwaysLog) {
 		return;
 	}
 
