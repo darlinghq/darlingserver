@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #define DEFAULT_LOG_CUTOFF DarlingServer::Log::Type::Error
 
@@ -103,7 +104,7 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 	static int logFile = []() {
 		std::filesystem::path path(Server::sharedInstance().prefix() + "/private/var/log/dserver.log");
 		std::filesystem::create_directories(path.parent_path());
-		return open(path.c_str(), O_WRONLY | O_APPEND | O_CREAT);
+		return open(path.c_str(), O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 	}();
 
 	static bool logToStderr = []() {
@@ -128,7 +129,7 @@ void DarlingServer::Log::_log(Type type, std::string message) const {
 		return level;
 	}();
 
-	if (type < logMinLevel && !_alwaysLog) {
+	if ((type < logMinLevel && !_alwaysLog) || logFile < 0) {
 		return;
 	}
 
