@@ -254,6 +254,7 @@ add_custom_target(kernel_mig_generate
 )
 
 add_library(darlingserver_duct_tape
+	src/init.c
 	src/misc.c
 	src/stubs.c
 	src/locks.c
