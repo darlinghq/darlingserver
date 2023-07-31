@@ -425,6 +425,7 @@ struct  proc {
 	pid_t           p_sessionid;
 };
 
+#ifndef __DARLING__
 /*
  * Identify a process uniquely.
  * proc_ident's fields match 1-1 with those in struct proc.
@@ -434,6 +435,7 @@ struct proc_ident {
 	pid_t           p_pid;
 	int             p_idversion;
 };
+#endif // __DARLING__
 
 #define PGRPID_DEAD 0xdeaddead
 

@@ -116,6 +116,14 @@ DarlingServer::Process::NSID DarlingServer::Process::nsid() const {
 	return _nspid;
 };
 
+DarlingServer::EternalID DarlingServer::Process::eternalID() const {
+	return _eid;
+};
+
+void DarlingServer::Process::_setEternalID(EternalID eid) {
+	_eid = eid;
+};
+
 std::vector<std::shared_ptr<DarlingServer::Thread>> DarlingServer::Process::threads() const {
 	std::vector<std::shared_ptr<DarlingServer::Thread>> result;
 	std::shared_lock lock(_rwlock);

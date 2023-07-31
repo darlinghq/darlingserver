@@ -32,6 +32,7 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/logging.hpp>
 #include <darlingserver/stack-pool.hpp>
+#include <darlingserver/registry.hpp>
 
 #include <ucontext.h>
 
@@ -44,6 +45,7 @@ namespace DarlingServer {
 	class Thread: public std::enable_shared_from_this<Thread>, public Loggable {
 		friend class Process;
 		friend class Call; // HACK, see call.cpp
+		friend class Registry<Thread>;
 
 	public:
 		enum class RunState {
@@ -72,6 +74,7 @@ namespace DarlingServer {
 
 		pid_t _tid;
 		pid_t _nstid;
+		EternalID _eid;
 		std::shared_ptr<Process> _process;
 		std::shared_ptr<Call> _pendingCall;
 		Address _address;
@@ -142,6 +145,8 @@ namespace DarlingServer {
 
 		static StackPool stackPool;
 
+		void _setEternalID(EternalID eid);
+
 	public:
 		using ID = pid_t;
 		using NSID = ID;
@@ -179,6 +184,8 @@ namespace DarlingServer {
 		 * The TID of this Thread as seen from within the container (i.e. launchd's namespace).
 		 */
 		NSID nsid() const;
+
+		EternalID eternalID() const;
 
 		Address address() const;
 		void setAddress(Address address);

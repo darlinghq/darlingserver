@@ -33,6 +33,7 @@
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/rpc.h>
 #include <darlingserver/logging.hpp>
+#include <darlingserver/registry.hpp>
 
 struct DTapeHooks;
 
@@ -46,6 +47,7 @@ namespace DarlingServer {
 		friend class Server;
 		friend class Call; // HACK; see Call.cpp
 		friend class Kqchan;
+		friend class Registry<Process>;
 
 	public:
 		enum class Architecture {
@@ -84,6 +86,7 @@ namespace DarlingServer {
 	private:
 		pid_t _pid;
 		pid_t _nspid;
+		EternalID _eid;
 		std::shared_ptr<FD> _pidfd;
 		mutable std::shared_mutex _rwlock;
 		std::unordered_map<uint64_t, std::weak_ptr<Thread>> _threads;
@@ -127,6 +130,8 @@ namespace DarlingServer {
 
 		void _dispose();
 
+		void _setEternalID(EternalID eid);
+
 	public:
 		using ID = pid_t;
 		using NSID = ID;
@@ -149,6 +154,8 @@ namespace DarlingServer {
 		 * The PID of this Process as seen from within the container (i.e. launchd's namespace).
 		 */
 		NSID nsid() const;
+
+		EternalID eternalID() const;
 
 		std::vector<std::shared_ptr<Thread>> threads() const;
 

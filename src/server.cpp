@@ -17,6 +17,7 @@
  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cstdint>
 #include <darlingserver/server.hpp>
 #include <sys/socket.h>
 #include <stdexcept>
@@ -182,6 +183,19 @@ struct DTapeHooks {
 		return thread->_dtapeThread;
 	};
 
+	static dtape_thread_t* dtape_hook_thread_lookup_eternal(dtape_eternal_id_t eid, bool retain) {
+		auto& registry = DarlingServer::threadRegistry();
+		auto maybeThread = registry.lookupEntryByEternalID(eid);
+		if (!maybeThread) {
+			return nullptr;
+		}
+		auto thread = *maybeThread;
+		if (retain) {
+			dtape_thread_retain(thread->_dtapeThread);
+		}
+		return thread->_dtapeThread;
+	};
+
 	static dtape_thread_state_t dtape_hook_thread_get_state(void* thread_context) {
 		return static_cast<dtape_thread_state_t>(static_cast<DarlingServer::Thread*>(thread_context)->getRunState());
 	};
@@ -197,6 +211,13 @@ struct DTapeHooks {
 
 	static void dtape_hook_thread_context_dispose(void* thread_context) {
 		static_cast<DarlingServer::Thread*>(thread_context)->_dispose();
+	};
+
+	static dtape_eternal_id_t dtape_hook_thread_eternal_id(void* thread_context) {
+		if (!thread_context) {
+			return DarlingServer::EternalIDInvalid;
+		}
+		return static_cast<DarlingServer::Thread*>(thread_context)->eternalID();
 	};
 
 	static void dtape_hook_current_thread_interrupt_disable(void) {
@@ -226,6 +247,19 @@ struct DTapeHooks {
 	static dtape_task_t* dtape_hook_task_lookup(int id, bool id_is_nsid, bool retain) {
 		auto& registry = DarlingServer::processRegistry();
 		auto maybeProcess = (id_is_nsid) ? registry.lookupEntryByNSID(id) : registry.lookupEntryByID(id);
+		if (!maybeProcess) {
+			return nullptr;
+		}
+		auto process = *maybeProcess;
+		if (retain) {
+			dtape_task_retain(process->_dtapeTask);
+		}
+		return process->_dtapeTask;
+	};
+
+	static dtape_task_t* dtape_hook_task_lookup_eternal(dtape_eternal_id_t eid, bool retain) {
+		auto& registry = DarlingServer::processRegistry();
+		auto maybeProcess = registry.lookupEntryByEternalID(eid);
 		if (!maybeProcess) {
 			return nullptr;
 		}
@@ -322,6 +356,13 @@ struct DTapeHooks {
 		static_cast<DarlingServer::Process*>(task_context)->_dispose();
 	};
 
+	static dtape_eternal_id_t dtape_hook_task_eternal_id(void* task_context) {
+		if (!task_context) {
+			return DarlingServer::EternalIDInvalid;
+		}
+		return static_cast<DarlingServer::Process*>(task_context)->eternalID();
+	};
+
 #if DSERVER_EXTENDED_DEBUG
 	static void dtape_hook_task_register_name(void* task_context, uint32_t name, uintptr_t pointer) {
 		static_cast<DarlingServer::Process*>(task_context)->_registerName(name, pointer);
@@ -361,9 +402,11 @@ struct DTapeHooks {
 		.thread_set_pending_signal = dtape_hook_thread_set_pending_signal,
 		.thread_set_pending_call_override = dtape_hook_thread_set_pending_call_override,
 		.thread_lookup = dtape_hook_thread_lookup,
+		.thread_lookup_eternal = dtape_hook_thread_lookup_eternal,
 		.thread_get_state = dtape_hook_thread_get_state,
 		.thread_send_signal = dtape_hook_thread_send_signal,
 		.thread_context_dispose = dtape_hook_thread_context_dispose,
+		.thread_eternal_id = dtape_hook_thread_eternal_id,
 
 		.current_thread_interrupt_disable = dtape_hook_current_thread_interrupt_disable,
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
@@ -373,6 +416,7 @@ struct DTapeHooks {
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
 		.task_lookup = dtape_hook_task_lookup,
+		.task_lookup_eternal = dtape_hook_task_lookup_eternal,
 		.task_get_memory_info = dtape_hook_task_get_memory_info,
 		.task_get_memory_region_info = dtape_hook_task_get_memory_region_info,
 		.task_allocate_pages = dtape_hook_task_allocate_pages,
@@ -382,6 +426,7 @@ struct DTapeHooks {
 		.task_change_protection = dtape_hook_task_change_protection,
 		.task_sync_memory = dtape_hook_task_sync_memory,
 		.task_context_dispose = dtape_hook_task_context_dispose,
+		.task_eternal_id = dtape_hook_task_eternal_id,
 
 #if DSERVER_EXTENDED_DEBUG
 		.task_register_name = dtape_hook_task_register_name,

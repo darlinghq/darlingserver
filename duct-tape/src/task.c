@@ -71,6 +71,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	task->has_sigexc = false;
 	task->dyld_info_addr = 0;
 	task->dyld_info_length = 0;
+	task->p_ident.eid = dtape_hooks->task_eternal_id(context);
 	dtape_mutex_init(&task->dyld_info_lock);
 	dtape_condvar_init(&task->dyld_info_condvar);
 	memset(&task->xnu_task, 0, sizeof(task->xnu_task));
@@ -249,10 +250,6 @@ int task_pid(task_t task) {
 	return pid_from_task(task);
 };
 
-void task_id_token_notify(mach_msg_header_t* msg) {
-	dtape_stub();
-};
-
 void task_policy_update_complete_unlocked(task_t task, task_pend_token_t pend_token) {
 	dtape_stub();
 };
@@ -279,26 +276,6 @@ void task_watchport_elem_deallocate(struct task_watchport_elem* watchport_elem) 
 };
 
 kern_return_t task_create_suid_cred(task_t task, suid_cred_path_t path, suid_cred_uid_t uid, suid_cred_t* sc_p) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t task_create_identity_token(task_t task, task_id_token_t* tokenp) {
-	dtape_stub_unsafe();
-};
-
-ipc_port_t convert_task_id_token_to_port(task_id_token_t token) {
-	dtape_stub_unsafe();
-};
-
-task_id_token_t convert_port_to_task_id_token(ipc_port_t port) {
-	dtape_stub_unsafe();
-};
-
-kern_return_t task_identity_token_get_task_port(task_id_token_t token, task_flavor_t flavor, ipc_port_t* portp) {
-	dtape_stub_unsafe();
-};
-
-void task_id_token_release(task_id_token_t token) {
 	dtape_stub_unsafe();
 };
 
@@ -749,6 +726,31 @@ void task_wait_locked(task_t task, boolean_t until_not_runnable) {
 	// this was stubbed in the LKM, so it should be safe to stub here
 	dtape_stub_safe();
 };
+
+//
+// for task_ident.c
+//
+
+void* proc_find_ident(struct proc_ident const *i) {
+	return dtape_hooks->task_lookup_eternal(i->eid, true);
+};
+
+int proc_rele(void* p) {
+	dtape_task_release(p);
+	return 0;
+};
+
+task_t proc_task(void* p) {
+	return &((dtape_task_t*)p)->xnu_task;
+};
+
+struct proc_ident proc_ident(void* p) {
+	return ((dtape_task_t*)p)->p_ident;
+};
+
+//
+// end for task_ident.c
+//
 
 // <copied from="xnu://7195.141.2/osfmk/kern/task_policy.c">
 

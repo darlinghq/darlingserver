@@ -20,6 +20,7 @@
 #ifndef _DARLINGSERVER_REGISTRY_HPP_
 #define _DARLINGSERVER_REGISTRY_HPP_
 
+#include <limits>
 #include <vector>
 #include <memory>
 #include <mutex>
@@ -31,15 +32,20 @@
 #include <sys/types.h>
 
 #include <darlingserver/message.hpp>
-#include <darlingserver/process.hpp>
-#include <darlingserver/thread.hpp>
 
 namespace DarlingServer {
+	// for our purposes, a simple uint64_t is good enough
+	using EternalID = uint64_t;
+	static constexpr EternalID EternalIDInvalid = std::numeric_limits<EternalID>::max();
+
 	template<class Entry>
 	class Registry {
 	private:
 		std::unordered_map<typename Entry::ID, std::shared_ptr<Entry>> _map;
 		std::unordered_map<typename Entry::NSID, std::shared_ptr<Entry>> _nsmap;
+		std::unordered_map<EternalID, std::shared_ptr<Entry>> _emap;
+		// this is only accessed with the lock held, so no need for atomics
+		uint64_t _eternalCounter;
 		mutable std::shared_mutex _rwlock;
 
 		// sometimes, the factory used with registerIfAbsent needs to be able to look up other entries
@@ -66,8 +72,11 @@ namespace DarlingServer {
 				return nullptr;
 			}
 
+			entry->_setEternalID(_eternalCounter++);
+
 			_map[entry->id()] = entry;
 			_nsmap[entry->nsid()] = entry;
+			_emap[entry->eternalID()] = entry;
 
 			return entry;
 		};
@@ -79,8 +88,11 @@ namespace DarlingServer {
 				return false;
 			}
 
+			entry->_setEternalID(_eternalCounter++);
+
 			_map[entry->id()] = entry;
 			_nsmap[entry->nsid()] = entry;
+			_emap[entry->eternalID()] = entry;
 			return true;
 		};
 
@@ -100,8 +112,15 @@ namespace DarlingServer {
 				return false;
 			}
 
+			auto it3 = _emap.find(entry->eternalID());
+
+			if (it3 == _emap.end()) {
+				return false;
+			}
+
 			_map.erase(it);
 			_nsmap.erase(it2);
+			_emap.erase(it3);
 			return true;
 		};
 
@@ -121,8 +140,43 @@ namespace DarlingServer {
 				return false;
 			}
 
+			auto it3 = _emap.find(entry->eternalID());
+
+			if (it3 == _emap.end()) {
+				return false;
+			}
+
 			_map.erase(it);
 			_nsmap.erase(it2);
+			_emap.erase(it3);
+			return true;
+		};
+
+		bool unregistryEntryByEternalID(EternalID eid) {
+			std::unique_lock lock(_rwlock);
+
+			auto it3 = _emap.find(eid);
+
+			if (it3 == _emap.end()) {
+				return false;
+			}
+
+			std::shared_ptr<Entry> entry = (*it3).second;
+			auto it2 = _nsmap.find(entry->nsid());
+
+			if (it2 == _nsmap.end()) {
+				return false;
+			}
+
+			auto it = _map.find(entry->id());
+
+			if (it == _map.end()) {
+				return false;
+			}
+
+			_map.erase(it);
+			_nsmap.erase(it2);
+			_emap.erase(it3);
 			return true;
 		};
 
@@ -138,18 +192,20 @@ namespace DarlingServer {
 
 			auto it = _map.find(entry->id());
 			auto it2 = _nsmap.find(entry->nsid());
+			auto it3 = _emap.find(entry->eternalID());
 
-			if (it == _map.end() || it2 == _nsmap.end()) {
+			if (it == _map.end() || it2 == _nsmap.end() || it3 == _emap.end()) {
 				return false;
 			}
 
 			// note that we *want* pointer-to-pointer comparison
-			if ((*it).second != entry || (*it2).second != entry) {
+			if ((*it).second != entry || (*it2).second != entry || (*it3).second != entry) {
 				return false;
 			}
 
 			_map.erase(it);
 			_nsmap.erase(it2);
+			_emap.erase(it3);
 			return true;
 		};
 
@@ -181,6 +237,21 @@ namespace DarlingServer {
 			}
 
 			return (*it2).second;
+		};
+
+		std::optional<std::shared_ptr<Entry>> lookupEntryByEternalID(EternalID eid) {
+			std::shared_lock lock(_rwlock, std::defer_lock);
+
+			if (!_registeringWithLockHeld) {
+				lock.lock();
+			}
+
+			auto it3 = _emap.find(eid);
+			if (it3 == _emap.end()) {
+				return std::nullopt;
+			}
+
+			return (*it3).second;
 		};
 
 		/**
@@ -216,12 +287,17 @@ namespace DarlingServer {
 			return _map.size();
 		};
 	};
-
-	Registry<Process>& processRegistry();
-	Registry<Thread>& threadRegistry();
 };
 
 template<class T>
 thread_local bool DarlingServer::Registry<T>::_registeringWithLockHeld = false;
+
+#include <darlingserver/process.hpp>
+#include <darlingserver/thread.hpp>
+
+namespace DarlingServer {
+	Registry<Process>& processRegistry();
+	Registry<Thread>& threadRegistry();
+};
 
 #endif // _DARLINGSERVER_REGISTRY_HPP_

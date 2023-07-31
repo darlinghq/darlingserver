@@ -17,6 +17,7 @@
  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "darlingserver/registry.hpp"
 #include <darlingserver/thread.hpp>
 #include <darlingserver/process.hpp>
 #include <darlingserver/call.hpp>
@@ -244,6 +245,14 @@ DarlingServer::Thread::ID DarlingServer::Thread::id() const {
 
 DarlingServer::Thread::NSID DarlingServer::Thread::nsid() const {
 	return _nstid;
+};
+
+DarlingServer::EternalID DarlingServer::Thread::eternalID() const {
+	return _eid;
+};
+
+void DarlingServer::Thread::_setEternalID(EternalID eid) {
+	_eid = eid;
 };
 
 std::shared_ptr<DarlingServer::Process> DarlingServer::Thread::process() const {

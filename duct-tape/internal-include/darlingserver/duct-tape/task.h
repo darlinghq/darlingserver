@@ -5,8 +5,13 @@
 
 #include <darlingserver/rpc.h>
 #include <darlingserver/duct-tape/condvar.h>
+#include <darlingserver/duct-tape/types.h>
 
 typedef struct dtape_task dtape_task_t;
+
+struct proc_ident {
+	dtape_eternal_id_t eid;
+};
 
 struct dtape_task {
 	void* context;
@@ -18,6 +23,7 @@ struct dtape_task {
 	uint64_t dyld_info_length;
 	dtape_mutex_t dyld_info_lock;
 	dtape_condvar_t dyld_info_condvar;
+	struct proc_ident p_ident;
 	struct task xnu_task;
 };
 

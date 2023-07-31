@@ -297,6 +297,7 @@ add_library(darlingserver_duct_tape
 	xnu/osfmk/kern/syscall_emulation.c
 	xnu/osfmk/kern/ux_handler.c
 	xnu/osfmk/kern/exception.c
+	xnu/osfmk/kern/task_ident.c
 
 	xnu/osfmk/ipc/ipc_entry.c
 	xnu/osfmk/ipc/ipc_hash.c

@@ -35,11 +35,21 @@
 #include <security/mac_mach_internal.h>
 #include <kern/task_ident.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/task.h>
+
+kern_return_t
+task_get_special_port(
+	task_t          task,
+	int             which,
+	ipc_port_t      *portp);
+#else
 struct proc_ident {
 	uint64_t        p_uniqueid;
 	pid_t           p_pid;
 	int             p_idversion;
 };
+#endif // __DARLING__
 
 extern void* proc_find_ident(struct proc_ident const *i);
 extern int proc_rele(void* p);
@@ -53,8 +63,12 @@ struct task_id_token {
 	os_refcnt_t       tidt_refs;
 };
 
+#ifdef __DARLING__
+zone_t task_id_token_zone;
+#else
 static ZONE_DECLARE(task_id_token_zone, "task_id_token",
     sizeof(struct task_id_token), ZC_ZFREE_CLEARMEM);
+#endif // __DARLING__
 
 static void
 tidt_reference(task_id_token_t token)
@@ -124,9 +138,16 @@ task_create_identity_token(
 	token = zalloc_flags(task_id_token_zone, Z_ZERO | Z_WAITOK | Z_NOFAIL);
 
 	task_lock(task);
+#ifdef __DARLING__
+	dtape_task_t* dtape_task = dtape_task_for_xnu_task(task);
+	if (dtape_task) {
+		token->port = IP_NULL;
+		token->ident = proc_ident(dtape_task);
+#else
 	if (task->bsd_info) {
 		token->port = IP_NULL;
 		token->ident = proc_ident(task->bsd_info);
+#endif // __DARLING__
 		/* this reference will be donated to no-senders notification */
 		os_ref_init_count(&token->tidt_refs, NULL, 1);
 	} else {
