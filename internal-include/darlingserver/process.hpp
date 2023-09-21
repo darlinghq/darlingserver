@@ -104,6 +104,7 @@ namespace DarlingServer {
 		std::string _executablePath;
 		bool _dead = false;
 		std::shared_ptr<Process> _selfReference = nullptr;
+		std::vector<uint32_t> _groups;
 
 #if DSERVER_EXTENDED_DEBUG
 		std::unordered_map<uint32_t, uintptr_t> _registeredNames;
@@ -211,6 +212,9 @@ namespace DarlingServer {
 		static std::shared_ptr<Process> kernelProcess();
 
 		void logToStream(Log::Stream& stream) const;
+
+		std::vector<uint32_t> groups() const;
+		void setGroups(const std::vector<uint32_t>& groups);
 	};
 };
 

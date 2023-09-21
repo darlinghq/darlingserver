@@ -239,6 +239,15 @@ calls = [
 		('length', 'uint64_t'),
 	]),
 
+	('groups', [
+		('new_groups', 'const uint32_t*', 'uint64_t'),
+		('new_group_count', 'uint64_t'),
+		('old_groups', 'uint32_t*', 'uint64_t'),
+		('old_group_space', 'uint64_t'),
+	], [
+		('old_group_count', 'uint64_t'),
+	]),
+
 	#
 	# kqueue channels
 	#

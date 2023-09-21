@@ -77,6 +77,9 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 		// inherit vchroot from parent process
 		_vchrootDescriptor = parentProcess->_vchrootDescriptor;
 		_cachedVchrootPath = parentProcess->_cachedVchrootPath;
+
+		// inherit groups from parent process
+		_groups = parentProcess->_groups;
 	}
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
@@ -742,4 +745,14 @@ void DarlingServer::Process::_dispose() {
 bool DarlingServer::Process::isDead() const {
 	std::shared_lock lock(_rwlock);
 	return _dead;
+};
+
+std::vector<uint32_t> DarlingServer::Process::groups() const {
+	std::shared_lock lock(_rwlock);
+	return _groups;
+};
+
+void DarlingServer::Process::setGroups(const std::vector<uint32_t>& groups) {
+	std::unique_lock lock(_rwlock);
+	_groups = groups;
 };

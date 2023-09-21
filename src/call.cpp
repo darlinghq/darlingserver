@@ -1036,4 +1036,39 @@ void DarlingServer::Call::GetExecutablePath::processCall() {
 	_sendReply(code, fullLength);
 }
 
+void DarlingServer::Call::Groups::processCall() {
+	int code = 0;
+	std::vector<uint32_t> oldGroups;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			oldGroups = process->groups();
+
+			if (_body.new_groups != 0 && _body.new_group_count > 0) {
+				std::vector<uint32_t> newGroups;
+				newGroups.resize(_body.new_group_count);
+
+				if (!process->readMemory((uintptr_t)_body.new_groups, newGroups.data(), newGroups.size() * sizeof(uint32_t), &code)) {
+					code = -code;
+				} else {
+					process->setGroups(newGroups);
+				}
+			}
+
+			if (code == 0 && _body.old_groups != 0 && _body.old_group_space > 0) {
+				auto len = std::min(oldGroups.size(), _body.old_group_space) * sizeof(uint32_t);
+				if (!process->writeMemory((uintptr_t)_body.old_groups, oldGroups.data(), len, &code)) {
+					code = -code;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, oldGroups.size());
+};
+
 DSERVER_CLASS_SOURCE_DEFS;
