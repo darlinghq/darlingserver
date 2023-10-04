@@ -254,6 +254,17 @@ namespace DarlingServer {
 			return (*it3).second;
 		};
 
+		std::vector<std::shared_ptr<Entry>> copyEntries() {
+			std::shared_lock lock(_rwlock);
+			std::vector<std::shared_ptr<Entry>> entries;
+
+			for (const auto& [eid, entry]: _emap) {
+				entries.push_back(entry);
+			}
+
+			return entries;
+		};
+
 		/**
 		 * Locks the registry, preventing new entries from being added and old ones from being removed.
 		 *

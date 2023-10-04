@@ -2,8 +2,13 @@ project(darlingserver)
 
 cmake_minimum_required(VERSION 3.13)
 
+option(DSERVER_TOOLS "Build darlingserver tools (for debugging)" OFF)
 option(DSERVER_ASAN "Build darlingserver with ASAN" OFF)
 option(DSERVER_UBSAN "Build darlingserver with UBSAN" OFF)
+
+if (DSERVER_TOOLS)
+	add_subdirectory(tools)
+endif()
 
 if (DSERVER_ASAN)
 	add_compile_definitions(

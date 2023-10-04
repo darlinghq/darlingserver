@@ -75,6 +75,23 @@ typedef struct dtape_load_info {
 	uint64_t thread_count;
 } dtape_load_info_t;
 
+typedef struct dtape_debug_port {
+	uint32_t name;
+	uint32_t rights;
+	uint64_t refs;
+	uint64_t messages;
+} dtape_debug_port_t;
+
+typedef bool (*dtape_debug_task_list_ports_iterator_f)(void* context, const dtape_debug_port_t* port);
+typedef bool (*dtape_debug_portset_list_members_iterator_f)(void* context, const dtape_debug_port_t* port);
+
+typedef struct dtape_debug_message {
+	uint32_t sender;
+	uint64_t size;
+} dtape_debug_message_t;
+
+typedef bool (*dtape_debug_port_list_messages_iterator_f)(void* context, const dtape_debug_message_t* message);
+
 #ifdef __cplusplus
 };
 #endif

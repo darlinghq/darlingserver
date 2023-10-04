@@ -611,6 +611,38 @@ calls = [
 	], [
 		('retval', 'uint32_t'),
 	], XNU_BSD_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF | ALLOW_INTERRUPTIONS),
+
+	#
+	# debug calls
+	#
+
+	('debug_list_processes', [], [
+		('process_count', 'uint64_t'),
+		('fd', '@fd'),
+	], UNMANAGED_CALL),
+
+	('debug_list_ports', [
+		('process', 'uint32_t'),
+	], [
+		('port_count', 'uint64_t'),
+		('fd', '@fd'),
+	], UNMANAGED_CALL),
+
+	('debug_list_members', [
+		('process', 'uint32_t'),
+		('portset', 'uint32_t'),
+	], [
+		('port_count', 'uint64_t'),
+		('fd', '@fd'),
+	], UNMANAGED_CALL),
+
+	('debug_list_messages', [
+		('process', 'uint32_t'),
+		('port', 'uint32_t'),
+	], [
+		('message_count', 'uint64_t'),
+		('fd', '@fd'),
+	], UNMANAGED_CALL),
 ]
 
 ALLOWED_PRIVATE_TYPES = [
@@ -774,6 +806,27 @@ typedef struct dserver_rpc_call_push_reply {
 	uint64_t reply;
 	uint64_t reply_size;
 } dserver_rpc_call_push_reply_t;
+
+//
+// Debug calls
+//
+
+typedef struct dserver_debug_process {
+	uint32_t pid;
+	uint64_t port_count;
+} dserver_debug_process_t;
+
+typedef struct dserver_debug_port {
+	uint32_t port_name;
+	uint32_t rights;
+	uint64_t refs;
+	uint64_t messages;
+} dserver_debug_port_t;
+
+typedef struct dserver_debug_message {
+	uint32_t sender;
+	uint64_t size;
+} dserver_debug_message_t;
 
 """)
 

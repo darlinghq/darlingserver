@@ -105,6 +105,11 @@ void dtape_semaphore_up(dtape_semaphore_t* semaphore);
 dtape_semaphore_wait_result_t dtape_semaphore_down(dtape_semaphore_t* semaphore);
 bool dtape_semaphore_down_simple(dtape_semaphore_t* semaphore);
 
+uint64_t dtape_debug_task_port_count(dtape_task_t* task);
+uint64_t dtape_debug_task_list_ports(dtape_task_t* task, dtape_debug_task_list_ports_iterator_f iterator, void* context);
+uint64_t dtape_debug_portset_list_members(dtape_task_t* task, uint32_t portset, dtape_debug_portset_list_members_iterator_f iterator, void* context);
+uint64_t dtape_debug_port_list_messages(dtape_task_t* task, uint32_t port, dtape_debug_port_list_messages_iterator_f iterator, void* context);
+
 #ifdef __cplusplus
 };
 #endif

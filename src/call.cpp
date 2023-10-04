@@ -380,6 +380,10 @@ void DarlingServer::Call::Checkout::processCall() {
 		code = -ESRCH;
 	}
 
+	// clear the thread pointer so that the reply will be sent directly through the server
+	// (otherwise, we would attempt to send it through the thread, which is now dead)
+	_thread.reset();
+
 	_sendReply(code);
 };
 
@@ -1069,6 +1073,117 @@ void DarlingServer::Call::Groups::processCall() {
 	}
 
 	_sendReply(code, oldGroups.size());
+};
+
+void DarlingServer::Call::DebugListProcesses::processCall() {
+	int code = 0;
+	auto processes = processRegistry().copyEntries();
+	int pipes[2] = {-1, -1};
+
+	code = pipe(pipes);
+	if (code == 0) {
+		for (const auto& process: processes) {
+			dserver_debug_process_t debugProcess;
+			debugProcess.pid = process->nsid();
+			debugProcess.port_count = dtape_debug_task_port_count(process->_dtapeTask);
+			write(pipes[1], &debugProcess, sizeof(debugProcess));
+		}
+
+		close(pipes[1]);
+	}
+
+	_sendReply(code, processes.size(), pipes[0]);
+};
+
+void DarlingServer::Call::DebugListPorts::processCall() {
+	int code = 0;
+	uint64_t portCount = 0;
+	int pipes[2] = {-1, -1};
+
+	if (auto maybeProcess = processRegistry().lookupEntryByNSID(_body.process)) {
+		auto process = *maybeProcess;
+
+		code = pipe(pipes);
+		if (code == 0) {
+			portCount = dtape_debug_task_list_ports(process->_dtapeTask, [](void* context, const dtape_debug_port_t* port) {
+				int& writeFD = *(int*)context;
+				dserver_debug_port_t debugPort;
+
+				debugPort.port_name = port->name;
+				debugPort.rights = port->rights;
+				debugPort.refs = port->refs;
+				debugPort.messages = port->messages;
+
+				write(writeFD, &debugPort, sizeof(debugPort));
+
+				return true;
+			}, &pipes[1]);
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, portCount, pipes[0]);
+};
+
+void DarlingServer::Call::DebugListMembers::processCall() {
+	int code = 0;
+	uint64_t portCount = 0;
+	int pipes[2] = {-1, -1};
+
+	if (auto maybeProcess = processRegistry().lookupEntryByNSID(_body.process)) {
+		auto process = *maybeProcess;
+
+		code = pipe(pipes);
+		if (code == 0) {
+			portCount = dtape_debug_portset_list_members(process->_dtapeTask, _body.portset, [](void* context, const dtape_debug_port_t* port) {
+				int& writeFD = *(int*)context;
+				dserver_debug_port_t debugPort;
+
+				debugPort.port_name = port->name;
+				debugPort.rights = port->rights;
+				debugPort.refs = port->refs;
+				debugPort.messages = port->messages;
+
+				write(writeFD, &debugPort, sizeof(debugPort));
+
+				return true;
+			}, &pipes[1]);
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, portCount, pipes[0]);
+};
+
+void DarlingServer::Call::DebugListMessages::processCall() {
+	int code = 0;
+	uint64_t portCount = 0;
+	int pipes[2] = {-1, -1};
+
+	if (auto maybeProcess = processRegistry().lookupEntryByNSID(_body.process)) {
+		auto process = *maybeProcess;
+
+		code = pipe(pipes);
+		if (code == 0) {
+			portCount = dtape_debug_port_list_messages(process->_dtapeTask, _body.port, [](void* context, const dtape_debug_message_t* port) {
+				int& writeFD = *(int*)context;
+				dserver_debug_message_t debugMessage;
+
+				debugMessage.sender = port->sender;
+				debugMessage.size = port->size;
+
+				write(writeFD, &debugMessage, sizeof(debugMessage));
+
+				return true;
+			}, &pipes[1]);
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, portCount, pipes[0]);
 };
 
 DSERVER_CLASS_SOURCE_DEFS;
