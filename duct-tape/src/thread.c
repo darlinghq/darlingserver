@@ -207,11 +207,6 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 			return -LINUX_EFAULT;
 		}
 
-		// debugging
-		if (tstate.rip == 0) {
-			panic("bad RIP");
-		}
-
 		thread_set_state(current_thread(), x86_THREAD_STATE64, (thread_state_t) &tstate, x86_THREAD_STATE64_COUNT);
 		thread_set_state(current_thread(), x86_FLOAT_STATE64, (thread_state_t) &fstate, x86_FLOAT_STATE64_COUNT);
 	} else if (task->architecture == dserver_rpc_architecture_i386) {
@@ -239,11 +234,6 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 		x86_thread_state64_t tstate;
 		x86_float_state64_t fstate;
 		mach_msg_type_number_t count;
-
-		// debugging
-		if (LIST_FIRST(&thread->user_states)->thread_state.uts.ts64.rip == 0) {
-			panic("bad RIP");
-		}
 
 		count = x86_THREAD_STATE64_COUNT;
 		thread_get_state(current_thread(), x86_THREAD_STATE64, (thread_state_t) &tstate, &count);
