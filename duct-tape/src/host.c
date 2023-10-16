@@ -207,9 +207,18 @@ kern_return_t host_virtual_physical_table_info(host_t host, hash_info_bucket_arr
 kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t* count) {
 	switch (flavor) {
 		// we can get away with not implementing it
-		case HOST_VM_INFO:
+		case HOST_VM_INFO: {
+			vm_statistics_t stat32 = (vm_statistics_t)info;
+
+			if (*count < HOST_VM_INFO_REV0_COUNT) {
+				return KERN_FAILURE;
+			}
+
 			dtape_stub_safe("HOST_VM_INFO");
-			return KERN_INVALID_ARGUMENT;
+			memset(stat32, 0, (*count) * sizeof(integer_t));
+
+			return KERN_SUCCESS;
+		}
 
 		case HOST_CPU_LOAD_INFO:
 			dtape_stub_safe("HOST_CPU_LOAD_INFO");
