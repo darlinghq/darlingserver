@@ -253,7 +253,7 @@ add_custom_target(kernel_mig_generate
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/UserNotification/UNDReplyServer.c
 )
 
-add_library(darlingserver_duct_tape
+add_library(darlingserver_duct_tape STATIC
 	src/init.c
 	src/misc.c
 	src/stubs.c
