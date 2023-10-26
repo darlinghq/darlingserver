@@ -690,22 +690,7 @@ int main(int argc, char** argv) {
 
 	// we have to use `clone` rather than `fork` to create the process in its own PID namespace
 	// and still be able to spawn new processes and threads of our own
-	struct clone_args launchdCloneArgs;
-	// TODO: use CMake to detect the structure version
-	// memset-ing everything is not future-safe
-	memset(&launchdCloneArgs, 0, sizeof(launchdCloneArgs));
-	launchdCloneArgs.flags = CLONE_NEWPID;
-	launchdCloneArgs.exit_signal = SIGCHLD;
-	launchdGlobalPID = syscall(SYS_clone3, &launchdCloneArgs, sizeof(launchdCloneArgs));
-
-	if (launchdGlobalPID < 0 && errno == ENOSYS) {
-		// try clone() instead
-#if __x86_64__ || __i386__
-		launchdGlobalPID = syscall(SYS_clone, CLONE_NEWPID | SIGCHLD, NULL, NULL, NULL, 0);
-#else
-		#error clone3 alternative not implemented for this architecture
-#endif
-	}
+	launchdGlobalPID = syscall(SYS_clone, CLONE_NEWPID | SIGCHLD, NULL, NULL, NULL, 0);
 
 	if (launchdGlobalPID < 0) {
 		fprintf(stderr, "Failed to fork to start launchd: %s\n", strerror(errno));
