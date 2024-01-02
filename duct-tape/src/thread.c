@@ -200,6 +200,7 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
 	if (task->architecture == dserver_rpc_architecture_x86_64) {
+#if defined(__x86_64__) || defined(__i386__)
 		x86_thread_state64_t tstate;
 		x86_float_state64_t fstate;
 
@@ -209,7 +210,11 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 
 		thread_set_state(current_thread(), x86_THREAD_STATE64, (thread_state_t) &tstate, x86_THREAD_STATE64_COUNT);
 		thread_set_state(current_thread(), x86_FLOAT_STATE64, (thread_state_t) &fstate, x86_FLOAT_STATE64_COUNT);
+#else
+	__builtin_unreachable();
+#endif
 	} else if (task->architecture == dserver_rpc_architecture_i386) {
+#if defined(__x86_64__) || defined(__i386__)
 		x86_thread_state32_t tstate;
 		x86_float_state32_t fstate;
 
@@ -219,6 +224,9 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 
 		thread_set_state(current_thread(), x86_THREAD_STATE32, (thread_state_t) &tstate, x86_THREAD_STATE32_COUNT);
 		thread_set_state(current_thread(), x86_FLOAT_STATE32, (thread_state_t) &fstate, x86_FLOAT_STATE32_COUNT);
+#else
+	__builtin_unreachable();
+#endif
 	} else {
 		dtape_log_error("dtape_thread_load_state_from_user() unimplemented for architecture: %d", task->architecture);
 		return -LINUX_ENOSYS;
@@ -231,6 +239,7 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
 	if (task->architecture == dserver_rpc_architecture_x86_64) {
+#if defined(__x86_64__) || defined(__i386__)
 		x86_thread_state64_t tstate;
 		x86_float_state64_t fstate;
 		mach_msg_type_number_t count;
@@ -244,7 +253,11 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 		if (copyout(&tstate, thread_state_address, sizeof(tstate)) || copyout(&fstate, float_state_address, sizeof(fstate))) {
 			return -LINUX_EFAULT;
 		}
+#else
+	__builtin_unreachable();
+#endif
 	} else if (task->architecture == dserver_rpc_architecture_i386) {
+#if defined(__x86_64__) || defined(__i386__)
 		x86_thread_state32_t tstate;
 		x86_float_state32_t fstate;
 		mach_msg_type_number_t count;
@@ -258,6 +271,9 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 		if (copyout(&tstate, thread_state_address, sizeof(tstate)) || copyout(&fstate, float_state_address, sizeof(fstate))) {
 			return -LINUX_EFAULT;
 		}
+#else
+	__builtin_unreachable();
+#endif
 	} else {
 		dtape_log_error("dtape_thread_save_state_to_user() unimplemented for architecture: %d", task->architecture);
 		return -LINUX_ENOSYS;
@@ -293,11 +309,19 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			break;
 		case LINUX_SIGBUS:
 			mach_exception = EXC_BAD_ACCESS;
+#if defined(__x86_64__) || defined(__i386__)
 			codes[0] = EXC_I386_ALIGNFLT;
+#else
+#error "Missing LINUX_SIGBUS conversion"
+#endif
 			break;
 		case LINUX_SIGILL:
 			mach_exception = EXC_BAD_INSTRUCTION;
+#if defined(__x86_64__) || defined(__i386__)
 			codes[0] = EXC_I386_INVOP;
+#else
+#error "Missing LINUX_SIGILL conversion"
+#endif
 			break;
 		case LINUX_SIGFPE:
 			mach_exception = EXC_ARITHMETIC;
@@ -305,7 +329,11 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			break;
 		case LINUX_SIGTRAP:
 			mach_exception = EXC_BREAKPOINT;
+#if defined(__x86_64__) || defined(__i386__)
 			codes[0] = (code == LINUX_SI_KERNEL) ? EXC_I386_BPT : EXC_I386_SGL;
+#else
+#error "Missing LINUX_SIGTRAP conversion"
+#endif
 
 			if (code == LINUX_TRAP_HWBKPT) {
 #if 0
@@ -622,6 +650,7 @@ thread_set_state(
 	dtape_thread_user_state_t* user_state = LIST_FIRST(&dthread->user_states);
 
 	if (dtask->architecture == dserver_rpc_architecture_x86_64 || dtask->architecture == dserver_rpc_architecture_i386) {
+#if defined(__x86_64__) || defined(__i386__)
 		switch (flavor)
 		{
 			case x86_THREAD_STATE:
@@ -849,6 +878,9 @@ thread_set_state(
 			default:
 				return KERN_INVALID_ARGUMENT;
 		}
+#else
+	__builtin_unreachable();
+#endif
 	}
 	return KERN_FAILURE;
 }
@@ -870,6 +902,7 @@ thread_get_state_internal(
 	// so i think it's safe to say we can ignore it in Darling (even when we get ARM support)
 
 	if (dtask->architecture == dserver_rpc_architecture_x86_64 || dtask->architecture == dserver_rpc_architecture_i386) {
+#if defined(__x86_64__) || defined(__i386__)
 		switch (flavor)
 		{
 			// The following flavors automatically select 32 or 64-bit state
@@ -1101,6 +1134,9 @@ thread_get_state_internal(
 			default:
 				return KERN_INVALID_ARGUMENT;
 		}
+#else
+		__builtin_unreachable();
+#endif
 	} else {
 		return KERN_FAILURE;
 	}
