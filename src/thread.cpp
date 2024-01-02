@@ -42,6 +42,7 @@
 
 #include <assert.h>
 
+#include <elf.h>
 #include <limits>
 #include <sys/ptrace.h>
 #include <sys/user.h>
@@ -146,7 +147,12 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 				}
 
 				struct user_regs_struct regs;
-				if (ptrace(PTRACE_GETREGS, id, 0, &regs) == -1) {
+				struct iovec iov = {
+					.iov_base = &regs,
+					.iov_len = sizeof (struct user_regs_struct),
+				};
+
+				if (ptrace(PTRACE_GETREGSET, id, NT_PRSTATUS, &iov) == -1) {
 					continue;
 				}
 
