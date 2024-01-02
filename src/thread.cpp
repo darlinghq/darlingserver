@@ -114,6 +114,7 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 		}
 	}
 
+#if defined(__x86_64__) || defined(__i386__)
 	// if we can't determine the thread id from procfs, try some other more costly methods.
 	if (_tid == -1) {
 		std::vector<pid_t> ids;
@@ -176,6 +177,7 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 			_tid = chosenId;
 		}
 	}
+#endif
 
 	if (_tid == -1) {
 		throw std::system_error(ESRCH, std::generic_category(), "Failed to find thread ID within darlingserver's namespace");
