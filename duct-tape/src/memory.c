@@ -52,8 +52,10 @@ int ftruncate(int fd, off_t length);
 
 #define MFD_CLOEXEC 0x1
 
-void dtape_memory_init(void) {
+int PAGE_SHIFT_CONST;
 
+void dtape_memory_init(void) {
+	PAGE_SHIFT_CONST = __builtin_ctzl(sysconf(_SC_PAGESIZE));
 };
 
 static uint64_t dtape_byte_count_to_page_count_round_up(uint64_t byte_count) {
