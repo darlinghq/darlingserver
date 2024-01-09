@@ -21,6 +21,10 @@ typedef struct dtape_thread_user_state {
 #if __x86_64__
 	x86_thread_state_t thread_state;
 	x86_float_state_t float_state;
+#elif __aarch64__
+	arm_thread_state_t thread_state;
+	// arm_neon_state_t neon_state;
+#warning "TODO: Implement other ARM64 states"
 #else
 	#error "Missing user states"
 #endif

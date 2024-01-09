@@ -227,6 +227,22 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 #else
 	__builtin_unreachable();
 #endif
+	} else if (task->architecture == dserver_rpc_architecture_arm64) {
+#if __aarch64__
+		arm_thread_state64_t tstate;
+		// arm_neon_state64_t nstate;
+
+		#warning "TODO: Implement neon/float state"
+		//  || copyin(float_state_address, &fstate, sizeof(fstate))
+		if (copyin(thread_state_address, &tstate, sizeof(tstate))) {
+			return -LINUX_EFAULT;
+		}
+
+		thread_set_state(current_thread(), ARM_THREAD_STATE64, (thread_state_t) &tstate, ARM_THREAD_STATE64_COUNT);
+		// thread_set_state(current_thread(), ARM_NEON_STATE64, (thread_state_t) &nstate, ARM_NEON_STATE64_COUNT);
+#else
+	__builtin_unreachable();
+#endif
 	} else {
 		dtape_log_error("dtape_thread_load_state_from_user() unimplemented for architecture: %d", task->architecture);
 		return -LINUX_ENOSYS;
@@ -274,6 +290,26 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 #else
 	__builtin_unreachable();
 #endif
+	} else if (task->architecture == dserver_rpc_architecture_arm64) {
+#if __aarch64__
+		arm_thread_state64_t tstate;
+		// arm_neon_state64_t nstate;
+		mach_msg_type_number_t count;
+
+		count = ARM_THREAD_STATE64_COUNT;
+		thread_get_state(current_thread(), ARM_THREAD_STATE64, (thread_state_t) &tstate, &count);
+
+		#warning "TODO: Implement neon/float state"
+		// count = ARM_NEON_STATE64_COUNT;
+		// thread_get_state(current_thread(), ARM_THREAD_STATE64, (thread_state_t) &nstate, &count);
+
+		// || copyout(&nstate, float_state_address, sizeof(nstate))
+		if (copyout(&tstate, thread_state_address, sizeof(tstate))) {
+			return -LINUX_EFAULT;
+		}
+#else
+	__builtin_unreachable();
+#endif
 	} else {
 		dtape_log_error("dtape_thread_save_state_to_user() unimplemented for architecture: %d", task->architecture);
 		return -LINUX_ENOSYS;
@@ -311,6 +347,8 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			mach_exception = EXC_BAD_ACCESS;
 #if defined(__x86_64__) || defined(__i386__)
 			codes[0] = EXC_I386_ALIGNFLT;
+#elif defined(__aarch64__)
+			codes[0] = EXC_ARM_DA_ALIGN;
 #else
 #error "Missing LINUX_SIGBUS conversion"
 #endif
@@ -319,6 +357,8 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			mach_exception = EXC_BAD_INSTRUCTION;
 #if defined(__x86_64__) || defined(__i386__)
 			codes[0] = EXC_I386_INVOP;
+#elif defined(__aarch64__)
+			codes[0] = EXC_ARM_UNDEFINED;
 #else
 #error "Missing LINUX_SIGILL conversion"
 #endif
@@ -331,6 +371,8 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			mach_exception = EXC_BREAKPOINT;
 #if defined(__x86_64__) || defined(__i386__)
 			codes[0] = (code == LINUX_SI_KERNEL) ? EXC_I386_BPT : EXC_I386_SGL;
+#elif defined(__aarch64__)
+			codes[0] = EXC_ARM_BREAKPOINT;
 #else
 #error "Missing LINUX_SIGTRAP conversion"
 #endif
@@ -881,6 +923,28 @@ thread_set_state(
 #else
 	__builtin_unreachable();
 #endif
+	} else if (dtask->architecture == dserver_rpc_architecture_arm64) {
+#ifdef __aarch64__
+		switch (flavor)
+		{
+			case ARM_THREAD_STATE64:
+			{
+				if (state_count < ARM_THREAD_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+
+				const arm_thread_state64_t* s = (arm_thread_state64_t*) state;
+
+				memcpy(&user_state->thread_state, s, sizeof(*s));
+				return KERN_SUCCESS;
+			}
+
+			#warning "TODO: Implement other ARM64 user states"
+			default:
+				return KERN_INVALID_ARGUMENT;
+		}
+#else
+	__builtin_unreachable();
+#endif
 	}
 	return KERN_FAILURE;
 }
@@ -1131,6 +1195,30 @@ thread_get_state_internal(
 				return KERN_NOT_SUPPORTED;
 #endif
 			}
+			default:
+				return KERN_INVALID_ARGUMENT;
+		}
+#else
+		__builtin_unreachable();
+#endif
+	} else if (dtask->architecture == dserver_rpc_architecture_arm64) {
+#ifdef __aarch64__
+		switch (flavor)
+		{
+			case ARM_THREAD_STATE64:
+			{
+				if (*state_count < ARM_THREAD_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+
+				arm_thread_state64_t* s = (arm_thread_state64_t*) state;
+				*state_count = ARM_THREAD_STATE64_COUNT;
+
+				memcpy(s, &user_state->thread_state, sizeof(*s));
+
+				return KERN_SUCCESS;
+			}
+			
+			#warning "TODO: Implement other ARM64 user states"
 			default:
 				return KERN_INVALID_ARGUMENT;
 		}

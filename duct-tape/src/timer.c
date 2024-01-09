@@ -9,6 +9,8 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <i386/rtclock_protos.h>
 #include <i386/pal_native.h>
+#elif defined(__aarch64__)
+#include <arm/rtclock.h>
 #endif
 
 #define CLOCK_MONOTONIC 1
@@ -37,6 +39,8 @@ int clock_gettime(int clk_id, struct timespec *tp);
 // stub
 #if defined(__x86_64__) || defined(__i386__)
 pal_rtc_nanotime_t pal_rtc_nanotime_info;
+#elif defined(__aarch64__)
+rtclock_data_t RTClockData = {0};
 #endif
 
 int master_cpu = 0;
@@ -52,6 +56,8 @@ void dtape_timer_init(void) {
 
 #if defined(__x86_64__) || defined(__i386__)
 uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
+#elif defined(__aarch64__)
+uint64_t ml_get_timebase() {
 #endif
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);

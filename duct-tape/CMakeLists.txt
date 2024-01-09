@@ -127,6 +127,13 @@ add_compile_definitions(
 	__DARWIN_BYTE_ORDER=__DARWIN_LITTLE_ENDIAN
 )
 
+if(TARGET_ARM64)
+	add_compile_definitions(
+		ARM64_BOARD_CONFIG_VMAPPLE
+	)
+endif(TARGET_ARM64)
+
+
 add_compile_options(
 	-fblocks
 	-ffunction-sections
@@ -358,6 +365,10 @@ set(darlingserver_duct_tape_source
 if (TARGET_i386 OR TARGET_x86_64)
 set(darlingserver_duct_tape_source ${darlingserver_duct_tape_source}
 	xnu/osfmk/i386/rtclock.c
+)
+elseif (TARGET_ARM64)
+set(darlingserver_duct_tape_source ${darlingserver_duct_tape_source}
+	xnu/osfmk/arm/rtclock.c
 )
 endif()
 

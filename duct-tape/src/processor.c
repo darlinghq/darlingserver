@@ -92,6 +92,9 @@ kern_return_t processor_info(processor_t processor, processor_flavor_t flavor, h
 #else
 			info->cpu_subtype = CPU_SUBTYPE_I386_ALL;
 #endif
+#elif __aarch64__
+			info->cpu_type = CPU_TYPE_ARM64;
+			info->cpu_subtype = CPU_SUBTYPE_ARM64_ALL;
 #else
 			#error Unknown CPU type
 #endif

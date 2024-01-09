@@ -70,6 +70,8 @@ void dtape_mutex_lock(dtape_mutex_t* mutex) {
 			libsimple_lock_unlock(&mutex->dtape_queue_lock);
 #if defined(__x86_64__) || defined(__i386__)
 			__builtin_ia32_pause();
+#elif __aarch64__
+			asm volatile("yield");
 #else
 #error Missing CPU pause for this architecture
 #endif
@@ -532,6 +534,8 @@ hw_wait_while_equals(void **address, void *current)
 #ifdef __DARLING__
 #if defined(__x86_64__) || defined(__i386__)
 			__builtin_ia32_pause();
+#elif __aarch64__
+			asm volatile("yield");
 #else
 #error Missing CPU pause for this architecture
 #endif
