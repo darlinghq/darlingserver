@@ -10,6 +10,11 @@ if (DSERVER_TOOLS)
 	add_subdirectory(tools)
 endif()
 
+if (TARGET_ARM64)
+	# Unlike Linux, Apple's uses `__arm64__` instead of `__aarch64__`
+	add_definitions(-D__arm64__)
+endif (TARGET_ARM64)
+
 if (DSERVER_ASAN)
 	add_compile_definitions(
 		DSERVER_ASAN=1

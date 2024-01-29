@@ -499,6 +499,10 @@ struct task {
 	uuid_t   task_shared_region_uuid;
 };
 
+#ifdef DARLING
+#define kernel_map (kernel_task->map)
+#endif
+
 /*
  * EXC_GUARD default delivery behavior for optional Mach port and VM guards.
  * Applied to new tasks at creation time.

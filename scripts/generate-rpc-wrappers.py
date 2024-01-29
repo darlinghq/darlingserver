@@ -172,6 +172,7 @@ calls = [
 		# these are in/out pointers
 		('thread_state', 'uint64_t'),
 		('float_state', 'uint64_t'),
+		('neon_state', 'uint64_t'),
 	], [
 		('new_bsd_signal_number', 'int32_t'),
 	]),
@@ -222,6 +223,7 @@ calls = [
 		# these are in/out pointers
 		('thread_state', 'uint64_t'),
 		('float_state', 'uint64_t'),
+		('neon_state', 'uint64_t'),
 	], []),
 
 	('s2c_perform', [], []),
