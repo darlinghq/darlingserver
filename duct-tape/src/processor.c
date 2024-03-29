@@ -31,7 +31,13 @@ void dtape_processor_init(void) {
 	simple_lock_init(&processor_list_lock, 0);
 
 	processor_count = get_nprocs_conf();
+	if (processor_count > MAX_SCHED_CPUS)
+		processor_count = MAX_SCHED_CPUS;
+
 	processor_avail_count = get_nprocs();
+	if (processor_avail_count > MAX_SCHED_CPUS)
+		processor_avail_count = MAX_SCHED_CPUS;
+
 	processor_avail_count_user = processor_avail_count;
 	primary_processor_avail_count = processor_avail_count;
 	primary_processor_avail_count_user = processor_avail_count;
