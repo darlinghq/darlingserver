@@ -266,7 +266,7 @@ void spawnLaunchd(const char* prefix)
 		initPath = DARLINGSERVER_INIT_PROCESS;
 	}
 
-	setenv("DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
+	setenv("__mldr_DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
 	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, initPath, NULL);
 
