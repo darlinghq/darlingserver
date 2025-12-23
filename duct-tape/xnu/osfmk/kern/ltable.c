@@ -25,6 +25,9 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#if defined(__DARLING__)
+#include <kern/task.h>
+#endif
 #include <kern/cpu_data.h>
 #include <kern/kern_types.h>
 #include <kern/clock.h>

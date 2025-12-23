@@ -149,6 +149,7 @@ timebase_callback(struct timebase_freq_t * freq)
 int
 rtclock_init(void)
 {
+#ifndef __DARLING__
 	uint64_t     abstime;
 	cpu_data_t * cdp;
 
@@ -163,6 +164,7 @@ rtclock_init(void)
 	abstime = mach_absolute_time();
 	cdp->rtcPop = EndOfAllTime;                                     /* Init Pop time */
 	timer_resync_deadlines();                                       /* Start the timers going */
+#endif // __DARLING__
 
 	return 1;
 }

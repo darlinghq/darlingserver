@@ -61,14 +61,24 @@ typedef enum e_waitq_lock_state {
 
 /* Opaque sizes and alignment used for struct verification */
 #if __arm__ || __arm64__
-	#define WQ_OPAQUE_ALIGN   __BIGGEST_ALIGNMENT__
-	#define WQS_OPAQUE_ALIGN  __BIGGEST_ALIGNMENT__
-	#if __arm__
-		#define WQ_OPAQUE_SIZE   32
-		#define WQS_OPAQUE_SIZE  48
+	#ifdef __DARLING__
+		#define WQ_OPAQUE_ALIGN   8
+		#define WQS_OPAQUE_ALIGN  8
+		#if __arm__
+		#else
+			#define WQ_OPAQUE_SIZE   72
+			#define WQS_OPAQUE_SIZE  88
+		#endif
 	#else
-		#define WQ_OPAQUE_SIZE   40
-		#define WQS_OPAQUE_SIZE  56
+		#define WQ_OPAQUE_ALIGN   __BIGGEST_ALIGNMENT__
+		#define WQS_OPAQUE_ALIGN  __BIGGEST_ALIGNMENT__
+		#if __arm__
+			#define WQ_OPAQUE_SIZE   32
+			#define WQS_OPAQUE_SIZE  48
+		#else
+			#define WQ_OPAQUE_SIZE   40
+			#define WQS_OPAQUE_SIZE  56
+		#endif
 	#endif
 #elif __x86_64__
 	#define WQ_OPAQUE_ALIGN   8

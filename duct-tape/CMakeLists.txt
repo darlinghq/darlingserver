@@ -127,6 +127,13 @@ add_compile_definitions(
 	__DARWIN_BYTE_ORDER=__DARWIN_LITTLE_ENDIAN
 )
 
+if(TARGET_ARM64)
+	add_compile_definitions(
+		ARM64_BOARD_CONFIG_VMAPPLE
+	)
+endif(TARGET_ARM64)
+
+
 add_compile_options(
 	-fblocks
 	-ffunction-sections
@@ -253,7 +260,7 @@ add_custom_target(kernel_mig_generate
 		${CMAKE_CURRENT_BINARY_DIR}/xnu/osfmk/UserNotification/UNDReplyServer.c
 )
 
-add_library(darlingserver_duct_tape STATIC
+set(darlingserver_duct_tape_source
 	src/init.c
 	src/misc.c
 	src/stubs.c
@@ -321,8 +328,6 @@ add_library(darlingserver_duct_tape STATIC
 	xnu/osfmk/ipc/mig_log.c
 	xnu/osfmk/ipc/ipc_eventlink.c
 
-	xnu/osfmk/i386/rtclock.c
-
 	xnu/osfmk/prng/prng_random.c
 
 	xnu/osfmk/vm/vm32_user.c
@@ -356,6 +361,18 @@ add_library(darlingserver_duct_tape STATIC
 
 	pthread/kern_synch.c
 )
+
+if (TARGET_i386 OR TARGET_x86_64)
+set(darlingserver_duct_tape_source ${darlingserver_duct_tape_source}
+	xnu/osfmk/i386/rtclock.c
+)
+elseif (TARGET_ARM64)
+set(darlingserver_duct_tape_source ${darlingserver_duct_tape_source}
+	xnu/osfmk/arm/rtclock.c
+)
+endif()
+
+add_library(darlingserver_duct_tape STATIC ${darlingserver_duct_tape_source})
 
 set_source_files_properties(pthread/kern_synch.c PROPERTIES
 	COMPILE_FLAGS "-I${CMAKE_CURRENT_SOURCE_DIR}/pthread"

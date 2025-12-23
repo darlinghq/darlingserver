@@ -457,10 +457,7 @@ extern kern_return_t vm_map_wire_and_extract_kernel(
 
 #endif  /* XNU_KERNEL_PRIVATE */
 
-#ifdef __DARLING__
-#include <kern/task.h>
-#define kernel_map (kernel_task->map)
-#else
+#ifndef __DARLING__
 extern vm_map_t kernel_map;
 #endif // __DARLING__
 extern vm_map_t kernel_pageable_map;

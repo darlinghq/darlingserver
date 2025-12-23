@@ -46,7 +46,11 @@
 #include <mach/mach_types.h>
 #include <machine/thread.h>
 
+#ifdef DARLING
+thread_t current_thread(void);
+#else
 #define current_thread()        current_thread_fast()
+#endif
 
 static inline __attribute__((const)) thread_t
 current_thread_fast(void)

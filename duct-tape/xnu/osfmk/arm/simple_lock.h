@@ -76,7 +76,12 @@
 extern uint32_t LockTimeOut;                    /* Number of hardware ticks of a lock timeout */
 extern uint32_t LockTimeOutUsec;                /* Number of microseconds for lock timeout */
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/simple_lock.h>
+#else
 typedef lck_spin_t usimple_lock_data_t, *usimple_lock_t;
+#endif // __DARLING__
+
 #else /* MACH_KERNEL_PRIVATE */
 
 #if defined(__arm__)
@@ -115,9 +120,13 @@ typedef usimple_lock_data_t     simple_lock_data_t;
 
 #define MACHINE_SIMPLE_LOCK
 
+#ifdef DARLING
+#define simple_lock_init(l, t)   usimple_lock_init(l,t)
+#else
 extern void     arm_usimple_lock_init(simple_lock_t, __unused unsigned short);
 
 #define simple_lock_init(l, t)   arm_usimple_lock_init(l,t)
+#endif
 
 #if LOCK_STATS
 #define simple_lock(l, grp)                  lck_spin_lock_grp(l, grp)

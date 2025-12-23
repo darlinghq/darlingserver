@@ -497,11 +497,13 @@ extern void * pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t data, ui
 #define pmap_attribute(pmap, addr, size, attr, value)                       \
 	(KERN_INVALID_ADDRESS)
 
+#ifndef DARLING
 #define copyinmsg(from, to, cnt)                                                        \
 	copyin(from, to, cnt)
 
 #define copyoutmsg(from, to, cnt)                                                       \
 	copyout(from, to, cnt)
+#endif
 
 extern pmap_paddr_t kvtophys(vm_offset_t va);
 extern vm_map_address_t phystokv(pmap_paddr_t pa);

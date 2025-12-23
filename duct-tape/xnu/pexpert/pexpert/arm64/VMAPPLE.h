@@ -37,7 +37,10 @@
 
 #define CPU_HAS_APPLE_PAC         1
 #define HAS_PARAVIRTUALIZED_PAC   1
+#ifndef DARLING
+// Why...
 #define 1
+#endif
 #define HAS_GIC_V3                1
 
 #define __ARM_PAN_AVAILABLE__     1

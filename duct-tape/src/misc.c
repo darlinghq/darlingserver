@@ -39,6 +39,23 @@ char version[] = "Darling 11.5";
 		[x86_PAGEIN_STATE]              = x86_PAGEIN_STATE_COUNT
 	};
 	// </copied>
+#elif defined(__aarch64__)
+	// <copied from="xnu://7195.141.2/osfmk/arm64/status.c"
+	unsigned int _MachineStateCount[] = {
+		[ARM_UNIFIED_THREAD_STATE] = ARM_UNIFIED_THREAD_STATE_COUNT,
+		[ARM_VFP_STATE] = ARM_VFP_STATE_COUNT,
+		[ARM_EXCEPTION_STATE] = ARM_EXCEPTION_STATE_COUNT,
+		[ARM_DEBUG_STATE] = ARM_DEBUG_STATE_COUNT,
+		[ARM_THREAD_STATE64] = ARM_THREAD_STATE64_COUNT,
+		[ARM_EXCEPTION_STATE64] = ARM_EXCEPTION_STATE64_COUNT,
+		[ARM_THREAD_STATE32] = ARM_THREAD_STATE32_COUNT,
+		[ARM_DEBUG_STATE32] = ARM_DEBUG_STATE32_COUNT,
+		[ARM_DEBUG_STATE64] = ARM_DEBUG_STATE64_COUNT,
+		[ARM_NEON_STATE] = ARM_NEON_STATE_COUNT,
+		[ARM_NEON_STATE64] = ARM_NEON_STATE64_COUNT,
+		[ARM_PAGEIN_STATE] = ARM_PAGEIN_STATE_COUNT,
+	};
+	// </copied>
 #else
 	#error _MachineStateCount not defined on this architecture
 #endif
@@ -101,10 +118,11 @@ unsigned int waitq_held(struct waitq* wq) {
 	return wq->dtape_waitq_interlock.dtape_interlock.dtape_interlock.dtape_mutex.dtape_owner == (uintptr_t)current_thread();
 };
 
-#if __x86_64__
+#if __x86_64__ || __aarch64__
 
 //
 // <copied from="xnu://7195.141.2/osfmk/x86_64/loose_ends.c">
+// <copied from="xnu://7195.141.2/osfmk/arm64/loose_ends.c">
 //
 
 /*
@@ -120,8 +138,33 @@ fls(unsigned int mask)
 	return (sizeof(mask) << 3) - __builtin_clz(mask);
 }
 
+#endif
+
+//
+// Since this is the only method we need from `bsd_kern.c`, I rather not
+// `#ifndef` all of the source code that we don't need in that file.
+//
+// <copied from="xnu://7195.141.2/osfmk/kern/bsd_kern.c">
+//
+
+#ifdef __aarch64__
+
+task_t
+get_threadtask(thread_t th)
+{
+	return th->task;
+}
+
+#endif
+
 //
 // </copied>
 //
 
+// Unlike i386, the preemption methods are not 
+// inline for arm. So we will need to create stubs.
+#ifdef __aarch64__
+int get_preemption_level(void) { return 0; }
+void _enable_preemption(void) {}
+void _disable_preemption(void) {}
 #endif
