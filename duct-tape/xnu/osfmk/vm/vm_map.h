@@ -1566,12 +1566,12 @@ static inline bool
 VM_MAP_IS_EXOTIC(
 	vm_map_t map __unused)
 {
-#if __arm64__
+#if __arm64__ && !defined(__DARLING__)
 	if (VM_MAP_PAGE_SHIFT(map) < PAGE_SHIFT ||
 	    pmap_is_exotic(map->pmap)) {
 		return true;
 	}
-#endif /* __arm64__ */
+#endif /* __arm64__ && !__DARLING__ */
 	return false;
 }
 

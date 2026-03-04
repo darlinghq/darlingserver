@@ -363,13 +363,17 @@ int (copyout)(const void* kernel_addr, user_addr_t user_addr, vm_size_t nbytes) 
 	return (copyoutmap(current_map(), (void*)kernel_addr, user_addr, nbytes) == KERN_SUCCESS) ? 0 : 1;
 };
 
+#ifndef copyinmsg
 int copyinmsg(const user_addr_t user_addr, char* kernel_addr, mach_msg_size_t nbytes) {
 	return (copyin)(user_addr, kernel_addr, nbytes);
 };
+#endif
 
+#ifndef copyoutmsg
 int copyoutmsg(const char* kernel_addr, user_addr_t user_addr, mach_msg_size_t nbytes) {
 	return (copyout)(kernel_addr, user_addr, nbytes);
 };
+#endif
 
 kern_return_t kmem_suballoc(vm_map_t parent, vm_offset_t* addr, vm_size_t size, boolean_t pageable, int flags, vm_map_kernel_flags_t vmk_flags, vm_tag_t tag, vm_map_t* new_map) {
 	// this is enough to satisfy ipc_init
