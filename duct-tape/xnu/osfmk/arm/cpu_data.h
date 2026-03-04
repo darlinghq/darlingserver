@@ -40,10 +40,13 @@
 #include <kern/kern_types.h>
 #include <kern/processor.h>
 #include <pexpert/pexpert.h>
+#ifndef __DARLING__
 #include <arm/thread.h>
+#endif
 #include <arm/proc_reg.h>
 
 #include <mach/mach_types.h>
+#ifndef __DARLING__
 #include <machine/thread.h>
 
 #define current_thread()        current_thread_fast()
@@ -57,6 +60,10 @@ current_thread_fast(void)
 	return (thread_t)(__builtin_arm_mrc(15, 0, 13, 0, 4));  // TPIDRPRW
 #endif
 }
+#else /* __DARLING__ */
+// Darling provides its own current_thread() function
+extern thread_t current_thread(void);
+#endif /* !__DARLING__ */
 
 /*
  * The "volatile" flavor of current_thread() is intended for use by

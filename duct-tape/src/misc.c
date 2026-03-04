@@ -12,6 +12,10 @@
 
 #include <sys/types.h>
 
+#if __aarch64__ || __arm64__
+#include <mach/arm/thread_status.h>
+#endif
+
 char version[] = "Darling 11.5";
 
 #if __x86_64__ || __i386__
@@ -39,6 +43,21 @@ char version[] = "Darling 11.5";
 		[x86_PAGEIN_STATE]              = x86_PAGEIN_STATE_COUNT
 	};
 	// </copied>
+#elif __aarch64__
+	unsigned int _MachineStateCount[] = {
+		[ARM_THREAD_STATE]              = ARM_THREAD_STATE_COUNT,
+		[ARM_VFP_STATE]                 = ARM_VFP_STATE_COUNT,
+		[ARM_EXCEPTION_STATE]           = ARM_EXCEPTION_STATE_COUNT,
+		[ARM_DEBUG_STATE]               = ARM_DEBUG_STATE_COUNT,
+		[ARM_THREAD_STATE64]            = ARM_THREAD_STATE64_COUNT,
+		[ARM_EXCEPTION_STATE64]         = ARM_EXCEPTION_STATE64_COUNT,
+		[ARM_THREAD_STATE32]            = ARM_THREAD_STATE32_COUNT,
+		[ARM_DEBUG_STATE32]             = ARM_DEBUG_STATE32_COUNT,
+		[ARM_DEBUG_STATE64]             = ARM_DEBUG_STATE64_COUNT,
+		[ARM_NEON_STATE]                = ARM_NEON_STATE_COUNT,
+		[ARM_NEON_STATE64]              = ARM_NEON_STATE64_COUNT,
+		[ARM_CPMU_STATE64]              = 0,
+	};
 #else
 	#error _MachineStateCount not defined on this architecture
 #endif
@@ -124,4 +143,58 @@ fls(unsigned int mask)
 // </copied>
 //
 
-#endif
+#endif /* __x86_64__ */
+
+#if __aarch64__ || __arm64__
+
+// ARM64-specific stubs and definitions
+
+#include <kern/simple_lock.h>
+
+// PAGE_SHIFT_CONST is extern on ARM64 (variable page size support in XNU).
+// Darling uses a fixed 4K page size.
+int PAGE_SHIFT_CONST = 12;
+
+// ARM simple lock init (normally in arm/locks_arm.c)
+void arm_usimple_lock_init(simple_lock_t l, unsigned short type) {
+	memset(l, 0, sizeof(*l));
+}
+
+// Thread task accessor (normally in kern/bsd_kern.c)
+task_t get_threadtask(thread_t th) {
+	return th->task;
+}
+
+// Preemption stubs (normally in arm/machine_routines.c)
+void _disable_preemption(void) {
+	// no-op in Darling
+}
+
+void _enable_preemption(void) {
+	// no-op in Darling
+}
+
+int get_preemption_level(void) {
+	return 0;
+}
+
+// Thread group stubs (normally in arm/machine_routines_common.c)
+void machine_thread_group_blocked(void *tg_blocked, void *tg_blocking, uint32_t flags, thread_t blocked_thread) {
+	// no-op in Darling
+}
+
+void machine_thread_group_unblocked(void *tg_unblocked, void *tg_unblocking, uint32_t flags, thread_t unblocked_thread) {
+	// no-op in Darling
+}
+
+// fls for ARM64
+int
+fls(unsigned int mask)
+{
+	if (mask == 0) {
+		return 0;
+	}
+	return (sizeof(mask) << 3) - __builtin_clz(mask);
+}
+
+#endif /* __aarch64__ || __arm64__ */

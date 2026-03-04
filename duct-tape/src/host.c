@@ -65,6 +65,9 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 #else
 			basic_info->cpu_subtype = CPU_SUBTYPE_I386_ALL;
 #endif
+#elif __aarch64__
+			basic_info->cpu_type = CPU_TYPE_ARM64;
+			basic_info->cpu_subtype = CPU_SUBTYPE_ARM64_ALL;
 #else
 			#error Unknown CPU type
 #endif
