@@ -155,9 +155,13 @@ fls(unsigned int mask)
 // Darling uses a fixed 4K page size.
 int PAGE_SHIFT_CONST = 12;
 
-// ARM simple lock init (normally in arm/locks_arm.c)
+// ARM simple lock init (normally in arm/locks_arm.c).
+// The arm/simple_lock.h macro `simple_lock_init(l, t)` maps to this;
+// delegate to Darling's usimple_lock_init which properly initializes
+// the embedded lck_spin_t (see src/locks.c).
+extern void usimple_lock_init(usimple_lock_t lock, unsigned short tag);
 void arm_usimple_lock_init(simple_lock_t l, unsigned short type) {
-	memset(l, 0, sizeof(*l));
+	usimple_lock_init((usimple_lock_t)l, type);
 }
 
 // Thread task accessor (normally in kern/bsd_kern.c)
@@ -178,7 +182,9 @@ int get_preemption_level(void) {
 	return 0;
 }
 
-// Thread group stubs (normally in arm/machine_routines_common.c)
+// Thread group stubs (normally in arm/machine_routines_common.c).
+// arm/proc_reg.h sets CONFIG_THREAD_GROUPS=1 on ARM64, so ipc_port_thread_group_*
+// in ipc_port.c will reference these. Darling doesn't implement thread groups.
 void machine_thread_group_blocked(void *tg_blocked, void *tg_blocking, uint32_t flags, thread_t blocked_thread) {
 	// no-op in Darling
 }
