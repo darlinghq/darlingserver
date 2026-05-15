@@ -85,8 +85,12 @@ typedef arm_kernel_context_t machine_thread_kernel_state;
 #else
 typedef struct arm_saved_state machine_thread_kernel_state;
 #endif
-#include <kern/thread_kernel_state.h>
 
+// NOTE: struct machine_thread must be defined BEFORE including
+// thread_kernel_state.h. On Darling, that header transitively pulls in
+// kern/task.h -> kern/thread.h, which embeds `struct machine_thread machine`
+// by value — so the struct must be complete at that point. (On upstream XNU
+// vm_kern.h does not include task.h, so the circular dependency doesn't arise.)
 struct machine_thread {
 #if __ARM_USER_PROTECT__
 	unsigned int              uptw_ttb;
@@ -164,7 +168,9 @@ struct machine_thread {
 	uint64_t                  reserved10;
 #endif
 };
-#endif
+
+#include <kern/thread_kernel_state.h>
+#endif /* MACH_KERNEL_PRIVATE */
 
 extern struct arm_saved_state *    get_user_regs(thread_t);
 extern struct arm_saved_state *    find_user_regs(thread_t);
