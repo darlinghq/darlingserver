@@ -701,6 +701,16 @@ int main(int argc, char** argv) {
 
 		close(childWaitFDs[1]);
 
+		// Detach launchd into its own session + process group, so that any
+		// signals it (or its children) broadcast via kill(0/-1, ...) or
+		// killpg(0, ...) do not propagate back up to darlingserver / darling /
+		// timeout (which all share the same pgrp by default). On ARM64 we
+		// observed launchd's startup broadcasting SIGTRAP, killing the parents.
+		if (setsid() == (pid_t)-1) {
+			fprintf(stderr, "Warning: setsid() failed before launchd: %s\n", strerror(errno));
+			// continue anyway
+		}
+
 		snprintf(putOld, sizeof(putOld), "%s/proc", prefix);
 
 		// mount procfs for our new PID namespace
