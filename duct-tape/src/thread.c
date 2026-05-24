@@ -285,7 +285,7 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 		if (copyout(&tstate, thread_state_address, sizeof(tstate)) || copyout(&fstate, float_state_address, sizeof(fstate))) {
 			return -LINUX_EFAULT;
 		}
-	}
+	} else
 #endif
 	if (task->architecture == dserver_rpc_architecture_arm64) {
 		arm_thread_state64_t tstate;
@@ -932,12 +932,21 @@ thread_set_state(
 			}
 			case ARM_THREAD_STATE:
 			{
-				// Unified thread state: auto-select 64-bit for ARM64 tasks
-				arm_thread_state64_t* s64 = (arm_thread_state64_t*) state;
-				if (state_count < ARM_THREAD_STATE64_COUNT)
+				// ARM_THREAD_STATE is the unified flavor. Darwin clients (objc,
+				// WebKit, ...) pass an arm_unified_thread_state_t (header + union);
+				// several Darling-internal RPC paths (signal/exception, workqueue)
+				// pass a bare arm_thread_state64_t. Distinguish by count, the same
+				// way XNU's machine_thread_set_state does.
+				if (state_count >= ARM_UNIFIED_THREAD_STATE_COUNT) {
+					const arm_unified_thread_state_t* u = (const arm_unified_thread_state_t*) state;
+					if (u->ash.flavor != ARM_THREAD_STATE64)
+						return KERN_INVALID_ARGUMENT;
+					memcpy(&user_state->thread_state.ts_64, &u->ts_64, sizeof(u->ts_64));
+				} else if (state_count >= ARM_THREAD_STATE64_COUNT) {
+					memcpy(&user_state->thread_state.ts_64, state, sizeof(arm_thread_state64_t));
+				} else {
 					return KERN_INVALID_ARGUMENT;
-
-				memcpy(&user_state->thread_state.ts_64, s64, sizeof(*s64));
+				}
 				return KERN_SUCCESS;
 			}
 			case ARM_DEBUG_STATE64:
@@ -1233,14 +1242,22 @@ thread_get_state_internal(
 			}
 			case ARM_THREAD_STATE:
 			{
-				// Unified thread state: return 64-bit for ARM64 tasks
-				arm_thread_state64_t* s = (arm_thread_state64_t*) state;
-				if (*state_count < ARM_THREAD_STATE64_COUNT)
+				// Mirror the set path: emit a unified arm_unified_thread_state_t
+				// when the caller's buffer is unified-sized (Darwin clients), else
+				// a bare arm_thread_state64_t for Darling-internal callers.
+				if (*state_count >= ARM_UNIFIED_THREAD_STATE_COUNT) {
+					arm_unified_thread_state_t* u = (arm_unified_thread_state_t*) state;
+					memset(u, 0, sizeof(*u));
+					u->ash.flavor = ARM_THREAD_STATE64;
+					u->ash.count = ARM_THREAD_STATE64_COUNT;
+					memcpy(&u->ts_64, &user_state->thread_state.ts_64, sizeof(u->ts_64));
+					*state_count = ARM_UNIFIED_THREAD_STATE_COUNT;
+				} else if (*state_count >= ARM_THREAD_STATE64_COUNT) {
+					memcpy(state, &user_state->thread_state.ts_64, sizeof(arm_thread_state64_t));
+					*state_count = ARM_THREAD_STATE64_COUNT;
+				} else {
 					return KERN_INVALID_ARGUMENT;
-
-				*state_count = ARM_THREAD_STATE64_COUNT;
-				memcpy(s, &user_state->thread_state.ts_64, sizeof(*s));
-
+				}
 				return KERN_SUCCESS;
 			}
 			case ARM_DEBUG_STATE64:

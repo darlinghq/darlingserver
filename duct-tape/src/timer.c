@@ -11,28 +11,7 @@
 #include <i386/pal_native.h>
 #endif
 
-#define CLOCK_MONOTONIC 1
-
-// copied from glibc's headers
-struct timespec
-{
-  long int tv_sec;		/* Seconds.  */
-#if __WORDSIZE == 64 \
-  || (defined __SYSCALL_WORDSIZE && __SYSCALL_WORDSIZE == 64) \
-  || __TIMESIZE == 32
-  long int tv_nsec;	/* Nanoseconds.  */
-#else
-# if __BYTE_ORDER == __BIG_ENDIAN
-  int: 32;           /* Padding.  */
-  long int tv_nsec;  /* Nanoseconds.  */
-# else
-  long int tv_nsec;  /* Nanoseconds.  */
-  int: 32;           /* Padding.  */
-# endif
-#endif
-};
-
-int clock_gettime(int clk_id, struct timespec *tp);
+#include "linux_clock.h"
 
 #if __x86_64__ || __i386__
 pal_rtc_nanotime_t pal_rtc_nanotime_info;

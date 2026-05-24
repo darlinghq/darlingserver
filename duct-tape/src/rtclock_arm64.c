@@ -10,14 +10,7 @@
 #include <kern/misc_protos.h>
 #include <kern/timer_queue.h>
 
-#define CLOCK_MONOTONIC 1
-
-struct timespec {
-	long int tv_sec;
-	long int tv_nsec;
-};
-
-int clock_gettime(int clk_id, struct timespec *tp);
+#include "linux_clock.h"
 
 static uint64_t
 rtc_nanotime_read(void)
