@@ -10,10 +10,21 @@
 #include <kern/ipc_tt.h>
 #include <kern/policy_internal.h>
 #include <mach/thread_act.h>
+#if defined(__aarch64__)
+#include <mach/arm/thread_status.h>
+#include <mach/arm/exception.h>
+#endif
 #include <sys/systm.h>
 #include <sys/ux_exception.h>
 
 #include <stdlib.h>
+
+// On ARM64, arm/cpu_data.h defines current_thread() as a macro expanding to
+// current_thread_fast(). We need to undef it because Darling defines its own
+// current_thread() function and uses dtape_hooks->current_thread().
+#ifdef current_thread
+#undef current_thread
+#endif
 
 #include <rtsig.h>
 
@@ -42,6 +53,8 @@ int thread_max = CONFIG_THREAD_MAX;
 kern_return_t thread_set_state(register thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t state_count);
 
 kern_return_t thread_get_state(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* state_count);
+
+thread_t current_thread(void);
 
 dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* context) {
 	dtape_thread_t* thread = malloc(sizeof(dtape_thread_t));
@@ -199,6 +212,7 @@ void* dtape_thread_context(dtape_thread_t* thread) {
 int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address) {
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
+#if __x86_64__ || __i386__
 	if (task->architecture == dserver_rpc_architecture_x86_64) {
 		x86_thread_state64_t tstate;
 		x86_float_state64_t fstate;
@@ -219,6 +233,18 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 
 		thread_set_state(current_thread(), x86_THREAD_STATE32, (thread_state_t) &tstate, x86_THREAD_STATE32_COUNT);
 		thread_set_state(current_thread(), x86_FLOAT_STATE32, (thread_state_t) &fstate, x86_FLOAT_STATE32_COUNT);
+	} else
+#endif
+	if (task->architecture == dserver_rpc_architecture_arm64) {
+		arm_thread_state64_t tstate;
+		arm_neon_state64_t fstate;
+
+		if (copyin(thread_state_address, &tstate, sizeof(tstate)) || copyin(float_state_address, &fstate, sizeof(fstate))) {
+			return -LINUX_EFAULT;
+		}
+
+		thread_set_state(current_thread(), ARM_THREAD_STATE64, (thread_state_t) &tstate, ARM_THREAD_STATE64_COUNT);
+		thread_set_state(current_thread(), ARM_NEON_STATE64, (thread_state_t) &fstate, ARM_NEON_STATE64_COUNT);
 	} else {
 		dtape_log_error("dtape_thread_load_state_from_user() unimplemented for architecture: %d", task->architecture);
 		return -LINUX_ENOSYS;
@@ -230,6 +256,7 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address) {
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
+#if __x86_64__ || __i386__
 	if (task->architecture == dserver_rpc_architecture_x86_64) {
 		x86_thread_state64_t tstate;
 		x86_float_state64_t fstate;
@@ -254,6 +281,22 @@ int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_sta
 
 		count = x86_FLOAT_STATE32_COUNT;
 		thread_get_state(current_thread(), x86_FLOAT_STATE32, (thread_state_t) &fstate, &count);
+
+		if (copyout(&tstate, thread_state_address, sizeof(tstate)) || copyout(&fstate, float_state_address, sizeof(fstate))) {
+			return -LINUX_EFAULT;
+		}
+	} else
+#endif
+	if (task->architecture == dserver_rpc_architecture_arm64) {
+		arm_thread_state64_t tstate;
+		arm_neon_state64_t fstate;
+		mach_msg_type_number_t count;
+
+		count = ARM_THREAD_STATE64_COUNT;
+		thread_get_state(current_thread(), ARM_THREAD_STATE64, (thread_state_t) &tstate, &count);
+
+		count = ARM_NEON_STATE64_COUNT;
+		thread_get_state(current_thread(), ARM_NEON_STATE64, (thread_state_t) &fstate, &count);
 
 		if (copyout(&tstate, thread_state_address, sizeof(tstate)) || copyout(&fstate, float_state_address, sizeof(fstate))) {
 			return -LINUX_EFAULT;
@@ -293,11 +336,19 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			break;
 		case LINUX_SIGBUS:
 			mach_exception = EXC_BAD_ACCESS;
+#if defined(__aarch64__)
+			codes[0] = EXC_ARM_DA_ALIGN;
+#else
 			codes[0] = EXC_I386_ALIGNFLT;
+#endif
 			break;
 		case LINUX_SIGILL:
 			mach_exception = EXC_BAD_INSTRUCTION;
+#if defined(__aarch64__)
+			codes[0] = EXC_ARM_UNDEFINED;
+#else
 			codes[0] = EXC_I386_INVOP;
+#endif
 			break;
 		case LINUX_SIGFPE:
 			mach_exception = EXC_ARITHMETIC;
@@ -305,7 +356,11 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 			break;
 		case LINUX_SIGTRAP:
 			mach_exception = EXC_BREAKPOINT;
+#if defined(__aarch64__)
+			codes[0] = EXC_ARM_BREAKPOINT;
+#else
 			codes[0] = (code == LINUX_SI_KERNEL) ? EXC_I386_BPT : EXC_I386_SGL;
+#endif
 
 			if (code == LINUX_TRAP_HWBKPT) {
 #if 0
@@ -621,6 +676,7 @@ thread_set_state(
 	dtape_task_t* dtask = dtape_task_for_thread(dthread);
 	dtape_thread_user_state_t* user_state = LIST_FIRST(&dthread->user_states);
 
+#if __x86_64__ || __i386__
 	if (dtask->architecture == dserver_rpc_architecture_x86_64 || dtask->architecture == dserver_rpc_architecture_i386) {
 		switch (flavor)
 		{
@@ -850,6 +906,59 @@ thread_set_state(
 				return KERN_INVALID_ARGUMENT;
 		}
 	}
+#endif
+	if (dtask->architecture == dserver_rpc_architecture_arm64) {
+		switch (flavor)
+		{
+			case ARM_THREAD_STATE64:
+			{
+				if (state_count < ARM_THREAD_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+
+				const arm_thread_state64_t* s = (arm_thread_state64_t*) state;
+
+				memcpy(&user_state->thread_state.ts_64, s, sizeof(*s));
+				return KERN_SUCCESS;
+			}
+			case ARM_NEON_STATE64:
+			{
+				if (state_count < ARM_NEON_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+
+				const arm_neon_state64_t* s = (arm_neon_state64_t*) state;
+
+				memcpy(&user_state->float_state, s, sizeof(*s));
+				return KERN_SUCCESS;
+			}
+			case ARM_THREAD_STATE:
+			{
+				// ARM_THREAD_STATE is the unified flavor. Darwin clients (objc,
+				// WebKit, ...) pass an arm_unified_thread_state_t (header + union);
+				// several Darling-internal RPC paths (signal/exception, workqueue)
+				// pass a bare arm_thread_state64_t. Distinguish by count, the same
+				// way XNU's machine_thread_set_state does.
+				if (state_count >= ARM_UNIFIED_THREAD_STATE_COUNT) {
+					const arm_unified_thread_state_t* u = (const arm_unified_thread_state_t*) state;
+					if (u->ash.flavor != ARM_THREAD_STATE64)
+						return KERN_INVALID_ARGUMENT;
+					memcpy(&user_state->thread_state.ts_64, &u->ts_64, sizeof(u->ts_64));
+				} else if (state_count >= ARM_THREAD_STATE64_COUNT) {
+					memcpy(&user_state->thread_state.ts_64, state, sizeof(arm_thread_state64_t));
+				} else {
+					return KERN_INVALID_ARGUMENT;
+				}
+				return KERN_SUCCESS;
+			}
+			case ARM_DEBUG_STATE64:
+			{
+				// TODO: ARM64 debug state
+				dtape_stub("ARM64 debug state");
+				return KERN_NOT_SUPPORTED;
+			}
+			default:
+				return KERN_INVALID_ARGUMENT;
+		}
+	}
 	return KERN_FAILURE;
 }
 
@@ -869,6 +978,7 @@ thread_get_state_internal(
 	// it currently only does something on ARM64 when the authenticated pointers (`ptrauth_calls`) feature is enabled,
 	// so i think it's safe to say we can ignore it in Darling (even when we get ARM support)
 
+#if __x86_64__ || __i386__
 	if (dtask->architecture == dserver_rpc_architecture_x86_64 || dtask->architecture == dserver_rpc_architecture_i386) {
 		switch (flavor)
 		{
@@ -1097,6 +1207,63 @@ thread_get_state_internal(
 				// TODO
 				return KERN_NOT_SUPPORTED;
 #endif
+			}
+			default:
+				return KERN_INVALID_ARGUMENT;
+		}
+	}
+#endif
+	if (dtask->architecture == dserver_rpc_architecture_arm64) {
+		switch (flavor)
+		{
+			case ARM_THREAD_STATE64:
+			{
+				if (*state_count < ARM_THREAD_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+
+				arm_thread_state64_t* s = (arm_thread_state64_t*) state;
+				*state_count = ARM_THREAD_STATE64_COUNT;
+
+				memcpy(s, &user_state->thread_state.ts_64, sizeof(*s));
+
+				return KERN_SUCCESS;
+			}
+			case ARM_NEON_STATE64:
+			{
+				if (*state_count < ARM_NEON_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+
+				arm_neon_state64_t* s = (arm_neon_state64_t*) state;
+				*state_count = ARM_NEON_STATE64_COUNT;
+
+				memcpy(s, &user_state->float_state, sizeof(*s));
+
+				return KERN_SUCCESS;
+			}
+			case ARM_THREAD_STATE:
+			{
+				// Mirror the set path: emit a unified arm_unified_thread_state_t
+				// when the caller's buffer is unified-sized (Darwin clients), else
+				// a bare arm_thread_state64_t for Darling-internal callers.
+				if (*state_count >= ARM_UNIFIED_THREAD_STATE_COUNT) {
+					arm_unified_thread_state_t* u = (arm_unified_thread_state_t*) state;
+					memset(u, 0, sizeof(*u));
+					u->ash.flavor = ARM_THREAD_STATE64;
+					u->ash.count = ARM_THREAD_STATE64_COUNT;
+					memcpy(&u->ts_64, &user_state->thread_state.ts_64, sizeof(u->ts_64));
+					*state_count = ARM_UNIFIED_THREAD_STATE_COUNT;
+				} else if (*state_count >= ARM_THREAD_STATE64_COUNT) {
+					memcpy(state, &user_state->thread_state.ts_64, sizeof(arm_thread_state64_t));
+					*state_count = ARM_THREAD_STATE64_COUNT;
+				} else {
+					return KERN_INVALID_ARGUMENT;
+				}
+				return KERN_SUCCESS;
+			}
+			case ARM_DEBUG_STATE64:
+			{
+				// TODO: ARM64 debug state
+				return KERN_NOT_SUPPORTED;
 			}
 			default:
 				return KERN_INVALID_ARGUMENT;

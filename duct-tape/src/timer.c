@@ -6,34 +6,16 @@
 #include <kern/timer_queue.h>
 #include <mach/mach_time.h>
 
+#if __x86_64__ || __i386__
 #include <i386/rtclock_protos.h>
 #include <i386/pal_native.h>
-
-#define CLOCK_MONOTONIC 1
-
-// copied from glibc's headers
-struct timespec
-{
-  long int tv_sec;		/* Seconds.  */
-#if __WORDSIZE == 64 \
-  || (defined __SYSCALL_WORDSIZE && __SYSCALL_WORDSIZE == 64) \
-  || __TIMESIZE == 32
-  long int tv_nsec;	/* Nanoseconds.  */
-#else
-# if __BYTE_ORDER == __BIG_ENDIAN
-  int: 32;           /* Padding.  */
-  long int tv_nsec;  /* Nanoseconds.  */
-# else
-  long int tv_nsec;  /* Nanoseconds.  */
-  int: 32;           /* Padding.  */
-# endif
 #endif
-};
 
-int clock_gettime(int clk_id, struct timespec *tp);
+#include "linux_clock.h"
 
-// stub
+#if __x86_64__ || __i386__
 pal_rtc_nanotime_t pal_rtc_nanotime_info;
+#endif
 
 int master_cpu = 0;
 
@@ -46,11 +28,13 @@ void dtape_timer_init(void) {
 	mpqueue_init(&timer_queue, LCK_GRP_NULL, LCK_ATTR_NULL);
 };
 
+#if __x86_64__ || __i386__
 uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (ts.tv_sec * NSEC_PER_SEC) + ts.tv_nsec;
 };
+#endif
 
 void dtape_timer_fired(void) {
 	uint64_t next_deadline = timer_queue_expire(&timer_queue, mach_absolute_time());
