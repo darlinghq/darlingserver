@@ -134,7 +134,13 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 			intptr_t nearest = std::numeric_limits<intptr_t>::max();
 
 			for (auto id : ids) {
+	#ifdef DARLING_FREEBSD
+				/* FreeBSD ptrace: 3rd arg is addr (caddr_t), 4th is data (int).
+				 * For ATTACH/DETACH addr must be (caddr_t)1; for GETREGS addr is the reg ptr. */
+				if (ptrace(PT_ATTACH, id, (caddr_t)1, 0) == -1) {
+#else
 				if (ptrace(PTRACE_ATTACH, id, 0, 0) == -1) {
+#endif
 					continue;
 				}
 
@@ -146,12 +152,20 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 				}
 
 				struct user_regs_struct regs;
+#ifdef DARLING_FREEBSD
+				if (ptrace(PT_GETREGS, id, (caddr_t)&regs, 0) == -1) {
+#else
 				if (ptrace(PTRACE_GETREGS, id, 0, &regs) == -1) {
+#endif
 					continue;
 				}
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(DARLING_FREEBSD)
 				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.rsp;
+				if (stackDiff >= 0 && stackDiff < nearest) {
+#elif defined(__x86_64__) && defined(DARLING_FREEBSD)
+				/* FreeBSD struct reg uses r_rsp instead of rsp */
+				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.r_rsp;
 				if (stackDiff >= 0 && stackDiff < nearest) {
 #else
 	#warning Unsupported architecture
@@ -162,7 +176,11 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 				}
 
 				// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
+#ifdef DARLING_FREEBSD
+				if (ptrace(PT_DETACH, id, (caddr_t)1, 0) == -1) {
+#else
 				if (ptrace(PTRACE_DETACH, id, 0, 0) == -1) {
+#endif
 					throw std::system_error(errno, std::generic_category(), "Failed to detach from process.");
 				}
 			}

@@ -100,8 +100,13 @@ namespace DarlingServer {
 		Address address() const;
 		void setAddress(Address address);
 
+#ifdef DARLING_FREEBSD
+		bool copyCredentialsOut(struct bsdos_ucred& outputCredentials) const;
+		void copyCredentialsIn(const struct bsdos_ucred& inputCredentials);
+#else
 		bool copyCredentialsOut(struct ucred& outputCredentials) const;
 		void copyCredentialsIn(const struct ucred& inputCredentials);
+#endif
 
 		pid_t pid() const;
 		void setPID(pid_t pid);

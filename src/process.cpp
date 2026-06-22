@@ -28,6 +28,9 @@
 #include <regex>
 
 #include <sys/mman.h>
+#ifdef DARLING_FREEBSD
+#include <sys/event.h>  /* kqueue, kevent, EVFILT_PROC, NOTE_EXIT */
+#endif
 
 static DarlingServer::Log processLog("process");
 
@@ -36,10 +39,31 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 	_nspid(nsid),
 	_architecture(architecture)
 {
+#ifdef DARLING_FREEBSD
+	int pidfd;
+	if (pipe >= 0) {
+		pidfd = pipe;
+	} else {
+		/* FreeBSD has no pidfd; use a kqueue with EVFILT_PROC|NOTE_EXIT so the
+		 * fd becomes readable when the process exits — matches Linux pidfd semantics
+		 * well enough for the epoll-shim-based Monitor. */
+		pidfd = kqueue();
+		if (pidfd < 0) {
+			throw std::system_error(errno, std::generic_category(), "kqueue for process monitoring failed");
+		}
+		struct kevent kev;
+		EV_SET(&kev, _pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+		if (kevent(pidfd, &kev, 1, NULL, 0, NULL) < 0) {
+			::close(pidfd);
+			throw std::system_error(errno, std::generic_category(), "kevent EVFILT_PROC registration failed");
+		}
+	}
+#else
 	int pidfd = (pipe >= 0) ? pipe : syscall(SYS_pidfd_open, _pid, 0);
 	if (pidfd < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to open pidfd for process");
 	}
+#endif
 
 	_pidfd = std::make_shared<FD>(pidfd);
 
@@ -81,6 +105,13 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 		// inherit groups from parent process
 		_groups = parentProcess->_groups;
 	}
+
+#ifdef DARLING_FREEBSD
+	// FreeBSD: use static overlay directory path instead of LKM vchroot
+	if (_cachedVchrootPath.empty()) {
+		_cachedVchrootPath = "/usr/local/darling-overlay";
+	}
+#endif
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
 	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));

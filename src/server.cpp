@@ -455,7 +455,12 @@ DarlingServer::Server::Server(std::string prefix):
 	}
 
 	int passCred = 1;
+#ifdef DARLING_FREEBSD
+	/* FreeBSD: LOCAL_CREDS at protocol level 0 (Unix domain) enables cmsgcred */
+	if (setsockopt(_listenerSocket, 0, LOCAL_CREDS, &passCred, sizeof(passCred)) < 0) {
+#else
 	if (setsockopt(_listenerSocket, SOL_SOCKET, SO_PASSCRED, &passCred, sizeof(passCred)) < 0) {
+#endif
 		throw std::system_error(errno, std::generic_category(), "Failed to set SO_PASSCRED on socket");
 	}
 

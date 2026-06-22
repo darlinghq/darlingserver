@@ -25,6 +25,15 @@
 #include <mutex>
 #include <system_error>
 
+/* msg_ucred_t: the credential type used in socket control messages.
+ * On FreeBSD we use bsdos_ucred (our Linux-compat {pid,uid,gid} struct) since
+ * FreeBSD's struct ucred is the kernel-internal type with different fields. */
+#ifdef DARLING_FREEBSD
+typedef struct bsdos_ucred msg_ucred_t;
+#else
+typedef struct ucred msg_ucred_t;
+#endif
+
 DarlingServer::Address::Address() {
 	_address.sun_family = AF_UNIX;
 	memset(_address.sun_path, 0, sizeof(_address.sun_path));
@@ -55,17 +64,21 @@ void DarlingServer::Address::setRawSize(size_t newRawSize) {
 DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std::function<void()> sendNotificationCallback):
 	_sendNotificationCallback(sendNotificationCallback)
 {
-	size_t controlLen = CMSG_SPACE(sizeof(struct ucred)) + (descriptorSpace > 0 ? CMSG_SPACE(sizeof(int) * descriptorSpace) : 0);
+	size_t controlLen = CMSG_SPACE(DARLING_CRED_CMSG_SIZE) + (descriptorSpace > 0 ? CMSG_SPACE(sizeof(int) * descriptorSpace) : 0);
 	_controlHeader = static_cast<decltype(_controlHeader)>(malloc(controlLen));
 
 	if (!_controlHeader) {
 		throw std::bad_alloc();
 	}
 
-	_controlHeader->cmsg_len = CMSG_LEN(sizeof(struct ucred));
+	_controlHeader->cmsg_len = CMSG_LEN(DARLING_CRED_CMSG_SIZE);
 	_controlHeader->cmsg_level = SOL_SOCKET;
 	_controlHeader->cmsg_type = SCM_CREDENTIALS;
+#ifdef DARLING_FREEBSD
+	struct bsdos_ucred ourCreds;
+#else
 	struct ucred ourCreds;
+#endif
 	ourCreds.pid = getpid();
 	ourCreds.uid = getuid();
 	ourCreds.gid = getgid();
@@ -73,7 +86,7 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std:
 	memcpy(CMSG_DATA(_controlHeader), &ourCreds, sizeof(ourCreds));
 
 	if (descriptorSpace > 0) {
-		auto fdHeader = reinterpret_cast<decltype(_controlHeader)>(reinterpret_cast<char*>(_controlHeader) + CMSG_SPACE(sizeof(struct ucred)));
+		auto fdHeader = reinterpret_cast<decltype(_controlHeader)>(reinterpret_cast<char*>(_controlHeader) + CMSG_SPACE(DARLING_CRED_CMSG_SIZE));
 		fdHeader->cmsg_len = CMSG_LEN(sizeof(int) * descriptorSpace);
 		fdHeader->cmsg_level = SOL_SOCKET;
 		fdHeader->cmsg_type = SCM_RIGHTS;
@@ -298,18 +311,36 @@ void DarlingServer::Message::replaceDescriptors(const std::vector<int>& newDescr
 	memcpy(CMSG_DATA(_descriptorHeader()), newDescriptors.data(), sizeof(int) * newDescriptors.size());
 };
 
+#ifdef DARLING_FREEBSD
+bool DarlingServer::Message::copyCredentialsOut(struct bsdos_ucred& outputCredentials) const {
+#else
 bool DarlingServer::Message::copyCredentialsOut(struct ucred& outputCredentials) const {
+#endif
 	auto credHeader = _credentialsHeader();
 
 	if (credHeader) {
+#ifdef DARLING_FREEBSD
+		/* FreeBSD delivers struct cmsgcred (kernel-filled); extract the three fields
+		 * that Linux struct ucred exposes. cmsgcred layout: pid, uid, euid, gid, ... */
+		struct cmsgcred fbsdCreds;
+		memcpy(&fbsdCreds, CMSG_DATA(credHeader), sizeof(fbsdCreds));
+		outputCredentials.pid = fbsdCreds.cmcred_pid;
+		outputCredentials.uid = fbsdCreds.cmcred_uid;
+		outputCredentials.gid = fbsdCreds.cmcred_gid;
+#else
 		memcpy(&outputCredentials, CMSG_DATA(credHeader), sizeof(outputCredentials));
+#endif
 		return true;
 	} else {
 		return false;
 	}
 };
 
+#ifdef DARLING_FREEBSD
+void DarlingServer::Message::copyCredentialsIn(const struct bsdos_ucred& inputCredentials) {
+#else
 void DarlingServer::Message::copyCredentialsIn(const struct ucred& inputCredentials) {
+#endif
 	_ensureCredentialsHeader();
 	memcpy(CMSG_DATA(_credentialsHeader()), &inputCredentials, sizeof(inputCredentials));
 };
@@ -321,7 +352,7 @@ void DarlingServer::Message::_ensureCredentialsHeader() {
 
 	auto fdHeader = _descriptorHeader();
 	auto descSpace = _descriptorSpace();
-	size_t controlLen = CMSG_SPACE(sizeof(struct ucred)) + (descSpace > 0 ? CMSG_SPACE(sizeof(int) * descSpace) : 0);
+	size_t controlLen = CMSG_SPACE(DARLING_CRED_CMSG_SIZE) + (descSpace > 0 ? CMSG_SPACE(sizeof(int) * descSpace) : 0);
 	auto tmp = static_cast<decltype(_controlHeader)>(malloc(controlLen));
 	auto old = _controlHeader;
 	struct cmsghdr* credHeader = nullptr;
@@ -336,7 +367,7 @@ void DarlingServer::Message::_ensureCredentialsHeader() {
 	credHeader = _controlHeader;
 
 	if (descSpace > 0) {
-		auto newFdHeader = reinterpret_cast<decltype(_controlHeader)>(reinterpret_cast<char*>(_controlHeader) + CMSG_SPACE(sizeof(struct ucred)));
+		auto newFdHeader = reinterpret_cast<decltype(_controlHeader)>(reinterpret_cast<char*>(_controlHeader) + CMSG_SPACE(DARLING_CRED_CMSG_SIZE));
 		memcpy(newFdHeader, fdHeader, CMSG_SPACE(sizeof(int) * descSpace));
 	}
 
@@ -344,15 +375,19 @@ void DarlingServer::Message::_ensureCredentialsHeader() {
 
 	_header.msg_controllen = controlLen;
 
-	credHeader->cmsg_len = CMSG_LEN(sizeof(struct ucred));
+	credHeader->cmsg_len = CMSG_LEN(DARLING_CRED_CMSG_SIZE);
 	credHeader->cmsg_level = SOL_SOCKET;
 	credHeader->cmsg_type = SCM_CREDENTIALS;
 
-	struct ucred creds;
+#ifdef DARLING_FREEBSD
+	struct bsdos_ucred creds;
+#else
+	msg_ucred_t creds;
+#endif
 	creds.pid = getpid();
 	creds.uid = getuid();
 	creds.gid = getgid();
-	memcpy(CMSG_DATA(credHeader), &creds, sizeof(struct ucred));
+	memcpy(CMSG_DATA(credHeader), &creds, sizeof(creds));
 };
 
 void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
@@ -362,7 +397,7 @@ void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
 
 	auto credHeader = _credentialsHeader();
 	size_t oldSpace = _descriptorSpace();
-	size_t controlLen = (credHeader ? CMSG_SPACE(sizeof(struct ucred)) : 0) + (newSpace == 0 ? 0 : CMSG_SPACE(sizeof(int) * newSpace));
+	size_t controlLen = (credHeader ? CMSG_SPACE(DARLING_CRED_CMSG_SIZE) : 0) + (newSpace == 0 ? 0 : CMSG_SPACE(sizeof(int) * newSpace));
 
 	if (controlLen == 0) {
 		free(_controlHeader);
@@ -384,8 +419,8 @@ void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
 	_header.msg_control = _controlHeader;
 
 	if (credHeader) {
-		memcpy(_controlHeader, credHeader, CMSG_SPACE(sizeof(struct ucred)));
-		fdHeader = reinterpret_cast<decltype(_controlHeader)>(reinterpret_cast<char*>(_controlHeader) + CMSG_SPACE(sizeof(struct ucred)));
+		memcpy(_controlHeader, credHeader, CMSG_SPACE(DARLING_CRED_CMSG_SIZE));
+		fdHeader = reinterpret_cast<decltype(_controlHeader)>(reinterpret_cast<char*>(_controlHeader) + CMSG_SPACE(DARLING_CRED_CMSG_SIZE));
 	} else {
 		fdHeader = _controlHeader;
 	}
@@ -407,7 +442,7 @@ void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
 };
 
 pid_t DarlingServer::Message::pid() const {
-	struct ucred creds;
+	msg_ucred_t creds;
 
 	if (copyCredentialsOut(creds)) {
 		return creds.pid;
@@ -418,14 +453,14 @@ pid_t DarlingServer::Message::pid() const {
 
 void DarlingServer::Message::setPID(pid_t pid) {
 	_ensureCredentialsHeader();
-	struct ucred creds;
+	msg_ucred_t creds;
 	copyCredentialsOut(creds);
 	creds.pid = pid;
 	copyCredentialsIn(creds);
 };
 
 uid_t DarlingServer::Message::uid() const {
-	struct ucred creds;
+	msg_ucred_t creds;
 
 	if (copyCredentialsOut(creds)) {
 		return creds.uid;
@@ -436,14 +471,14 @@ uid_t DarlingServer::Message::uid() const {
 
 void DarlingServer::Message::setUID(uid_t uid) {
 	_ensureCredentialsHeader();
-	struct ucred creds;
+	msg_ucred_t creds;
 	copyCredentialsOut(creds);
 	creds.uid = uid;
 	copyCredentialsIn(creds);
 };
 
 gid_t DarlingServer::Message::gid() const {
-	struct ucred creds;
+	msg_ucred_t creds;
 
 	if (copyCredentialsOut(creds)) {
 		return creds.gid;
@@ -454,7 +489,7 @@ gid_t DarlingServer::Message::gid() const {
 
 void DarlingServer::Message::setGID(gid_t gid) {
 	_ensureCredentialsHeader();
-	struct ucred creds;
+	msg_ucred_t creds;
 	copyCredentialsOut(creds);
 	creds.gid = gid;
 	copyCredentialsIn(creds);
