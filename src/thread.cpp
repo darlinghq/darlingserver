@@ -47,6 +47,9 @@
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <vector>
+#ifdef DARLING_FREEBSD
+#include <sys/thr.h>  /* thr_self() — FreeBSD LWP ID */
+#endif
 
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
@@ -85,6 +88,12 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 {
 	_tid = -1;
 
+#ifdef DARLING_FREEBSD
+	// FreeBSD has no PID/TID namespaces. _nstid comes from header->tid in the
+	// checkin RPC, which mldr sets to thr_self() — the real kernel LWP ID.
+	// Skip the Linux /proc/<pid>/task/ traversal and ptrace fallback entirely.
+	_tid = static_cast<pid_t>(_nstid);
+#else
 	for (const auto& entry: std::filesystem::directory_iterator("/proc/" + std::to_string(process->id()) + "/task")) {
 		std::ifstream statusFile(entry.path() / "status");
 		std::string line;
@@ -192,6 +201,7 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 	if (_tid == -1) {
 		throw std::system_error(ESRCH, std::generic_category(), "Failed to find thread ID within darlingserver's namespace");
 	}
+#endif // !DARLING_FREEBSD
 
 	// NOTE: it's okay to use raw `this` without a shared pointer because the duct-taped thread will always live for less time than this Thread instance
 	_dtapeThread = dtape_thread_create(process->_dtapeTask, _nstid, this);
@@ -1402,11 +1412,18 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 		return RunState::Dead;
 	}
 
+#ifdef DARLING_FREEBSD
+	// FreeBSD has no /proc/<pid>/task/<tid>/stat. Assume the thread is Running;
+	// the darlingserver microthread scheduler doesn't require per-thread state
+	// precision here — process-level liveness is tracked via kqueue EVFILT_PROC.
+	return RunState::Running;
+#else
 	std::ifstream file("/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id()) + "/stat");
 	std::string line;
 	if (!std::getline(file, line)) {
 		return RunState::Dead;
 	}
+#endif // !DARLING_FREEBSD
 
 	auto endOfComm = line.find(')');
 	if (endOfComm == std::string::npos) {
