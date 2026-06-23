@@ -1423,7 +1423,6 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 	if (!std::getline(file, line)) {
 		return RunState::Dead;
 	}
-#endif // !DARLING_FREEBSD
 
 	auto endOfComm = line.find(')');
 	if (endOfComm == std::string::npos) {
@@ -1446,6 +1445,7 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 		default:
 			return RunState::Dead;
 	}
+#endif // !DARLING_FREEBSD
 };
 
 void DarlingServer::Thread::waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
