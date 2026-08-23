@@ -17,6 +17,7 @@
 #include <kern/sync_sema.h>
 #include <mach/mach_traps.h>
 #include <mach/mach_port.h>
+#include <mach/mach_port_server.h>
 #include <ipc/ipc_hash.h>
 
 #include <stdlib.h>

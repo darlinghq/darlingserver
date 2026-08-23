@@ -79,6 +79,7 @@
 #include <mach/vm_map.h>
 #include <mach/mach_vm.h>
 #include <mach/vm_statistics.h>
+#include <vm/vm_protos.h>
 
 #include <kern/kern_types.h>
 #include <kern/assert.h>

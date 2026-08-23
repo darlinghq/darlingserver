@@ -121,6 +121,17 @@ __BEGIN_DECLS
 extern host_t                   host_self(void);
 extern host_priv_t              host_priv_self(void);
 extern host_security_t  host_security_self(void);
+
+/*
+ * Unprefixed wrapper defined in ipc_voucher.c. The MIG-generated
+ * mach_host_server.h only declares the _kernelrpc_-prefixed trap it
+ * dispatches to; mach_kernelrpc.c calls this unprefixed name directly.
+ */
+extern kern_return_t host_create_mach_voucher(
+	host_t                                  host,
+	mach_voucher_attr_raw_recipe_array_t    recipes,
+	mach_voucher_attr_raw_recipe_size_t     recipe_size,
+	ipc_voucher_t                           *new_voucher);
 __END_DECLS
 
 #endif  /* _KERN_HOST_H_ */
