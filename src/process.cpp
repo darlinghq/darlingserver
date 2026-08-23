@@ -30,6 +30,8 @@
 #include <sys/mman.h>
 #ifdef DARLING_FREEBSD
 #include <sys/event.h>  /* kqueue, kevent, EVFILT_PROC, NOTE_EXIT */
+#include <sys/ptrace.h> /* PT_ATTACH/PT_DETACH — #198 process_vm_readv/writev shim needs an active attach */
+#include <sys/wait.h>   /* waitpid — sync with PT_ATTACH's stop before PT_IO */
 #endif
 
 static DarlingServer::Log processLog("process");
@@ -107,9 +109,19 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 	}
 
 #ifdef DARLING_FREEBSD
-	// FreeBSD: use static overlay directory path instead of LKM vchroot
+	// FreeBSD: there is no LKM vchroot, so the overlay directory itself acts as
+	// the vchroot root. Every path dyld (and the rest of libsystem_kernel)
+	// resolves is rewritten by vchroot_expand() as <vchrootPath> + <macos path>,
+	// so a wrong value here makes *every* lookup miss — including
+	// /usr/lib/libSystem.B.dylib, which dyld then reports as "image not found"
+	// without ever issuing a stat(). Allow the overlay location to be set via
+	// DARLING_VCHROOT_PATH so test harnesses can point at a non-installed
+	// overlay; fall back to the installed location.
 	if (_cachedVchrootPath.empty()) {
-		_cachedVchrootPath = "/usr/local/darling-overlay";
+		const char* overlay = getenv("DARLING_VCHROOT_PATH");
+		_cachedVchrootPath = (overlay != nullptr && overlay[0] != '\0')
+			? overlay
+			: "/usr/local/darling-overlay";
 	}
 #endif
 
@@ -258,7 +270,93 @@ bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAd
 	remote.iov_base = (void*)remoteAddress;
 	remote.iov_len = length;
 
-	if (func(id(), &local, 1, &remote, 1, 0) < 0) {
+#ifdef DARLING_FREEBSD
+	/*
+	 * id() (`_pid`) comes from the AF_UNIX credential control message
+	 * (cmsgcred/SCM_CREDS) attached to whichever message first registered
+	 * this Process — a kernel-verified pid, meant to guard against a
+	 * namespaced client lying about its own pid. Confirmed live on 185
+	 * (#198): id() reads back as 0 for every Process on this port (the
+	 * cmsgcred parsing path isn't yet reliable here — a separate, still-open
+	 * gap), while nsid() (the client's self-reported pid from the RPC
+	 * header) is always correct. FreeBSD has no PID/TID namespaces at all
+	 * (see the identical reasoning already applied to threads' _tid, above
+	 * in this file's Thread constructor) — there is no namespace boundary
+	 * for a spoofed pid to hide behind here, so trusting nsid() directly
+	 * for the actual ptrace/process_vm target is safe, not a shortcut. */
+	const pid_t targetPid = nsid();
+
+	/*
+	 * Linux's process_vm_readv/writev need no active ptrace attach — same-uid
+	 * (or CAP_SYS_PTRACE) is enough. FreeBSD's ptrace(PT_IO) shim for them
+	 * (freebsd_compat.h) has no such shortcut: PT_IO fails with EINVAL unless
+	 * the target is currently PT_ATTACH-ed. Bracket the transfer with an
+	 * attach/detach cycle; the caller is synchronously blocked on this RPC
+	 * anyway, so briefly stopping it here is safe. */
+	if (ptrace(PT_ATTACH, targetPid, (caddr_t)1, 0) == -1) {
+		int code = errno;
+		processMemoryAccessLog.error()
+			<< "Failed to PT_ATTACH before "
+			<< (isWrite ? "writing " : "reading ")
+			<< length
+			<< " byte(s) at 0x"
+			<< std::hex << remoteAddress << std::dec
+			<< " in process "
+			<< targetPid
+			<< ": "
+			<< code
+			<< " ("
+			<< strerror(code)
+			<< ")"
+			<< processMemoryAccessLog.endLog;
+		if (errorCode) {
+			*errorCode = code;
+		}
+		return false;
+	}
+	{
+		int status;
+		if (waitpid(targetPid, &status, 0) < 0) {
+			int code = errno;
+			processMemoryAccessLog.error()
+				<< "Failed to sync with PT_ATTACH stop for process "
+				<< targetPid
+				<< ": "
+				<< code
+				<< " ("
+				<< strerror(code)
+				<< ")"
+				<< processMemoryAccessLog.endLog;
+			ptrace(PT_DETACH, targetPid, (caddr_t)1, 0);
+			if (errorCode) {
+				*errorCode = code;
+			}
+			return false;
+		}
+	}
+#else
+	const pid_t targetPid = id();
+#endif
+
+	bool ioFailed = func(targetPid, &local, 1, &remote, 1, 0) < 0;
+	int ioErrno = errno;
+
+#ifdef DARLING_FREEBSD
+	if (ptrace(PT_DETACH, targetPid, (caddr_t)1, 0) == -1) {
+		processMemoryAccessLog.error()
+			<< "Failed to PT_DETACH from process "
+			<< targetPid
+			<< " after memory access: "
+			<< errno
+			<< " ("
+			<< strerror(errno)
+			<< ")"
+			<< processMemoryAccessLog.endLog;
+	}
+#endif
+
+	if (ioFailed) {
+		errno = ioErrno;
 		int code = errno;
 		processMemoryAccessLog.error()
 			<< "Failed to "
