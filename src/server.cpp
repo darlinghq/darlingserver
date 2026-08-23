@@ -456,8 +456,19 @@ DarlingServer::Server::Server(std::string prefix):
 
 	int passCred = 1;
 #ifdef DARLING_FREEBSD
-	/* FreeBSD: LOCAL_CREDS at protocol level 0 (Unix domain) enables cmsgcred */
-	if (setsockopt(_listenerSocket, 0, LOCAL_CREDS, &passCred, sizeof(passCred)) < 0) {
+	/*
+	 * FreeBSD: LOCAL_CREDS at protocol level 0 (Unix domain) enables cmsgcred
+	 * — but only on the FIRST datagram ever received on this listening
+	 * socket, for the socket's entire lifetime (see unix(4)); every checkin
+	 * after that gets no credentials header at all. Confirmed live (#198):
+	 * Process::id() read back as 0 for every process, not just some, which
+	 * only makes sense if cmsgcred was essentially never delivered. Since
+	 * this server fields checkins from many client processes over its whole
+	 * run, not just one, LOCAL_CREDS_PERSISTENT (FreeBSD 13+) is the option
+	 * that actually fits: it attaches cmsgcred to every datagram, not just
+	 * the first.
+	 */
+	if (setsockopt(_listenerSocket, 0, LOCAL_CREDS_PERSISTENT, &passCred, sizeof(passCred)) < 0) {
 #else
 	if (setsockopt(_listenerSocket, SOL_SOCKET, SO_PASSCRED, &passCred, sizeof(passCred)) < 0) {
 #endif

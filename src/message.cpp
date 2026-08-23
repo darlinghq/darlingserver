@@ -75,13 +75,22 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std:
 	_controlHeader->cmsg_level = SOL_SOCKET;
 	_controlHeader->cmsg_type = SCM_CREDENTIALS;
 #ifdef DARLING_FREEBSD
-	struct bsdos_ucred ourCreds;
+	/* struct cmsgcred, not struct sockcred2 — this is a self-fabricated,
+	 * OUTGOING placeholder, and SCM_CREDS2 cannot be attached by userspace
+	 * sendmsg() at all (kernel rejects it with EINVAL; see sys/socket.h's
+	 * comment). copyCredentialsOut() decodes by the header's actual
+	 * cmsg_type, so a receive that later replaces this with the kernel's
+	 * real SCM_CREDS2 still works. */
+	struct cmsgcred ourCreds = {0};
+	ourCreds.cmcred_pid = getpid();
+	ourCreds.cmcred_uid = getuid();
+	ourCreds.cmcred_gid = getgid();
 #else
 	struct ucred ourCreds;
-#endif
 	ourCreds.pid = getpid();
 	ourCreds.uid = getuid();
 	ourCreds.gid = getgid();
+#endif
 	// the cmsg man page says memcpy should be used with CMSG_DATA instead of direct pointer access
 	memcpy(CMSG_DATA(_controlHeader), &ourCreds, sizeof(ourCreds));
 
@@ -153,9 +162,22 @@ const struct cmsghdr* DarlingServer::Message::_credentialsHeader() const {
 	const struct cmsghdr* hdr = CMSG_FIRSTHDR(&_header);
 
 	while (hdr) {
+#ifdef DARLING_FREEBSD
+		/* SCM_CREDENTIALS (== SCM_CREDS here) is what THIS process attaches
+		 * to its own outgoing messages, since SCM_CREDS2 cannot be sent by
+		 * userspace at all (see sys/socket.h's comment). But a message just
+		 * received off the wire — the case Process::id() actually cares
+		 * about — carries the kernel's real SCM_CREDS2/sockcred2 instead, so
+		 * both types must be recognized here; copyCredentialsOut() branches
+		 * on which one was actually found. */
+		if (hdr->cmsg_level == SOL_SOCKET && (hdr->cmsg_type == SCM_CREDENTIALS || hdr->cmsg_type == SCM_CREDS2)) {
+			return hdr;
+		}
+#else
 		if (hdr->cmsg_level == SOL_SOCKET && hdr->cmsg_type == SCM_CREDENTIALS) {
 			return hdr;
 		}
+#endif
 
 		hdr = CMSG_NXTHDR(const_cast<struct msghdr*>(&_header), const_cast<struct cmsghdr*>(hdr));
 	}
@@ -320,13 +342,31 @@ bool DarlingServer::Message::copyCredentialsOut(struct ucred& outputCredentials)
 
 	if (credHeader) {
 #ifdef DARLING_FREEBSD
-		/* FreeBSD delivers struct cmsgcred (kernel-filled); extract the three fields
-		 * that Linux struct ucred exposes. cmsgcred layout: pid, uid, euid, gid, ... */
-		struct cmsgcred fbsdCreds;
-		memcpy(&fbsdCreds, CMSG_DATA(credHeader), sizeof(fbsdCreds));
-		outputCredentials.pid = fbsdCreds.cmcred_pid;
-		outputCredentials.uid = fbsdCreds.cmcred_uid;
-		outputCredentials.gid = fbsdCreds.cmcred_gid;
+		/*
+		 * Two possible shapes land here, distinguished by the actual
+		 * cmsg_type found (see sys/socket.h's comment and _credentialsHeader()
+		 * for why both exist):
+		 *   - SCM_CREDS2: the kernel's own credentials on a just-received
+		 *     message (LOCAL_CREDS_PERSISTENT) — struct sockcred2.
+		 *   - SCM_CREDS (== SCM_CREDENTIALS here): this process's own
+		 *     self-fabricated placeholder, written by copyCredentialsIn()/the
+		 *     constructor below — struct cmsgcred. (SCM_CREDS2 can't be used
+		 *     for that: the kernel rejects a userspace-attached SCM_CREDS2
+		 *     cmsg on sendmsg() with EINVAL outright.)
+		 */
+		if (credHeader->cmsg_type == SCM_CREDS2) {
+			struct sockcred2 fbsdCreds;
+			memcpy(&fbsdCreds, CMSG_DATA(credHeader), sizeof(fbsdCreds));
+			outputCredentials.pid = fbsdCreds.sc_pid;
+			outputCredentials.uid = fbsdCreds.sc_uid;
+			outputCredentials.gid = fbsdCreds.sc_gid;
+		} else {
+			struct cmsgcred fbsdCreds;
+			memcpy(&fbsdCreds, CMSG_DATA(credHeader), sizeof(fbsdCreds));
+			outputCredentials.pid = fbsdCreds.cmcred_pid;
+			outputCredentials.uid = fbsdCreds.cmcred_uid;
+			outputCredentials.gid = fbsdCreds.cmcred_gid;
+		}
 #else
 		memcpy(&outputCredentials, CMSG_DATA(credHeader), sizeof(outputCredentials));
 #endif
@@ -342,7 +382,22 @@ void DarlingServer::Message::copyCredentialsIn(const struct bsdos_ucred& inputCr
 void DarlingServer::Message::copyCredentialsIn(const struct ucred& inputCredentials) {
 #endif
 	_ensureCredentialsHeader();
+#ifdef DARLING_FREEBSD
+	/* Always writes SCM_CREDS/cmsgcred shape — this is a self-fabricated,
+	 * outgoing placeholder, and SCM_CREDS2 cannot be sent by userspace at
+	 * all (see sys/socket.h's comment). Preserve whatever's already in the
+	 * other cmsgcred fields (euid, ngroups, groups) rather than zeroing
+	 * them. */
+	struct cmsgcred creds;
+	memcpy(&creds, CMSG_DATA(_credentialsHeader()), sizeof(creds));
+	creds.cmcred_pid = inputCredentials.pid;
+	creds.cmcred_uid = inputCredentials.uid;
+	creds.cmcred_gid = inputCredentials.gid;
+	_credentialsHeader()->cmsg_type = SCM_CREDENTIALS;
+	memcpy(CMSG_DATA(_credentialsHeader()), &creds, sizeof(creds));
+#else
 	memcpy(CMSG_DATA(_credentialsHeader()), &inputCredentials, sizeof(inputCredentials));
+#endif
 };
 
 void DarlingServer::Message::_ensureCredentialsHeader() {
@@ -380,13 +435,18 @@ void DarlingServer::Message::_ensureCredentialsHeader() {
 	credHeader->cmsg_type = SCM_CREDENTIALS;
 
 #ifdef DARLING_FREEBSD
-	struct bsdos_ucred creds;
+	/* struct cmsgcred, not sockcred2 — same reasoning as the constructor
+	 * above: this is an outgoing placeholder, and SCM_CREDS2 can't be sent. */
+	struct cmsgcred creds = {0};
+	creds.cmcred_pid = getpid();
+	creds.cmcred_uid = getuid();
+	creds.cmcred_gid = getgid();
 #else
 	msg_ucred_t creds;
-#endif
 	creds.pid = getpid();
 	creds.uid = getuid();
 	creds.gid = getgid();
+#endif
 	memcpy(CMSG_DATA(credHeader), &creds, sizeof(creds));
 };
 
