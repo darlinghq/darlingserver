@@ -303,6 +303,9 @@ static bool isOnWsl1() {
 }
 
 static bool shouldUseOverlayFs() {
+#ifdef DARLING_FREEBSD
+	return false;  /* FreeBSD: no overlayfs; use copyAndSetAttributes path */
+#else
 	bool shouldUse = true;
 	bool explicitlySet = false;
 
@@ -322,6 +325,7 @@ static bool shouldUseOverlayFs() {
 	}
 
 	return shouldUse;
+#endif
 }
 
 static int compareTimespec(const timespec& a, const timespec& b) {
@@ -595,6 +599,7 @@ int main(int argc, char** argv) {
 		}
 	}
 
+#ifndef DARLING_FREEBSD
 	// Since overlay cannot be mounted inside user namespaces, we have to setup a new mount namespace
 	// and do the mount while we can be root
 	if (unshare(CLONE_NEWNS) != 0)
@@ -616,7 +621,9 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Cannot mount new /dev/shm: %s\n", strerror(errno));
 		exit(1);
 	}
+#endif /* !DARLING_FREEBSD */
 
+#ifndef DARLING_FREEBSD
 	if (shouldUseOverlayFs()) {
 		// Because systemd marks / as MS_SHARED and we would inherit this into the overlay mount,
 		// causing it not to be unmounted once the init process dies.
@@ -653,6 +660,18 @@ int main(int argc, char** argv) {
 		std::string toPath = prefix;
 		copyAndSetAttributes(fromPath, toPath);
 	}
+#else /* DARLING_FREEBSD: no overlayfs; always use copyAndSetAttributes */
+	{
+		std::string fromPath = LIBEXEC_PATH;
+		std::string toPath = prefix;
+		copyAndSetAttributes(fromPath, toPath);
+		/* copyAndSetAttributes preserves source ownership (root:wheel).
+		 * The server will perma_drop_privileges() before binding the socket,
+		 * so the prefix root must be writable by originalUID. */
+		if (chown(prefix, originalUID, originalGID) == -1)
+			fprintf(stderr, "Warning: cannot chown prefix %s: %s\n", prefix, strerror(errno));
+	}
+#endif
 
 	// This is executed once at prefix creation
 	if (fix_permissions) {
@@ -690,7 +709,12 @@ int main(int argc, char** argv) {
 
 	// we have to use `clone` rather than `fork` to create the process in its own PID namespace
 	// and still be able to spawn new processes and threads of our own
+#ifdef DARLING_FREEBSD
+	/* FreeBSD: no PID namespace support; fork() is the equivalent */
+	launchdGlobalPID = fork();
+#else
 	launchdGlobalPID = syscall(SYS_clone, CLONE_NEWPID | SIGCHLD, NULL, NULL, NULL, 0);
+#endif
 
 	if (launchdGlobalPID < 0) {
 		fprintf(stderr, "Failed to fork to start launchd: %s\n", strerror(errno));
@@ -703,12 +727,19 @@ int main(int argc, char** argv) {
 
 		snprintf(putOld, sizeof(putOld), "%s/proc", prefix);
 
+#ifndef DARLING_FREEBSD
 		// mount procfs for our new PID namespace
 		if (mount("proc", putOld, "proc", 0, "") != 0)
 		{
 			fprintf(stderr, "Cannot mount procfs: %s\n", strerror(errno));
 			exit(1);
 		}
+#else
+		/* FreeBSD: procfs is mounted system-wide at /proc (must be in fstab).
+		 * Create a symlink from prefix/proc → /proc for launchd's benefit. */
+		mkdir(putOld, 0755);
+		/* system-wide procfs suffices; no per-child mount needed */
+#endif
 
 		// drop our privileges now
 		perma_drop_privileges(originalUID, originalGID);

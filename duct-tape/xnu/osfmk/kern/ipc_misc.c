@@ -32,9 +32,11 @@
 #include <kern/ipc_misc.h>
 
 #include <mach/mach_port.h>
+#include <mach/mach_port_server.h>
 #include <mach/vm_map.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_protos.h>
 
 extern void fileport_releasefg(struct fileglob *);
 
