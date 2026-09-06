@@ -175,6 +175,12 @@ target_link_libraries(darlingserver_dc_codesign PUBLIC
 find_library(LIBUCONTEXT ucontext)
 if (LIBUCONTEXT)
 	target_link_libraries(darlingserver PRIVATE ${LIBUCONTEXT})
+	find_path(LIBUCONTEXT_INCLUDE_DIR NAMES libucontext/libucontext.h PATHS "${CMAKE_FIND_ROOT_PATH}/include" "${CMAKE_INSTALL_PREFIX}/include")
+	if (LIBUCONTEXT_INCLUDE_DIR)
+		target_include_directories(darlingserver PRIVATE ${LIBUCONTEXT_INCLUDE_DIR})
+	elseif (DEFINED CMAKE_FIND_ROOT_PATH)
+		target_include_directories(darlingserver PRIVATE ${CMAKE_FIND_ROOT_PATH}/include)
+	endif()
 endif()
 
 find_library(LIBSEMAPHORE android-posix-semaphore)

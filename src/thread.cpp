@@ -52,6 +52,7 @@ extern "C" {
 int darling_libucontext_getcontext(libucontext_ucontext_t*) __asm__("libucontext_getcontext");
 int darling_libucontext_setcontext(const libucontext_ucontext_t*) __asm__("libucontext_setcontext");
 int darling_libucontext_swapcontext(libucontext_ucontext_t*, const libucontext_ucontext_t*) __asm__("libucontext_swapcontext");
+void darling_libucontext_makecontext(libucontext_ucontext_t*, void (*)(), int, ...) __asm__("libucontext_makecontext");
 }
 #define getcontext(u) darling_libucontext_getcontext(u)
 #if defined(__aarch64__)
@@ -66,6 +67,8 @@ static inline void darling_dserver_makecontext_arm64(libucontext_ucontext_t* ucp
 	ucp->uc_mcontext.regs[30] = 0;
 }
 #define makecontext(u, fn, ...) darling_dserver_makecontext_arm64(u, (void(*)())fn, __VA_ARGS__)
+#else
+#define makecontext(u, fn, ...) darling_libucontext_makecontext(u, (void(*)())fn, __VA_ARGS__)
 #endif
 #define setcontext(u) darling_libucontext_setcontext(u)
 #define swapcontext(ou, nu) darling_libucontext_swapcontext(ou, nu)
