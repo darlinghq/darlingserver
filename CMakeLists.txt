@@ -172,6 +172,13 @@ target_link_libraries(darlingserver_dc_codesign PUBLIC
 	${LIBXML2_LIBRARY}
 )
 
+if (ANDROID)
+	target_link_libraries(darlingserver PRIVATE
+		ucontext
+		android-posix-semaphore
+	)
+endif()
+
 target_compile_options(darlingserver PRIVATE
 	-pthread
 	-std=c++17
