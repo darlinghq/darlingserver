@@ -63,7 +63,27 @@ char version[] = "Darling 11.5";
 #endif
 
 int vsnprintf(char* buffer, size_t buffer_size, const char* format, va_list args);
+#if defined(__ANDROID__)
+#include <sys/syscall.h>
+#include <unistd.h>
+#ifndef SYS_getrandom
+#if defined(__aarch64__)
+#define SYS_getrandom 278
+#elif defined(__x86_64__)
+#define SYS_getrandom 318
+#elif defined(__arm__)
+#define SYS_getrandom 384
+#elif defined(__i386__)
+#define SYS_getrandom 355
+#endif
+#endif
+static inline ssize_t darling_getrandom(void* buf, size_t buflen, unsigned int flags) {
+	return syscall(SYS_getrandom, buf, buflen, flags);
+}
+#define getrandom darling_getrandom
+#else
 ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
+#endif
 
 
 void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
