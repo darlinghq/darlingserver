@@ -65,7 +65,6 @@ char version[] = "Darling 11.5";
 int vsnprintf(char* buffer, size_t buffer_size, const char* format, va_list args);
 #if defined(__ANDROID__)
 #include <sys/syscall.h>
-#include <unistd.h>
 #ifndef SYS_getrandom
 #if defined(__aarch64__)
 #define SYS_getrandom 278
@@ -77,8 +76,9 @@ int vsnprintf(char* buffer, size_t buffer_size, const char* format, va_list args
 #define SYS_getrandom 355
 #endif
 #endif
+extern long syscall(long number, ...);
 static inline ssize_t darling_getrandom(void* buf, size_t buflen, unsigned int flags) {
-	return syscall(SYS_getrandom, buf, buflen, flags);
+	return (ssize_t)syscall(SYS_getrandom, buf, buflen, flags);
 }
 #define getrandom darling_getrandom
 #else
