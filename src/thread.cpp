@@ -46,6 +46,30 @@
 #include <sys/ptrace.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+#if defined(__ANDROID__) || defined(__BIONIC__)
+#include <libucontext/libucontext.h>
+extern "C" {
+int darling_libucontext_getcontext(libucontext_ucontext_t*) __asm__("libucontext_getcontext");
+int darling_libucontext_setcontext(const libucontext_ucontext_t*) __asm__("libucontext_setcontext");
+int darling_libucontext_swapcontext(libucontext_ucontext_t*, const libucontext_ucontext_t*) __asm__("libucontext_swapcontext");
+}
+#define getcontext(u) darling_libucontext_getcontext(u)
+#if defined(__aarch64__)
+static inline void darling_dserver_makecontext_arm64(libucontext_ucontext_t* ucp, void (*func)(), ...) {
+	uintptr_t* sp = (uintptr_t*)((uintptr_t)ucp->uc_stack.ss_sp + ucp->uc_stack.ss_size);
+	sp = (uintptr_t*)((uintptr_t)sp & -16L);
+	ucp->uc_mcontext.sp = (uintptr_t)sp;
+	ucp->uc_mcontext.pc = (uintptr_t)func;
+	ucp->uc_mcontext.regs[0] = 0;
+	ucp->uc_mcontext.regs[19] = (uintptr_t)ucp->uc_link;
+	ucp->uc_mcontext.regs[29] = 0;
+	ucp->uc_mcontext.regs[30] = 0;
+}
+#define makecontext(u, fn, ...) darling_dserver_makecontext_arm64(u, (void(*)())fn, __VA_ARGS__)
+#endif
+#define setcontext(u) darling_libucontext_setcontext(u)
+#define swapcontext(ou, nu) darling_libucontext_swapcontext(ou, nu)
+#endif
 #include <vector>
 #if defined(__aarch64__)
 #include <sys/uio.h>
