@@ -172,11 +172,14 @@ target_link_libraries(darlingserver_dc_codesign PUBLIC
 	${LIBXML2_LIBRARY}
 )
 
-if (ANDROID)
-	target_link_libraries(darlingserver PRIVATE
-		ucontext
-		android-posix-semaphore
-	)
+find_library(LIBUCONTEXT ucontext)
+if (LIBUCONTEXT)
+	target_link_libraries(darlingserver PRIVATE ${LIBUCONTEXT})
+endif()
+
+find_library(LIBSEMAPHORE android-posix-semaphore)
+if (LIBSEMAPHORE)
+	target_link_libraries(darlingserver PRIVATE ${LIBSEMAPHORE})
 endif()
 
 target_compile_options(darlingserver PRIVATE
