@@ -45,6 +45,10 @@
 #include <mach/sdt.h>
 #endif
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/log.h>
+#endif
+
 
 #if DEBUG
 #define TIMER_ASSERT    1
@@ -883,6 +887,22 @@ timer_queue_expire_with_options(
 				call = qe_queue_first(&queue->head, struct timer_call, tc_qlink);
 			}
 		}
+
+		if (call == NULL) {
+			break;
+		}
+#ifdef __DARLING__
+		if (rescan == FALSE && call->tc_queue != &queue->head) {
+			dtape_log_warning("timer_queue_expire: head entry %p not linked to queue %p, removing from priority queue", call, queue);
+			priority_queue_remove(&queue->mpq_pqhead, &call->tc_pqlink);
+			call = NULL;
+			continue;
+		}
+		if (tc_iterations > 50000) {
+			dtape_log_warning("timer_queue_expire: runaway iteration limit (%u) reached on queue %p, breaking loop", tc_iterations, queue);
+			break;
+		}
+#endif
 
 		if (call->tc_soft_deadline <= cur_deadline) {
 			timer_call_func_t               func;

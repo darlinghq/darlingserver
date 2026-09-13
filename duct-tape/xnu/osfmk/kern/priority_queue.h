@@ -119,7 +119,7 @@ __BEGIN_DECLS
 #define PRIORITY_QUEUE_KEY_NONE             0
 typedef uint16_t priority_queue_key_t;
 
-#ifdef __LP64__
+#if defined(__LP64__) && !defined(__DARLING__)
 
 /*
  * For 64-bit platforms, pack the priority key into the child pointer

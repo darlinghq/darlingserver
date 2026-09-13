@@ -30,7 +30,7 @@
 #include <kern/priority_queue.h>
 #include <mach/vm_param.h>
 
-#ifdef __LP64__
+#if defined(__LP64__) && !defined(__DARLING__)
 static_assert(PRIORITY_QUEUE_ENTRY_CHILD_BITS >= VM_KERNEL_POINTER_SIGNIFICANT_BITS,
     "Priority Queue child pointer packing failed");
 #endif
