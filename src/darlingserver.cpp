@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <sys/prctl.h>
+#include <sys/utsname.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <pwd.h>
@@ -323,8 +324,9 @@ static bool isOnWsl1() {
 	static bool result = false;
 	if (!initialized) {
 		initialized = true;
-		// All WSL systems have WSLENV set by default, while WSL_INTEROP is WSL2-specific.
-		result = getenv("WSLENV") && !getenv("WSL_INTEROP");
+		// WSL1 kernels report a release such as "4.4.0-19041-Microsoft"; WSL2 uses "-microsoft-standard".
+		struct utsname name;
+		result = uname(&name) == 0 && strstr(name.release, "Microsoft") != NULL;
 	}
 
 	return result;
