@@ -157,7 +157,9 @@ fls(unsigned int mask)
 #include <kern/simple_lock.h>
 
 // PAGE_SHIFT_CONST is extern on ARM64 (variable page size support in XNU).
-// Darling uses a fixed 4K page size.
+// This is duct-tape's own allocation granularity, not the page size guests see:
+// that comes from the commpage, which mldr fills in from the host and which is
+// 16K on some of them. The two deliberately differ.
 int PAGE_SHIFT_CONST = 12;
 
 // ARM simple lock init (normally in arm/locks_arm.c).
