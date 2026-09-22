@@ -127,6 +127,13 @@ add_compile_definitions(
 	__DARWIN_BYTE_ORDER=__DARWIN_LITTLE_ENDIAN
 )
 
+# On Android (bionic libc) bcmp() is not provided.  Map it to memcmp which
+# has the same semantics (returns zero iff the memory regions are equal).
+# Only apply this on Android builds to avoid interfering with other platforms.
+if (ANDROID)
+	add_compile_definitions(bcmp=memcmp)
+endif()
+
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
 	add_compile_definitions(__arm64__ APPLE_ARM64_ARCH_FAMILY VMAPPLE ARM64_BOARD_CONFIG_VMAPPLE __ARM_VMSA__=8 __ARM64_PMAP_SUBPAGE_L1__)
 endif()
