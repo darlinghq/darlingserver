@@ -1537,7 +1537,62 @@ kern_return_t thread_policy(thread_t thread, policy_t policy, policy_base_t base
 };
 
 kern_return_t thread_policy_get(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
-	dtape_stub_unsafe();
+	if (!thread || !policy_info || !count || !get_default) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	mach_msg_type_number_t required;
+	switch (flavor) {
+		case THREAD_EXTENDED_POLICY:
+			required = THREAD_EXTENDED_POLICY_COUNT;
+			break;
+		case THREAD_TIME_CONSTRAINT_POLICY:
+			required = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+			break;
+		case THREAD_PRECEDENCE_POLICY:
+			required = THREAD_PRECEDENCE_POLICY_COUNT;
+			break;
+		case THREAD_AFFINITY_POLICY:
+			required = THREAD_AFFINITY_POLICY_COUNT;
+			break;
+		case THREAD_BACKGROUND_POLICY:
+			required = THREAD_BACKGROUND_POLICY_COUNT;
+			break;
+		case THREAD_POLICY_STATE:
+			required = THREAD_POLICY_STATE_COUNT;
+			break;
+		case THREAD_LATENCY_QOS_POLICY:
+			required = THREAD_LATENCY_QOS_POLICY_COUNT;
+			break;
+		case THREAD_THROUGHPUT_QOS_POLICY:
+			required = THREAD_THROUGHPUT_QOS_POLICY_COUNT;
+			break;
+		case THREAD_QOS_POLICY:
+		case THREAD_QOS_POLICY_OVERRIDE:
+			required = THREAD_QOS_POLICY_COUNT;
+			break;
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
+
+	if (*count < required) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	memset(policy_info, 0, required * sizeof(integer_t));
+	*count = required;
+	*get_default = TRUE;
+
+	if (flavor == THREAD_EXTENDED_POLICY) {
+		((thread_extended_policy_t)policy_info)->timeshare = TRUE;
+	} else if (flavor == THREAD_QOS_POLICY || flavor == THREAD_QOS_POLICY_OVERRIDE) {
+		((thread_qos_policy_t)policy_info)->qos_tier = THREAD_QOS_LEGACY;
+	} else if (flavor == THREAD_POLICY_STATE) {
+		thread_policy_state_t state = (thread_policy_state_t)policy_info;
+		state->requested = THREAD_QOS_LEGACY;
+		state->effective = THREAD_QOS_LEGACY;
+	}
+
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t count) {
