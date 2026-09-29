@@ -220,20 +220,8 @@ static void wipeDir(const char* dirpath)
 void darlingPreInit(const char* prefix)
 {
 	// TODO: Run /usr/libexec/makewhatis
-	/* DARLING-ARM64 FIX (FINDINGS.md F34): /var/tmp must NOT be wiped.
-	 *
-	 * On Darwin the two temp directories have different contracts:
-	 *   /private/tmp     (= /tmp)     volatile, cleared by periodic maintenance
-	 *   /private/var/tmp (= /var/tmp) PERSISTENT, survives reboots by design
-	 *
-	 * Wiping /var/tmp on every container start diverges from the platform being
-	 * emulated and silently destroys data written by a previous process in the
-	 * same prefix. It is what breaks verify-service-tools: that script writes
-	 * /private/var/tmp/stage10.binary.plist in one darlingserver invocation and
-	 * reads it in the next, so plutil received a missing file and reported it as
-	 * "input is not a property list".
-	 *
-	 * /var/run is genuinely runtime state, so it is still wiped. */
+	// Clear runtime state, not /var/tmp files that applications may need
+	// across separate server invocations using the same prefix.
 	const char* dirs[] = {
 		"/var/run"
 	};
