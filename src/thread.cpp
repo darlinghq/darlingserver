@@ -143,7 +143,10 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 				}
 
 				int status;
-				int waitStatus = waitpid(id, &status, 0);
+				int waitStatus;
+				do {
+					waitStatus = waitpid(id, &status, 0);
+				} while (waitStatus == -1 && errno == EINTR);
 
 				if (waitStatus < 0) {
 					continue;
