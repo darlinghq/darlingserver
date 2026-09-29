@@ -746,6 +746,14 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
+	// systemd marks / as MS_SHARED and the new namespace inherits that, so without this the
+	// /dev/shm tmpfs and overlay mounts below would propagate back into the host's namespace.
+	if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
+	{
+		fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
+		exit(1);
+	}
+
 	int shmMountFlags = MS_NOSUID | MS_NODEV;
 	// Workaround for dumb Microsoft bug: https://github.com/microsoft/WSL/issues/8777
 	if (!isOnWsl1())
@@ -761,16 +769,6 @@ int main(int argc, char** argv) {
 	}
 
 	FsMode fsMode = resolveFsMode(prefix);
-
-	if (fsMode != FsMode::Copy) {
-		// Because systemd marks / as MS_SHARED and we would inherit this into the overlay mount,
-		// causing it not to be unmounted once the init process dies.
-		if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
-		{
-			fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
-			exit(1);
-		}
-	}
 
 	// Failing to assemble the prefix exits with EX_UNAVAILABLE, which lets the darling client offer a different mode.
 	if (fsMode == FsMode::Overlayfs) {
