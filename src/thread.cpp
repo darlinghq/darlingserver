@@ -149,27 +149,31 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 					continue;
 				}
 
-#if defined(__aarch64__)
+				uintptr_t stackPointer = 0;
+				bool gotStackPointer = false;
+#ifdef __x86_64__
+				struct user_regs_struct regs;
+				if (ptrace(PTRACE_GETREGS, id, 0, &regs) != -1) {
+					stackPointer = regs.rsp;
+					gotStackPointer = true;
+				}
+#elif defined(__aarch64__)
 				struct user_regs_struct regs;
 				struct iovec iov = { &regs, sizeof(regs) };
-				if (ptrace(PTRACE_GETREGSET, id, (void*)NT_PRSTATUS, &iov) == -1) {
-					continue;
+				if (ptrace(PTRACE_GETREGSET, id, (void*)NT_PRSTATUS, &iov) != -1) {
+					stackPointer = regs.sp;
+					gotStackPointer = true;
 				}
-				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.sp;
-				if (stackDiff >= 0 && stackDiff < nearest) {
-#elif defined(__x86_64__)
-				struct user_regs_struct regs;
-				if (ptrace(PTRACE_GETREGS, id, 0, &regs) == -1) {
-					continue;
-				}
-				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.rsp;
-				if (stackDiff >= 0 && stackDiff < nearest) {
 #else
 	#error Unsupported architecture
-				if (true) {
 #endif
-					chosenId = id;
-					nearest = stackDiff;
+
+				if (gotStackPointer) {
+					intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)stackPointer;
+					if (stackDiff >= 0 && stackDiff < nearest) {
+						chosenId = id;
+						nearest = stackDiff;
+					}
 				}
 
 				// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
