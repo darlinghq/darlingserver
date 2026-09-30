@@ -319,8 +319,16 @@ kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t inf
 				return KERN_FAILURE;
 			}
 
-			dtape_stub_safe("HOST_VM_INFO");
 			memset(stat32, 0, (*count) * sizeof(integer_t));
+
+			struct sysinfo si;
+			if (sysinfo(&si) == 0) {
+				unsigned int mem_unit = si.mem_unit ? si.mem_unit : 1;
+				uint64_t page_size = 4096;
+				stat32->free_count = (si.freeram * mem_unit) / page_size;
+				stat32->active_count = ((si.totalram - si.freeram - si.bufferram) * mem_unit) / page_size;
+				stat32->wire_count = (si.bufferram * mem_unit) / page_size;
+			}
 
 			return KERN_SUCCESS;
 		}
@@ -342,7 +350,14 @@ kern_return_t vm_stats(void* info, unsigned int* count) {
 
 	memset(stat, 0, sizeof(*stat));
 
-	dtape_stub("TODO: actually fill in the values with something useful");
+	struct sysinfo si;
+	if (sysinfo(&si) == 0) {
+		unsigned int mem_unit = si.mem_unit ? si.mem_unit : 1;
+		uint64_t page_size = 4096;
+		stat->free_count = (si.freeram * mem_unit) / page_size;
+		stat->active_count = ((si.totalram - si.freeram - si.bufferram) * mem_unit) / page_size;
+		stat->wire_count = (si.bufferram * mem_unit) / page_size;
+	}
 
 	*count = HOST_VM_INFO64_COUNT;
 
