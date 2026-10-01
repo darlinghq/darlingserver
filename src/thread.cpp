@@ -178,6 +178,18 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 						nearest = stackDiff;
 					}
 				}
+				else if (chosenId == -1) {
+					// PTRACE_GETREGSET can fail for a thread we are tracing, e.g. one
+					// that has not reached its first ptrace stop yet. Before this
+					// loop learned to tolerate that, a failure skipped the thread
+					// with `continue`, so discovery simply moved on. Falling through
+					// to the detach below turns the same failure into a thrown
+					// system_error, which aborts discovery entirely and leaves
+					// chosenId at -1. Keeping the first unattached thread as a
+					// candidate preserves the old tolerance: if no thread's stack
+					// matches the hint, something is still better than ESRCH.
+					chosenId = id;
+				}
 
 				// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
 				if (ptrace(PTRACE_DETACH, id, 0, 0) == -1) {
