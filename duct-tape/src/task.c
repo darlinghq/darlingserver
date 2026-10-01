@@ -616,11 +616,11 @@ kern_return_t task_register_dyld_shared_cache_image_info(task_t task, dyld_kerne
 };
 
 kern_return_t task_restartable_ranges_register(task_t task, task_restartable_range_t* ranges, mach_msg_type_number_t count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe(); return KERN_SUCCESS;
 };
 
 kern_return_t task_restartable_ranges_synchronize(task_t task) {
-	dtape_stub_unsafe();
+	dtape_stub_safe(); return KERN_SUCCESS;
 };
 
 kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t behavior) {
