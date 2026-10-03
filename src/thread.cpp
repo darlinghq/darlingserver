@@ -1129,13 +1129,26 @@ int DarlingServer::Thread::pendingSignal() const {
 
 int DarlingServer::Thread::setPendingSignal(int signal) {
 	std::unique_lock lock(_rwlock);
-	int pendingSignal;
 	if (_interrupts.empty()) {
-		throw std::runtime_error("Can't set pending signal with no active interrupts");
-	} else {
-		pendingSignal = _interrupts.top().signal;
-		_interrupts.top().signal = signal;
+		// NO INTERRUPT MARKER TO SET IS NOT AN ERROR. MEASURED: an urgent-plane sigprocess on a
+		// thread with no interrupt context made this throw
+		// "Can't set pending signal with no active interrupts"; processCallBasicReplyCode mapped the
+		// plain exception to -EINVAL (it maps any std::exception to -EINVAL), the guest's sigexc
+		// handler saw the failure and aborted (SIGILL), the fork child never checked in and
+		// shellspawn never became ready. processSignal() already documents and tolerates exactly this
+		// state -- the empty stack means there is no marker of this thread's to clear, not that the
+		// signal is dropped -- and pendingSignal() already answers 0 for it, so this matches both.
+		static bool reportedMissingInterrupt = false;
+		if (!reportedMissingInterrupt) {
+			reportedMissingInterrupt = true;
+			static DarlingServer::Log log("thread");
+			log.error() << "[set-pending-signal-no-interrupt] setting a pending signal without an "
+				"interrupt context tid=" << _tid << " nstid=" << _nstid << log.endLog;
+		}
+		return 0;
 	}
+	int pendingSignal = _interrupts.top().signal;
+	_interrupts.top().signal = signal;
 	return pendingSignal;
 };
 
