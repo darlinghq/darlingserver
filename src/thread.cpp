@@ -382,6 +382,19 @@ void DarlingServer::Thread::makePendingCallActive() {
 	std::unique_lock lock(_rwlock);
 	_activeCall = _pendingCall;
 	_pendingCall = nullptr;
+	// Darwin's BSD syscall dispatch gives every call a fresh `int32_t retval = 0`
+	// (syscalls.master), and a trap body is free to leave it untouched when there is
+	// nothing to report. `_bsdReturnValue` is that per-call value, so it MUST start at 0
+	// for each call: it is otherwise reused across calls, and a handler that only writes
+	// it on the error path (the `ULF_NO_ERRNO` convention in duct-tape's ulock_wake)
+	// would hand the guest the PREVIOUS call's value. Measured failure: the Xcode 26.3
+	// `ld` called os_unfair_lock_unlock on a contended bucket lock, ulock_wake succeeded
+	// and left the field stale, so libplatform's `_os_unfair_lock_unlock_slow` got a
+	// return value outside {0, -ENOENT, -EINTR} and executed its `ud2` ("ulock_wake
+	// failure") -> SIGILL, which clang reported as "linker command failed due to
+	// signal". Resetting here (not in the one handler) keeps every trap on the Darwin
+	// contract.
+	_bsdReturnValue = 0;
 };
 
 void DarlingServer::Thread::_deactivateCallLocked(std::shared_ptr<Call> expectedCall) {
