@@ -646,7 +646,24 @@ void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 
 	thread_lock(&thread->xnu_thread);
 	user_state = LIST_FIRST(&thread->user_states);
-	LIST_REMOVE(user_state, link);
+	/*
+	 * THE LIST HEAD MAY BE THE EMBEDDED STATE, AND THAT ONE MUST NOT BE FREED. thread.c:84-85
+	 * installs &thread->default_state as the initial element of user_states, and it lives inside
+	 * the dtape_thread_t allocation - so freeing it passes glibc an INTERIOR pointer and kills the
+	 * process with "free(): invalid pointer". MEASURED: under gdb with a breakpoint on
+	 * malloc_printerr, the failure backtrace is malloc_printerr -> _int_free -> __GI___libc_free
+	 * (mem = 0x55555591ad98, i.e. chunk+0x10) -> dtape_thread_sigexc_exit (thread = 0x55555591ad10),
+	 * so the freed address is inside the thread allocation. The server died from this DURING the
+	 * workload, and every guest then blocked forever on ring replies from a dead server - the whole
+	 * T4 hang, with clang and the ld left waiting. An exit without a matching enter2 simply has
+	 * nothing dynamically allocated to pop, so leaving the embedded state in place is also the
+	 * correct pairing, not just a guard: enter2 pushes a malloc'd state and exit pops it.
+	 */
+	if (user_state != NULL && user_state != &thread->default_state) {
+		LIST_REMOVE(user_state, link);
+	} else {
+		user_state = NULL;
+	}
 	thread_unlock(&thread->xnu_thread);
 
 	free(user_state);
