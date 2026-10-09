@@ -1194,6 +1194,26 @@ void DarlingServer::Call::InterruptExit::processCall() {
 	{
 		std::unique_lock lock(thread->_rwlock);
 
+		/*
+		 * AN INTERRUPT EXIT MUST NOT TOUCH AN EMPTY STACK. std::stack::top() on an empty container is
+		 * undefined behaviour: it dereferences a position outside the live range of the underlying
+		 * deque and returns a garbage reference, which the move constructor then reads as an object.
+		 * MEASURED: the server died with SIGSEGV inside
+		 * std::_Optional_base<DarlingServer::Message>::_Optional_base(_Optional_base&&), reached from
+		 * Thread::InterruptContext's move constructor at this line, and the source pointer in the crash
+		 * probe's w0 held ASCII bytes - i.e. _interrupts.top() handed the move a non-object. This exit
+		 * has no matching InterruptEnter even though the reply above was already sent, so there is
+		 * nothing to restore; report the imbalance rather than interpret it as a context.
+		 */
+		if (thread->_interrupts.empty()) {
+			static std::atomic<int> interrupt_imbalance_reported{0};
+			if (interrupt_imbalance_reported.fetch_add(1) < 16) {
+				callLog.error() << *thread << ": interrupt exit with no matching enter; nothing to restore"
+				    << callLog.endLog;
+			}
+			return;
+		}
+
 		auto tmp = std::move(thread->_interrupts.top());
 
 		thread->_interrupts.pop();
