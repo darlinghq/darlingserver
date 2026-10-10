@@ -218,6 +218,10 @@ bool dtape_task_try_resume(dtape_task_t* task) {
 };
 
 void task_deallocate(task_t xtask) {
+	if (xtask == TASK_NULL) {
+		return;
+	}
+
 	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
 	os_ref_count_t count = os_ref_release(&xtask->ref_count);
 	if (count > 0) {
@@ -300,6 +304,10 @@ kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mac
 };
 
 kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
+	if (xtask == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
 
 	switch (flavor) {
