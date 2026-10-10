@@ -313,6 +313,9 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 	switch (flavor) {
 		case TASK_BASIC_INFO_32:
 		case TASK_BASIC_INFO_64:
+#ifdef TASK_BASIC_INFO_64_2
+		case TASK_BASIC_INFO_64_2:
+#endif
 		case MACH_TASK_BASIC_INFO: {
 			uint64_t utimeus;
 			uint64_t stimeus;
@@ -358,6 +361,25 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 				info->system_time.seconds = stimeus / USEC_PER_SEC;
 				info->system_time.microseconds = stimeus % USEC_PER_SEC;
 				info->policy = 0;
+#ifdef TASK_BASIC_INFO_64_2
+			} else if (flavor == TASK_BASIC_INFO_64_2) {
+				struct task_basic_info_64_2* info = (void*)task_info_out;
+
+				if (*task_info_count < TASK_BASIC_INFO_64_2_COUNT) {
+					return KERN_INVALID_ARGUMENT;
+				}
+
+				*task_info_count = TASK_BASIC_INFO_64_2_COUNT;
+
+				info->suspend_count = task->xnu_task.user_stop_count;
+				info->virtual_size = mem_info.virtual_size;
+				info->resident_size = mem_info.resident_size;
+				info->user_time.seconds = utimeus / USEC_PER_SEC;
+				info->user_time.microseconds = utimeus % USEC_PER_SEC;
+				info->system_time.seconds = stimeus / USEC_PER_SEC;
+				info->system_time.microseconds = stimeus % USEC_PER_SEC;
+				info->policy = 0;
+#endif
 			} else {
 				struct mach_task_basic_info* info = (void*)task_info_out;
 
