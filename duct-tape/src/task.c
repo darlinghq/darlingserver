@@ -521,7 +521,9 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 		};
 
 		default:
-			dtape_stub_unsafe("unimplemented flavor");
+			// the flavor is guest-controlled: reject it as XNU does, never abort the server
+			dtape_log_warning("%s: unsupported flavor %u", __FUNCTION__, flavor);
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 
