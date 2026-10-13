@@ -58,6 +58,10 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			throw std::invalid_argument("Invalid call number");
 	}
 
+	if (requestMessage.uid() != getuid()) {
+		throw std::runtime_error("System-reported message UID != darlingserver UID");
+	}
+
 	if ((header->number & DSERVER_CALL_UNMANAGED_FLAG) == 0) {
 		// now let's lookup (and possibly create) the process and thread making this call
 		process = processRegistry().registerIfAbsent(header->pid, [&]() {
