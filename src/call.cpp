@@ -125,6 +125,10 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			return nullptr;
 		}
 
+		if (thread->process() != process) {
+			throw std::runtime_error("Message TID belongs to a different process");
+		}
+
 		thread->setAddress(requestMessage.address());
 	}
 
