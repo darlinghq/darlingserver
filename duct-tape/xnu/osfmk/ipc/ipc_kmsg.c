@@ -3819,7 +3819,12 @@ ipc_kmsg_copyin_body(
 				goto clean_message;
 			}
 
-			if ((size >= MSG_OOL_SIZE_SMALL) &&
+			/*
+			 * Darling's small-copy threshold is zero. An empty region
+			 * needs no kernel memory (ipc_kmsg_copyin_ool_descriptor
+			 * sends it as NULL) and must not trip the overflow check.
+			 */
+			if (size != 0 && (size >= MSG_OOL_SIZE_SMALL) &&
 			    (daddr->out_of_line.copy == MACH_MSG_PHYSICAL_COPY) &&
 			    !(daddr->out_of_line.deallocate)) {
 				/*
