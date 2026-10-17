@@ -1466,7 +1466,9 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 		};
 
 		default:
-			dtape_stub_unsafe("Unimplemented flavor");
+			// the flavor is guest-controlled: reject it as XNU does, never abort the server
+			dtape_log_debug("%s: unsupported flavor %u", __FUNCTION__, flavor);
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 
