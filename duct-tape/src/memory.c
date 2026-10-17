@@ -779,7 +779,11 @@ region_info_out:
 			return kr;
 		};
 		default:
-			dtape_stub_unsafe("Unimplemented flavor");
+			// the flavor is guest-controlled: reject it as XNU does, never abort the server
+			dtape_log_debug("%s: unsupported flavor %d", __FUNCTION__, flavor);
+			if (object_name)
+				*object_name = IP_NULL;
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 
