@@ -858,7 +858,7 @@ thread_set_state(
 				s64.dr6 = s->dr6;
 				s64.dr7 = s->dr7;
 
-				return thread_set_state(thread, x86_DEBUG_STATE64, (thread_state_t) &s,
+				return thread_set_state(thread, x86_DEBUG_STATE64, (thread_state_t) &s64,
 						x86_DEBUG_STATE64_COUNT);
 			}
 			case x86_DEBUG_STATE64:
