@@ -625,7 +625,8 @@ kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_
 };
 
 kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
-	dtape_stub_unsafe();
+	// no footprint limits here; XNU without CONFIG_MEMORYSTATUS answers the same way
+	return KERN_FAILURE;
 };
 
 kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
