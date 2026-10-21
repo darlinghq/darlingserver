@@ -593,8 +593,14 @@ int main(int argc, char** argv) {
 
 		// now set our increased rlimit
 		if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
-			fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
-			//exit(1);
+			// In a rootless user namespace, raising the hard limit can fail.
+			// Still raise the soft limit to the inherited hard limit so
+			// processes holding numerous descriptors/memfds don't fail with EMFILE.
+			increased_limit.rlim_cur = increased_limit.rlim_max = default_limit.rlim_max;
+			if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
+				fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
+				//exit(1);
+			}
 		}
 
 #endif
