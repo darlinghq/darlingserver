@@ -77,7 +77,7 @@ typedef uintptr_t (*dtape_hook_task_get_next_region_f)(void* task_context, uintp
 typedef bool (*dtape_hook_task_get_region_residency_f)(void* task_context, uintptr_t start_address, uint64_t* private_pages, uint64_t* shared_pages);
 typedef bool (*dtape_hook_task_change_protection_f)(void* task_context, uintptr_t address, size_t page_count, int protection);
 typedef bool (*dtape_hook_task_sync_memory_f)(void* task_context, uintptr_t address, size_t size, int sync_flags);
-typedef void (*dtape_hook_task_context_dispose_f)(void* task_context);
+typedef void (*dtape_hook_task_context_dispose_f)(void* task_context, dtape_task_t* task);
 typedef dtape_eternal_id_t (*dtape_hook_task_eternal_id_f)(void* thread_context);
 
 // wakes up to `count` threads waiting (FUTEX_WAIT) on the 32-bit word at `address` in a shared message queue region

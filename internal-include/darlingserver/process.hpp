@@ -194,7 +194,7 @@ namespace DarlingServer {
 
 		std::shared_ptr<Thread> _pickS2CThread(void) const;
 
-		void _dispose();
+		void _dispose(dtape_task_t* task);
 
 		void _setEternalID(EternalID eid);
 
