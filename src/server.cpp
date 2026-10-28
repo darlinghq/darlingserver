@@ -479,8 +479,8 @@ struct DTapeHooks {
 		}
 	};
 
-	static void dtape_hook_task_context_dispose(void* task_context) {
-		static_cast<DarlingServer::Process*>(task_context)->_dispose();
+	static void dtape_hook_task_context_dispose(void* task_context, dtape_task_t* task) {
+		static_cast<DarlingServer::Process*>(task_context)->_dispose(task);
 	};
 
 	static dtape_eternal_id_t dtape_hook_task_eternal_id(void* task_context) {

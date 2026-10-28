@@ -170,7 +170,7 @@ void dtape_task_destroy(dtape_task_t* task) {
 
 	lck_mtx_destroy(&task->xnu_task.lock, LCK_GRP_NULL);
 
-	dtape_hooks->task_context_dispose(task->context);
+	dtape_hooks->task_context_dispose(task->context, task);
 
 	free(task);
 };

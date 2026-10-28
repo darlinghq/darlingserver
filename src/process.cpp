@@ -1406,13 +1406,21 @@ void DarlingServer::Process::notifyDead() {
 			dtape_semaphore_destroy(forkWaitSemaphore);
 		}
 		dtape_task_release(self->_dtapeTask);
-		self->_dtapeTask = nullptr;
 	});
 
 	processRegistry().unregisterEntry(shared_from_this());
 };
 
-void DarlingServer::Process::_dispose() {
+void DarlingServer::Process::_dispose(dtape_task_t* task) {
+	{
+		std::unique_lock lock(_rwlock);
+		// Exec replaces the task while retaining this Process context. Destroying
+		// its predecessor must not retire the replacement.
+		if (_dtapeTask != task) {
+			return;
+		}
+		_dtapeTask = nullptr;
+	}
 	_selfReference = nullptr;
 };
 
