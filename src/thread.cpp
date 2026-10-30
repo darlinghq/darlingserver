@@ -1745,6 +1745,15 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 
 	std::unique_lock lock(_rwlock);
 
+	if (expectedCall && expectedCall->armingRefused()) {
+		// This Call never owned a slot. Publish its reply on its own route and leave the
+		// active, pending and interrupt slots untouched; trying to deactivate one would throw
+		// and terminate the server while replying to the refused call.
+		lock.unlock();
+		expectedCall->publishFinalReply(std::move(reply));
+		return;
+	}
+
 	if (expectedCall) {
 		_deactivateCallLocked(expectedCall);
 	}
