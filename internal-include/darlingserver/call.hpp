@@ -55,6 +55,9 @@ namespace DarlingServer {
 
 		static void sendReply(Message&& reply);
 
+		// A Call rejected in setPendingCall never entered a thread slot; its -EAGAIN reply must not deactivate one.
+		bool _armingRefused = false;
+
 		// under the target's code signing policy, whether `tracer` may trace `target`; 0, EPERM or EBUSY
 		int _mediateAttach(std::shared_ptr<Process> target, std::shared_ptr<Process> tracer);
 
@@ -73,6 +76,10 @@ namespace DarlingServer {
 		virtual void processCall() = 0;
 
 		virtual void sendBasicReply(int resultCode);
+		// A refused Call owns no thread slot, so its reply must be published directly.
+		void publishFinalReply(Message&& reply);
+		void markArmingRefused() { _armingRefused = true; }
+		bool armingRefused() const { return _armingRefused; }
 		// FIXME: this should actually be in a "BSD" subclass with BSD traps inheriting from it
 		virtual void sendBSDReply(int resultCode, uint32_t returnValue);
 
