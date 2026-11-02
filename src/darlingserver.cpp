@@ -252,6 +252,21 @@ void darlingPreInit(const char* prefix)
 	}
 }
 
+static void detachStdio(void)
+{
+	int fd = open("/dev/null", O_RDWR);
+
+	if (fd < 0)
+		return;
+
+	dup2(fd, STDIN_FILENO);
+	dup2(fd, STDOUT_FILENO);
+	dup2(fd, STDERR_FILENO);
+
+	if (fd > STDERR_FILENO)
+		close(fd);
+}
+
 void spawnLaunchd(const char* prefix)
 {
 	puts("Bootstrapping the container with launchd...");
@@ -268,6 +283,7 @@ void spawnLaunchd(const char* prefix)
 
 	setenv("__mldr_DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
+	detachStdio();
 	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, initPath, NULL);
 
 	fprintf(stderr, "Failed to exec launchd: %s\n", strerror(errno));
@@ -683,6 +699,8 @@ int main(int argc, char** argv) {
 	write(pipefd, ".", 1);
 	close(pipefd);
 
+	setsid();
+
 	if (pipe(childWaitFDs) != 0) {
 		std::cerr << "Failed to create child waiting pipe: " << strerror(errno) << std::endl;
 		exit(1);
@@ -746,6 +764,8 @@ int main(int argc, char** argv) {
 
 	// create the server
 	auto server = new DarlingServer::Server(prefix);
+
+	detachStdio();
 
 	// tell the child to go ahead; the socket has been created
 	write(childWaitFDs[1], ".", 1);
