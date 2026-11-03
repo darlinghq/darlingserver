@@ -617,7 +617,14 @@ kern_return_t task_restartable_ranges_synchronize(task_t task) {
 };
 
 kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t behavior) {
-	dtape_stub_unsafe();
+	if (task == TASK_NULL) {
+		return KERN_INVALID_TASK;
+	}
+	if (behavior & ~TASK_EXC_GUARD_ALL) {
+		return KERN_INVALID_VALUE;
+	}
+	task->task_exc_guard = behavior;
+	return KERN_SUCCESS;
 };
 
 kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
