@@ -624,6 +624,18 @@ kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size
 };
 
 kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t* count) {
+	// validate the request as XNU does, so unknown flavors keep their usual error
+	switch (flavor) {
+		case VM_PAGE_INFO_BASIC:
+			// XNU also accepts one int less (the structure was once unpadded)
+			if (*count != VM_PAGE_INFO_BASIC_COUNT && *count != VM_PAGE_INFO_BASIC_COUNT - 1) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			break;
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
+
 	// Page accounting is not implemented; let the caller handle unsupported queries.
 	if (count) *count = 0;
 	return KERN_NOT_SUPPORTED;
