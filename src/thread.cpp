@@ -1127,7 +1127,13 @@ int DarlingServer::Thread::setPendingSignal(int signal) {
 };
 
 void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress, const std::optional<dtape_exception_state_t>& exceptionState) {
-	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	try {
+		loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	} catch (std::system_error e) {
+		// as in waitWhileUserSuspended (process killed meanwhile)
+		threadLog.warning() << *this << ": failed to load state from user in processSignal: " << e.code() << " (" << e.what() << ")" << threadLog.endLog;
+		return;
+	}
 	dtape_thread_set_exception_state(_dtapeThread, exceptionState ? &*exceptionState : nullptr);
 
 	{
@@ -1826,7 +1832,14 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 };
 
 void DarlingServer::Thread::waitWhileUserSuspended(dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
-	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	try {
+		loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	} catch (std::system_error e) {
+		// the process was killed between its suspension signal and this call (SIGKILL of a task-suspended app):
+		// the read fails. Uncaught, this aborted darlingserver and took the whole container down.
+		threadLog.warning() << *this << ": failed to load state from user in waitWhileUserSuspended: " << e.code() << " (" << e.what() << ")" << threadLog.endLog;
+		return;
+	}
 	dtape_thread_wait_while_user_suspended(_dtapeThread);
 	try {
 		saveStateToUser(callerArchitecture, threadStateAddress, floatStateAddress);
