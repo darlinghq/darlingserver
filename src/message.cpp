@@ -18,6 +18,7 @@
  */
 
 #include <darlingserver/message.hpp>
+#include <darlingserver/logging.hpp>
 #include <unistd.h>
 #include <cstdlib>
 #include <stdexcept>
@@ -25,6 +26,7 @@
 #include <mutex>
 #include <system_error>
 #include <darlingserver/logging.hpp>
+#include <cstring>
 
 static DarlingServer::Log messageLog("message");
 
@@ -541,13 +543,17 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 				break;
 			} else if (errno == EINTR) {
 				ret = 0;
-			} else if (errno == EPIPE || errno == ECONNREFUSED) {
-				// this means that peer of the first message we tried to send has died.
-				// we'll just drop that message and try the others.
+			} else if (errno == ENOBUFS || errno == ENOMEM) {
+				canSendMore = false;
+				break;
+			} else if (errno == EBADF || errno == ENOTSOCK || errno == EFAULT) {
+				throw std::system_error(errno, std::generic_category(), "Failed to send messages through socket");
+			} else {
+				// sendmmsg reports an error only for the first message, so the failure belongs to that message's
+				// destination (e.g. its peer died or its address is unusable); drop it and keep sending the rest.
+				messageLog.warning() << "Dropping outgoing message: " << strerror(errno) << messageLog.endLog;
 				_messages.pop_front();
 				ret = 0;
-			} else {
-				throw std::system_error(errno, std::generic_category(), "Failed to send messages through socket");
 			}
 		}
 
