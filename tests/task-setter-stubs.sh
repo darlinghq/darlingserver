@@ -26,6 +26,8 @@ cat >"$work/harness.c" <<'C'
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); exit(1); } } while (0)
 /* Values from duct-tape/xnu/osfmk/mach/kern_return.h and mach/task_info.h. */
 #define KERN_SUCCESS 0
@@ -49,7 +51,10 @@ for fn in task_set_exc_guard_behavior task_get_exc_guard_behavior task_set_phys_
 done
 cat >>"$work/harness.c" <<'C'
 
+static void on_segv(int sig) { static const char m[] = "FAIL: crashed (missing NULL task check?)\n"; (void)!write(2, m, sizeof m - 1); _exit(1); }
+
 int main(void) {
+    signal(SIGSEGV, on_segv);
     struct task task = { 0 };
     task_exc_guard_behavior_t behavior = 0;
 
@@ -68,6 +73,8 @@ int main(void) {
     CHECK(task_set_exc_guard_behavior(&task, 0) == KERN_SUCCESS);
     CHECK(task.task_exc_guard == 0);
     CHECK(task_set_exc_guard_behavior(TASK_NULL, 0) == KERN_INVALID_TASK);
+    /* The task check comes before the value check, as in XNU. */
+    CHECK(task_set_exc_guard_behavior(TASK_NULL, TASK_EXC_GUARD_ALL + 1) == KERN_INVALID_TASK);
 
     puts("PASS: task_set_exc_guard_behavior and task_set_phys_footprint_limit follow XNU");
     return 0;

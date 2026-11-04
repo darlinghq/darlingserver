@@ -632,7 +632,7 @@ kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_
 };
 
 kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
-	// no footprint limits here; XNU without CONFIG_MEMORYSTATUS answers the same way
+	// memorystatus is not implemented here, so mirror XNU's !CONFIG_MEMORYSTATUS stub (xnu task.c:6949-6957)
 	return KERN_FAILURE;
 };
 

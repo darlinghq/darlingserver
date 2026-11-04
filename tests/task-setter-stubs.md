@@ -16,4 +16,5 @@ It checks XNU's results: `task_set_phys_footprint_limit()` returns
 `CONFIG_MEMORYSTATUS`); `task_set_exc_guard_behavior()` stores valid bits so the
 getter reads them back, rejects bits outside `TASK_EXC_GUARD_ALL` with
 `KERN_INVALID_VALUE` (keeping the old value) and a null task with
-`KERN_INVALID_TASK`.
+`KERN_INVALID_TASK` (checked before the value, so a null task with bad bits
+still gives `KERN_INVALID_TASK`; a crash on null is reported as a failure).
