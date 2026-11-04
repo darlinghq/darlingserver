@@ -19,5 +19,5 @@ At 9353d34 the block forwards the address of its local pointer, so the stand-in
 reads a stack address as `dr0` and the script fails. With the fix it passes.
 
 The x86_DEBUG_STATE64 setter is still a stub returning `KERN_NOT_SUPPORTED`, so
-no guest-visible behaviour changes today; this keeps the 32-bit path correct for
-when the 64-bit setter is implemented. Not run under a live server.
+no guest-visible behaviour changes today; this removes a stack over-read. The
+64-bit setter will also need to accept the forwarded 32-bit case. Not run under a live server.

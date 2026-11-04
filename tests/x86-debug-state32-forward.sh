@@ -12,6 +12,7 @@ fi
 # The case block inside thread_set_state(), from its label to its closing brace.
 block=$(awk '
     /^thread_set_state\($/ { infn = 1 }
+    infn && /^}$/ { infn = 0 }
     infn && /^\t\t\tcase x86_DEBUG_STATE32:$/ { grab = 1 }
     grab { print }
     grab && /^\t\t\t}$/ { exit }
@@ -34,6 +35,7 @@ typedef int kern_return_t;
 typedef unsigned int natural_t, mach_msg_type_number_t, *thread_state_t;
 typedef struct { unsigned int dr0, dr1, dr2, dr3, dr4, dr5, dr6, dr7; } x86_debug_state32_t;
 typedef struct { uint64_t dr0, dr1, dr2, dr3, dr4, dr5, dr6, dr7; } x86_debug_state64_t;
+#define x86_DEBUG_STATE32_COUNT ((mach_msg_type_number_t)(sizeof(x86_debug_state32_t) / sizeof(unsigned int)))
 #define x86_DEBUG_STATE64_COUNT ((mach_msg_type_number_t)(sizeof(x86_debug_state64_t) / sizeof(unsigned int)))
 enum { dserver_rpc_architecture_i386 = 1, dserver_rpc_architecture_x86_64 = 2 };
 struct dtask { int architecture; };
@@ -44,12 +46,13 @@ static kern_return_t forward(thread_t thread, int flavor, thread_state_t state, 
     (void)thread;
     CHECK(flavor == x86_DEBUG_STATE64);
     CHECK(count == x86_DEBUG_STATE64_COUNT);
+    CHECK(x86_DEBUG_STATE32_COUNT == 8 && x86_DEBUG_STATE64_COUNT == 16);
     const uint64_t *regs = (const uint64_t *)state;
     /* Stop at the first mismatch so a wrong pointer is not read past its end. */
     for (int i = 0; i < 8; ++i) {
-        if (regs[i] != 0x10u + (uint64_t)i) {
-            fprintf(stderr, "FAIL: forwarded dr%d = %#llx, expected %#x\n", i,
-                    (unsigned long long)regs[i], 0x10 + i);
+        if (regs[i] != 0x80000001ull + (uint64_t)i) {
+            fprintf(stderr, "FAIL: forwarded dr%d = %#llx, expected %#llx\n", i,
+                    (unsigned long long)regs[i], 0x80000001ull + (unsigned long long)i);
             return -1;
         }
     }
@@ -68,7 +71,7 @@ cat >>"$work/harness.c" <<'C'
 }
 
 int main(void) {
-    x86_debug_state32_t s32 = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 };
+    x86_debug_state32_t s32 = { 0x80000001u, 0x80000002u, 0x80000003u, 0x80000004u, 0x80000005u, 0x80000006u, 0x80000007u, 0x80000008u };
     struct dtask task32 = { dserver_rpc_architecture_i386 }, task64 = { dserver_rpc_architecture_x86_64 };
     CHECK(set_debug32(NULL, &task64, (thread_state_t)&s32) == KERN_INVALID_ARGUMENT);
     CHECK(forwarded == 0);
