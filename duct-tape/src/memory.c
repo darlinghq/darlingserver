@@ -531,7 +531,9 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
 };
 
 kern_return_t _mach_make_memory_entry(vm_map_t target_map, memory_object_size_t* size, memory_object_offset_t offset, vm_prot_t permission, ipc_port_t* object_handle, ipc_port_t parent_entry) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_memory_entry_access_tracking(ipc_port_t entry_port, int* access_tracking, uint32_t* access_tracking_reads, uint32_t* access_tracking_writes) {
@@ -543,7 +545,9 @@ kern_return_t mach_memory_entry_ownership(ipc_port_t entry_port, task_t owner, i
 };
 
 kern_return_t mach_memory_entry_purgable_control(ipc_port_t entry_port, vm_purgable_t control, int* state) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp, mach_msg_type_number_t* namesCntp, mach_zone_info_array_t* infop, mach_msg_type_number_t* infoCntp, mach_memory_info_array_t* memoryInfop, mach_msg_type_number_t* memoryInfoCntp) {
@@ -551,11 +555,15 @@ kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp,
 };
 
 kern_return_t mach_memory_object_memory_entry(host_t host, boolean_t internal, vm_size_t size, vm_prot_t permission, memory_object_t pager, ipc_port_t* entry_handle) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_memory_object_memory_entry_64(host_t host, boolean_t internal, vm_object_offset_t size, vm_prot_t permission, memory_object_t pager, ipc_port_t* entry_handle) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
 };
 
 void pmap_require(pmap_t pmap) {
