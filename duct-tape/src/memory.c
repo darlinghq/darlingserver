@@ -642,10 +642,7 @@ kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page
 };
 
 kern_return_t mach_vm_page_query(vm_map_t map, mach_vm_offset_t offset, int* disposition, int* ref_count) {
-	// Page accounting is not implemented; let the caller handle unsupported queries.
-	if (disposition) *disposition = 0;
-	if (ref_count) *ref_count = 0;
-	return KERN_NOT_SUPPORTED;
+	return vm_map_page_query_internal(map, offset, disposition, ref_count);
 };
 
 kern_return_t mach_vm_page_range_query(vm_map_t map, mach_vm_offset_t address, mach_vm_size_t size, mach_vm_address_t dispositions_addr, mach_vm_size_t* dispositions_count) {
@@ -1161,7 +1158,10 @@ kern_return_t mach_zone_info_for_zone(host_priv_t host, mach_zone_name_t name, m
 };
 
 kern_return_t vm_map_page_query_internal(vm_map_t target_map, vm_map_offset_t offset, int* disposition, int* ref_count) {
-	dtape_stub_unsafe();
+	// Page accounting is not implemented; let the caller handle unsupported queries.
+	if (disposition) *disposition = 0;
+	if (ref_count) *ref_count = 0;
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t vm_map_purgable_control(vm_map_t map, vm_map_offset_t address, vm_purgable_t control, int* state) {

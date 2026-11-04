@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the real mach_vm_page_info/_query/_range_query from duct-tape/src/memory.c
+# Build the real vm_map_page_query_internal and mach_vm_page_info/_query/_range_query from duct-tape/src/memory.c
 # on the host and check they return errors instead of aborting the server.
 # Usage: tests/vm-page-query-unsupported.sh [git revision]
 set -euo pipefail
@@ -34,10 +34,11 @@ typedef unsigned int mach_msg_type_number_t;
 typedef uint64_t mach_vm_address_t, mach_vm_offset_t, mach_vm_size_t;
 typedef struct { int disposition, ref_count; uint64_t object_id, offset; int depth, __pad; } vm_page_info_basic_data_t;
 typedef struct vm_map *vm_map_t;
+typedef uint64_t vm_map_offset_t;
 /* In darlingserver this logs and reaches __builtin_unreachable(): the server dies. */
 #define dtape_stub_unsafe(...) (fprintf(stderr, "FAIL: %s reaches dtape_stub_unsafe (server abort)\n", __func__), exit(1), 0)
 C
-for fn in mach_vm_page_info mach_vm_page_query mach_vm_page_range_query; do
+for fn in vm_map_page_query_internal mach_vm_page_info mach_vm_page_query mach_vm_page_range_query; do
     body=$(extract "$fn")
     [[ -n $body ]] || { echo "$fn not found" >&2; exit 2; }
     printf '%s\n' "$body" >>"$work/harness.c"
@@ -65,6 +66,12 @@ int main(void) {
     /* XNU's vm_map_page_query_internal() zeroes both outputs on failure. */
     int disposition = -1, ref_count = -1;
     CHECK(mach_vm_page_query(map, 0x2000, &disposition, &ref_count) == KERN_NOT_SUPPORTED);
+    CHECK(disposition == 0 && ref_count == 0);
+
+    /* vm32_map_page_query() (vm32_user.c:504-517) calls the internal routine directly. */
+    disposition = -1;
+    ref_count = -1;
+    CHECK(vm_map_page_query_internal(map, 0x2000, &disposition, &ref_count) == KERN_NOT_SUPPORTED);
     CHECK(disposition == 0 && ref_count == 0);
 
     mach_vm_size_t dispositions = 4;
