@@ -38,6 +38,7 @@
 #include <sys/syscall.h>
 #include <sys/signal.h>
 #include <filesystem>
+#include <climits>
 
 #include <darling-config.h>
 
@@ -476,6 +477,26 @@ static void temp_drop_privileges(uid_t uid, gid_t gid) {
 	}
 };
 
+// The launcher formats these with %d. Anything else is rejected rather than left at a default,
+// because (uid_t)-1 makes setresuid()/setresgid() leave the id unchanged.
+static unsigned long parseNumericArgument(const char* what, const char* str, unsigned long max) {
+	char* end;
+	errno = 0;
+	unsigned long value = strtoul(str, &end, 10);
+	if (str[0] < '0' || str[0] > '9' || *end != '\0' || errno != 0 || value > max) {
+		fprintf(stderr, "darlingserver: invalid %s argument \"%s\"\n", what, str);
+		exit(1);
+	}
+	return value;
+};
+
+static bool dropTookEffect(uid_t uid, gid_t gid) {
+	uid_t ruid, euid, suid;
+	gid_t rgid, egid, sgid;
+	return getresuid(&ruid, &euid, &suid) == 0 && ruid == uid && euid == uid && suid == uid &&
+	       getresgid(&rgid, &egid, &sgid) == 0 && rgid == gid && egid == gid && sgid == gid;
+};
+
 static void perma_drop_privileges(uid_t uid, gid_t gid) {
 	if (setresgid(gid, gid, gid) < 0) {
 		fprintf(stderr, "Failed to drop group privileges\n");
@@ -483,6 +504,10 @@ static void perma_drop_privileges(uid_t uid, gid_t gid) {
 	}
 	if (setresuid(uid, uid, uid) < 0) {
 		fprintf(stderr, "Failed to drop user privileges\n");
+		exit(1);
+	}
+	if (!dropTookEffect(uid, gid)) {
+		fprintf(stderr, "Privilege drop did not take effect\n");
 		exit(1);
 	}
 };
@@ -544,9 +569,10 @@ int main(int argc, char** argv) {
 #endif
 
 	prefix = argv[1];
-	sscanf(argv[2], "%d", &originalUID);
-	sscanf(argv[3], "%d", &originalGID);
-	sscanf(argv[4], "%d", &pipefd);
+	static_assert(sizeof(uid_t) == sizeof(unsigned int) && sizeof(gid_t) == sizeof(unsigned int));
+	originalUID = parseNumericArgument("uid", argv[2], UINT_MAX - 1);
+	originalGID = parseNumericArgument("gid", argv[3], UINT_MAX - 1);
+	pipefd = parseNumericArgument("pipe fd", argv[4], INT_MAX);
 
 	if (argv[5][0] == '1') {
 		fix_permissions = true;
