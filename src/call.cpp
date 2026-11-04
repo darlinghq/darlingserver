@@ -156,10 +156,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		Message replyToSave(pushReplyCall->reply_size, 0);
 
 		// extract the reply-push synchronization pipe
-		auto pipeDesc = requestMessage.extractDescriptorAtIndex(requestMessage.descriptors().size() - 1);
+		// owned here so it is closed on every exit; the client is blocked on the read end and EOF releases it
+		FD pipeDesc(requestMessage.extractDescriptorAtIndex(requestMessage.descriptors().size() - 1));
 		char tmp = 1;
 
-		if (pipeDesc < 0) {
+		if (!pipeDesc) {
 			throw std::runtime_error("Failed to extract reply-push synchronization pipe");
 		}
 
@@ -193,9 +194,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		callLog.debug() << *thread << ": Saved client-pushed reply (" << ((thread->_pendingSavedReply) ? "pending" : "normal") << ")" << callLog.endLog;
 
 		// write a byte to the pipe so the caller can continue
-		write(pipeDesc, &tmp, sizeof(tmp));
-		// and close it
-		close(pipeDesc);
+		write(pipeDesc.fd(), &tmp, sizeof(tmp));
 
 		return nullptr;
 	}
