@@ -2,6 +2,12 @@ project(darlingserver)
 
 cmake_minimum_required(VERSION 3.13)
 
+# Every Mach call of every process goes through the server: without a build
+# type CMake gives no optimization, which makes each call take a millisecond.
+if (NOT CMAKE_BUILD_TYPE AND NOT DSERVER_ASAN AND NOT DSERVER_UBSAN)
+	add_compile_options(-O2)
+endif()
+
 option(DSERVER_TOOLS "Build darlingserver tools (for debugging)" OFF)
 option(DSERVER_ASAN "Build darlingserver with ASAN" OFF)
 option(DSERVER_UBSAN "Build darlingserver with UBSAN" OFF)
