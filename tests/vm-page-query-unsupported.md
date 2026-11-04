@@ -11,7 +11,7 @@ CC="zig cc" tests/vm-page-query-unsupported.sh          # working tree
 CC="zig cc" tests/vm-page-query-unsupported.sh <rev>    # memory.c at <rev>
 ```
 
-It checks that an unknown `mach_vm_page_info()` flavor or a wrong count gets
+It checks that an unknown `mach_vm_page_info()` flavor, a wrong count or a NULL count gets
 `KERN_INVALID_ARGUMENT` (as in XNU's `vm_map_page_range_info_internal()`), that
 the valid `VM_PAGE_INFO_BASIC` request and the other queries (including
 `vm_map_page_query_internal()`, which the 32-bit `vm32_map_page_query()` calls) get

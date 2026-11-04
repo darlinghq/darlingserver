@@ -50,6 +50,9 @@ int main(void) {
     vm_page_info_basic_data_t info;
     mach_msg_type_number_t count;
 
+    /* A missing count pointer is rejected before it is read. */
+    CHECK(mach_vm_page_info(map, 0x2000, VM_PAGE_INFO_BASIC, (vm_page_info_t)&info, NULL) == KERN_INVALID_ARGUMENT);
+
     /* Unknown flavors and wrong counts: XNU's vm_map_page_range_info_internal() rejects them. */
     count = VM_PAGE_INFO_BASIC_COUNT;
     CHECK(mach_vm_page_info(map, 0x2000, 2, (vm_page_info_t)&info, &count) == KERN_INVALID_ARGUMENT);
