@@ -477,24 +477,44 @@ static void temp_drop_privileges(uid_t uid, gid_t gid) {
 	}
 };
 
-// The launcher formats these with %d. Anything else is rejected rather than left at a default,
-// because (uid_t)-1 makes setresuid()/setresgid() leave the id unchanged.
-static unsigned long parseNumericArgument(const char* what, const char* str, unsigned long max) {
+// The launcher formats these with %d, so an id above INT_MAX arrives negative and must round-trip.
+// Anything else is rejected rather than left at a default, because (uid_t)-1 makes
+// setresuid()/setresgid() leave the id unchanged.
+static long long parseNumericArgument(const char* what, const char* str, long long min, long long max) {
 	char* end;
 	errno = 0;
-	unsigned long value = strtoul(str, &end, 10);
-	if (str[0] < '0' || str[0] > '9' || *end != '\0' || errno != 0 || value > max) {
+	bool negative = (str[0] == '-');
+	const char* digits = negative ? str + 1 : str;
+	if (digits[0] < '0' || digits[0] > '9') {
+		fprintf(stderr, "darlingserver: invalid %s argument \"%s\"\n", what, str);
+		exit(1);
+	}
+	long long value = strtoll(str, &end, 10);
+	if (*end != '\0' || errno != 0 || value < min || value > max) {
 		fprintf(stderr, "darlingserver: invalid %s argument \"%s\"\n", what, str);
 		exit(1);
 	}
 	return value;
 };
 
+static uint32_t parseIdArgument(const char* what, const char* str) {
+	uint32_t id = (uint32_t)parseNumericArgument(what, str, INT_MIN, UINT_MAX);
+	if (id == UINT_MAX) {
+		fprintf(stderr, "darlingserver: invalid %s argument \"%s\"\n", what, str);
+		exit(1);
+	}
+	return id;
+};
+
+static bool dropIdsMatch(uid_t uid, gid_t gid, uid_t ruid, uid_t euid, uid_t suid, gid_t rgid, gid_t egid, gid_t sgid) {
+	return ruid == uid && euid == uid && suid == uid && rgid == gid && egid == gid && sgid == gid;
+};
+
 static bool dropTookEffect(uid_t uid, gid_t gid) {
 	uid_t ruid, euid, suid;
 	gid_t rgid, egid, sgid;
-	return getresuid(&ruid, &euid, &suid) == 0 && ruid == uid && euid == uid && suid == uid &&
-	       getresgid(&rgid, &egid, &sgid) == 0 && rgid == gid && egid == gid && sgid == gid;
+	return getresuid(&ruid, &euid, &suid) == 0 && getresgid(&rgid, &egid, &sgid) == 0 &&
+	       dropIdsMatch(uid, gid, ruid, euid, suid, rgid, egid, sgid);
 };
 
 static void perma_drop_privileges(uid_t uid, gid_t gid) {
@@ -570,9 +590,9 @@ int main(int argc, char** argv) {
 
 	prefix = argv[1];
 	static_assert(sizeof(uid_t) == sizeof(unsigned int) && sizeof(gid_t) == sizeof(unsigned int));
-	originalUID = parseNumericArgument("uid", argv[2], UINT_MAX - 1);
-	originalGID = parseNumericArgument("gid", argv[3], UINT_MAX - 1);
-	pipefd = parseNumericArgument("pipe fd", argv[4], INT_MAX);
+	originalUID = parseIdArgument("uid", argv[2]);
+	originalGID = parseIdArgument("gid", argv[3]);
+	pipefd = parseNumericArgument("pipe fd", argv[4], 0, INT_MAX);
 
 	if (argv[5][0] == '1') {
 		fix_permissions = true;
