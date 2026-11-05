@@ -430,6 +430,18 @@ calls = [
 		('t', 'uint32_t*', 'uint64_t'),
 	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
 
+	('task_read_for_pid', [
+		('target_tport', 'uint32_t'),
+		('pid', 'int32_t'),
+		('t', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX | XNU_TRAP_NO_DTAPE_DEF),
+
+	('task_inspect_for_pid', [
+		('target_tport', 'uint32_t'),
+		('pid', 'int32_t'),
+		('t', 'uint32_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX | XNU_TRAP_NO_DTAPE_DEF),
+
 	('pid_for_task', [
 		('t', 'uint32_t'),
 		('pid', 'int32_t*', 'uint64_t'),

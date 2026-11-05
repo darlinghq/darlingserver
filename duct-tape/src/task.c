@@ -612,7 +612,7 @@ kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_in
 	dtape_stub_unsafe();
 };
 
-static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pid, uintptr_t t, bool task_name) {
+static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pid, uintptr_t t, mach_task_flavor_t flavor) {
 	kern_return_t kr = KERN_FAILURE;
 	task_t receiving_task = TASK_NULL;
 	dtape_task_t* looked_up_task = NULL;
@@ -629,17 +629,26 @@ static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pi
 		goto out;
 	}
 
-	if (task_name) {
+	switch (flavor) {
+	case TASK_FLAVOR_NAME:
 		right = convert_task_name_to_port(&looked_up_task->xnu_task);
-	} else {
+		break;
+	case TASK_FLAVOR_READ:
+		right = convert_task_read_to_port(&looked_up_task->xnu_task);
+		break;
+	case TASK_FLAVOR_INSPECT:
+		right = convert_task_inspect_to_port(&looked_up_task->xnu_task);
+		break;
+	default:
 		if (&looked_up_task->xnu_task == current_task()) {
 			right = convert_task_to_port_pinned(&looked_up_task->xnu_task);
 		} else {
 			right = convert_task_to_port(&looked_up_task->xnu_task);
 		}
+		break;
 	}
 
-	// consumed by convert_task{,_name}_to_port{,_pinned}
+	// consumed by convert_task{,_name,_read,_inspect}_to_port{,_pinned}
 	looked_up_task = NULL;
 
 	if (right == IPC_PORT_NULL) {
@@ -681,11 +690,19 @@ out:
 };
 
 kern_return_t task_for_pid(struct task_for_pid_args* args) {
-	return task_for_pid_internal(args->target_tport, args->pid, args->t, false);
+	return task_for_pid_internal(args->target_tport, args->pid, args->t, TASK_FLAVOR_CONTROL);
 };
 
 kern_return_t task_name_for_pid(struct task_name_for_pid_args* args) {
-	return task_for_pid_internal(args->target_tport, args->pid, args->t, true);
+	return task_for_pid_internal(args->target_tport, args->pid, args->t, TASK_FLAVOR_NAME);
+};
+
+int dtape_task_read_for_pid(uint32_t target_tport, int32_t pid, uint64_t t) {
+	return task_for_pid_internal(target_tport, pid, t, TASK_FLAVOR_READ);
+};
+
+int dtape_task_inspect_for_pid(uint32_t target_tport, int32_t pid, uint64_t t) {
+	return task_for_pid_internal(target_tport, pid, t, TASK_FLAVOR_INSPECT);
 };
 
 kern_return_t pid_for_task(struct pid_for_task_args* args) {
