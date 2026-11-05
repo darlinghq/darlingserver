@@ -44,6 +44,11 @@ int main(int, char**) {
 	CHECK(threads.m[101]->address == "a-registered", "A's thread keeps its reply address");
 	CHECK(threads.m[101]->_pendingCall == nullptr, "no call is queued on A's thread");
 
+	// B's kernel pid is 600 but the header claims A's namespace pid 100 and A's thread 101
+	reset();
+	CHECK(threw(msg(dserver_callnum_dummy, 600, 100, 101)), "B claiming A's pid and thread is rejected");
+	CHECK(threads.m[101]->address == "a-registered", "A's reply address survives a spoofed pid and tid");
+
 	reset();
 	CHECK(!threw(msg(dserver_callnum_dummy, 600, 200, 201)) && threads.m[201]->address == "sender", "B on its own registered thread is accepted");
 	CHECK(!threw(msg(dserver_callnum_dummy, 600, 200, 202)) && threads.m.count(202) && threads.m[202]->process() == procs.m[200],
