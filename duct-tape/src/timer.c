@@ -53,8 +53,9 @@ uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
 };
 
 void dtape_timer_fired(void) {
-	uint64_t next_deadline = timer_queue_expire(&timer_queue, mach_absolute_time());
-	dtape_hooks->timer_arm(next_deadline, true);
+	// Expiration rearms the timer under the queue lock (see timer_call.c). Doing it here, with
+	// the deadline it returned, could overwrite the deadline of a call inserted in the meantime.
+	timer_queue_expire(&timer_queue, mach_absolute_time());
 };
 
 void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
@@ -62,7 +63,8 @@ void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
 };
 
 mpqueue_head_t* timer_queue_assign(uint64_t deadline) {
-	dtape_hooks->timer_arm(deadline, false);
+	// The timer is armed after insertion (see timer_call.c): a short deadline
+	// could otherwise expire before its call has reached the queue, and never fire.
 	return &timer_queue;
 };
 
