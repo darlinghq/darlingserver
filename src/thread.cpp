@@ -47,6 +47,10 @@
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <vector>
+#if defined(__aarch64__)
+#include <sys/uio.h>
+#include <elf.h>
+#endif
 
 // 64KiB should be enough for us
 #define THREAD_STACK_SIZE (64 * 1024ULL)
@@ -145,16 +149,23 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 					continue;
 				}
 
+#if defined(__aarch64__)
+				struct user_regs_struct regs;
+				struct iovec iov = { &regs, sizeof(regs) };
+				if (ptrace(PTRACE_GETREGSET, id, (void*)NT_PRSTATUS, &iov) == -1) {
+					continue;
+				}
+				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.sp;
+				if (stackDiff >= 0 && stackDiff < nearest) {
+#elif defined(__x86_64__)
 				struct user_regs_struct regs;
 				if (ptrace(PTRACE_GETREGS, id, 0, &regs) == -1) {
 					continue;
 				}
-
-#ifdef __x86_64__
 				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.rsp;
 				if (stackDiff >= 0 && stackDiff < nearest) {
 #else
-	#warning Unsupported architecture
+	#error Unsupported architecture
 				if (true) {
 #endif
 					chosenId = id;

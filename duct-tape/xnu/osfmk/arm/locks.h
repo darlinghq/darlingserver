@@ -34,6 +34,9 @@
 #include <arm/hw_lock_types.h>
 #endif
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/locks.h>
+#endif // __DARLING__
 
 #ifdef  MACH_KERNEL_PRIVATE
 
@@ -54,10 +57,12 @@
 #endif
 
 #ifdef  MACH_KERNEL_PRIVATE
+#ifndef __DARLING__
 typedef struct {
 	struct hslock   hwlock;
 	uintptr_t               type;
 } lck_spin_t;
+#endif // __DARLING__
 
 #define lck_spin_data hwlock.lock_data
 
@@ -68,16 +73,21 @@ typedef struct {
 #else
 #ifdef  KERNEL_PRIVATE
 
+#ifndef __DARLING__
 typedef struct {
 	uintptr_t               opaque[2];
 } lck_spin_t;
+#endif // __DARLING__
 
 #else
+#ifndef __DARLING__
 typedef struct __lck_spin_t__   lck_spin_t;
+#endif // __DARLING__
 #endif  // KERNEL_PRIVATE
 #endif  // MACH_KERNEL_PRIVATE
 
 #ifdef  MACH_KERNEL_PRIVATE
+#ifndef __DARLING__
 typedef struct _lck_mtx_ {
 	union {
 		uintptr_t                                       lck_mtx_data;   /* Thread pointer plus lock bits */
@@ -94,6 +104,7 @@ typedef struct _lck_mtx_ {
 		};
 	};                                                                                              /* arm: 4   arm64: 8 */
 } lck_mtx_t;                                                                            /* arm: 8  arm64: 16 */
+#endif // __DARLING__
 
 /* Shared between mutex and read-write locks */
 #define LCK_ILOCK_BIT           0
@@ -142,9 +153,11 @@ typedef struct _lck_mtx_ext_ {
 
 #else
 #ifdef  KERNEL_PRIVATE
+#ifndef __DARLING__
 typedef struct {
 	uintptr_t        opaque[2];
 } lck_mtx_t;
+#endif // __DARLING__
 
 typedef struct {
 #if defined(__arm64__)
@@ -155,7 +168,9 @@ typedef struct {
 } lck_mtx_ext_t;
 
 #else
+#ifndef __DARLING__
 typedef struct __lck_mtx_t__    lck_mtx_t;
+#endif // __DARLING__
 #endif
 #endif
 
