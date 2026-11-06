@@ -536,18 +536,40 @@ kern_return_t _mach_make_memory_entry(vm_map_t target_map, memory_object_size_t*
 	return KERN_NOT_SUPPORTED;
 };
 
+static bool is_named_entry_port(ipc_port_t port) {
+	return IP_VALID(port) && ip_kotype(port) == IKOT_NAMED_ENTRY;
+};
+
 kern_return_t mach_memory_entry_access_tracking(ipc_port_t entry_port, int* access_tracking, uint32_t* access_tracking_reads, uint32_t* access_tracking_writes) {
-	dtape_stub_unsafe();
+	if (!is_named_entry_port(entry_port)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	// access tracking is not available (as on release XNU kernels)
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_memory_entry_ownership(ipc_port_t entry_port, task_t owner, int ledger_tag, int ledger_flags) {
-	dtape_stub_unsafe();
+	if (ledger_flags & ~VM_LEDGER_FLAGS) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (ledger_tag <= 0 || ledger_tag > VM_LEDGER_TAG_MAX) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (!is_named_entry_port(entry_port)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	// there are no memory ledgers; ownership has no observable effect
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t mach_memory_entry_purgable_control(ipc_port_t entry_port, vm_purgable_t control, int* state) {
-	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
-	dtape_stub("no memory entries");
-	return KERN_NOT_SUPPORTED;
+	// XNU answers a port that is not a named entry with KERN_INVALID_ARGUMENT,
+	// and so does every control (GET_STATE included) on a non-purgeable object;
+	// neither kind of entry exists here
+	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp, mach_msg_type_number_t* namesCntp, mach_zone_info_array_t* infop, mach_msg_type_number_t* infoCntp, mach_memory_info_array_t* memoryInfop, mach_msg_type_number_t* memoryInfoCntp) {
