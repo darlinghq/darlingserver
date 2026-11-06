@@ -41,6 +41,9 @@ struct dtape_thread {
 	bool processing_signal;
 
 	bool waiting_suspended;
+	// held from the TH_WAIT check in thread_block_parameter() until the
+	// microthread has been suspended; see thread_block_parameter()
+	libsimple_lock_t block_suspend_gate;
 	dtape_mutex_t suspension_mutex;
 	dtape_condvar_t suspension_condvar;
 

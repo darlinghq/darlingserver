@@ -66,6 +66,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	thread->processing_signal = false;
 	thread->name = NULL;
 	thread->waiting_suspended = false;
+	libsimple_lock_init(&thread->block_suspend_gate);
 	LIST_INIT(&thread->user_states);
 	dtape_mutex_init(&thread->suspension_mutex);
 	dtape_condvar_init(&thread->suspension_condvar);
@@ -583,10 +584,18 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 
 	bool waiting = thread->xnu_thread.state & TH_WAIT;
 
+	// a wakeup that arrives after we drop the thread lock but before the
+	// microthread is actually suspended would find nothing to resume and be lost.
+	// hold the gate until the server has suspended us (it unlocks it for us then);
+	// thread_unblock() takes it before resuming us.
+	if (waiting) {
+		libsimple_lock_lock(&thread->block_suspend_gate);
+	}
+
 	thread_unlock(&thread->xnu_thread);
 
 	if (waiting) {
-		dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
+		dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, &thread->block_suspend_gate);
 	}
 
 	thread_lock(&thread->xnu_thread);
@@ -609,6 +618,10 @@ wait_result_t thread_block(thread_continue_t continuation) {
 // thread locked
 boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+
+	// wait until a thread that is about to suspend itself has finished doing so
+	libsimple_lock_lock(&thread->block_suspend_gate);
+
 	thread->xnu_thread.wait_result = wresult;
 
 	// Cancel any pending wait timer, like XNU's thread_unblock() does.
@@ -624,7 +637,14 @@ boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 		thread->xnu_thread.wait_timer_is_set = FALSE;
 	}
 
+	// like XNU, the thread is no longer waiting. this matters when the wakeup
+	// comes before the thread reaches thread_block(): it must not suspend then.
+	thread->xnu_thread.state &= ~(TH_WAIT | TH_UNINT);
+	thread->xnu_thread.state |= TH_RUN;
+
 	dtape_hooks->thread_resume(thread->context);
+
+	libsimple_lock_unlock(&thread->block_suspend_gate);
 	return TRUE;
 };
 
