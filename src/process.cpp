@@ -29,6 +29,43 @@
 #include <cstring>
 
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <atomic>
+
+// PROCMAP_QUERY (Linux 6.11) looks up a single VMA of another process through its `/proc/<pid>/maps`
+// descriptor. Older userspace headers lack it; its ABI is fixed, so define it here. On an older running
+// kernel the ioctl fails with ENOTTY and the text of `/proc/<pid>/maps` is parsed instead.
+#ifndef PROCMAP_QUERY
+#include <linux/types.h>
+enum procmap_query_flags {
+	PROCMAP_QUERY_VMA_READABLE = 0x01,
+	PROCMAP_QUERY_VMA_WRITABLE = 0x02,
+	PROCMAP_QUERY_VMA_EXECUTABLE = 0x04,
+	PROCMAP_QUERY_VMA_SHARED = 0x08,
+	PROCMAP_QUERY_COVERING_OR_NEXT_VMA = 0x10,
+	PROCMAP_QUERY_FILE_BACKED_VMA = 0x20,
+};
+struct procmap_query {
+	__u64 size;
+	__u64 query_flags;
+	__u64 query_addr;
+	__u64 vma_start;
+	__u64 vma_end;
+	__u64 vma_flags;
+	__u64 vma_page_size;
+	__u64 vma_offset;
+	__u64 inode;
+	__u32 dev_major;
+	__u32 dev_minor;
+	__u32 vma_name_size;
+	__u32 build_id_size;
+	__u64 vma_name_addr;
+	__u64 build_id_addr;
+};
+#define PROCMAP_QUERY _IOWR('f', 17, struct procmap_query)
+#endif
 
 static DarlingServer::Log processLog("process");
 
@@ -110,6 +147,7 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 
 DarlingServer::Process::~Process() {
 	processLog.info() << *this << ": process being destroyed" << processLog.endLog;
+	_closeMapsDescriptor();
 };
 
 DarlingServer::Process::ID DarlingServer::Process::id() const {
@@ -314,6 +352,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		// update the process architecture
 		_architecture = architecture;
 
+		// the old `/proc/<pid>/maps` descriptor refers to the address space that the exec replaced
+		_closeMapsDescriptor();
+
 		// replace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;
 		auto newTask = dtape_task_create(oldTask, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
@@ -494,16 +535,113 @@ static bool parseMapsLine(const std::string& line, uintptr_t& start, uintptr_t& 
 	return true;
 };
 
+// runs PROCMAP_QUERY on a `/proc/<pid>/maps` descriptor; returns 0 or an errno value
+static int procmapQuery(int mapsFd, uint64_t address, uint64_t flags, struct procmap_query& query) {
+	memset(&query, 0, sizeof(query));
+	query.size = sizeof(query);
+	query.query_flags = flags;
+	query.query_addr = address;
+	return (ioctl(mapsFd, PROCMAP_QUERY, &query) == 0) ? 0 : errno;
+};
+
+static int procmapProtection(uint64_t vmaFlags) {
+	int protection = 0;
+	if (vmaFlags & PROCMAP_QUERY_VMA_READABLE) {
+		protection |= PROT_READ;
+	}
+	if (vmaFlags & PROCMAP_QUERY_VMA_WRITABLE) {
+		protection |= PROT_WRITE;
+	}
+	if (vmaFlags & PROCMAP_QUERY_VMA_EXECUTABLE) {
+		protection |= PROT_EXEC;
+	}
+	return protection;
+};
+
+// set once the running kernel turns out not to support PROCMAP_QUERY
+static std::atomic<bool> procmapQueryUnsupported(false);
+
+void DarlingServer::Process::_closeMapsDescriptor() {
+	std::unique_lock lock(_mapsMutex);
+	if (_mapsFd >= 0) {
+		close(_mapsFd);
+		_mapsFd = -1;
+	}
+};
+
+//
+// Looks up the VMA that covers `address` (or, with `coveringOrNext`, the first one above it) with PROCMAP_QUERY.
+//
+// Returns false if the lookup found nothing or could not be done at all; the caller then parses the text of
+// `/proc/<pid>/maps`, which also lists the gate area ("[vsyscall]") that PROCMAP_QUERY does not report.
+//
+bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset) const {
+	if (procmapQueryUnsupported.load(std::memory_order_relaxed)) {
+		return false;
+	}
+
+	std::unique_lock lock(_mapsMutex);
+
+	// a cached descriptor can go stale (e.g. its address space is gone after an exec); retry once with a fresh one
+	for (int attempt = 0; attempt < 2; ++attempt) {
+		bool fresh = false;
+
+		if (_mapsFd < 0) {
+			_mapsFd = open(("/proc/" + std::to_string(_pid) + "/maps").c_str(), O_RDONLY | O_CLOEXEC);
+			if (_mapsFd < 0) {
+				return false;
+			}
+			fresh = true;
+		}
+
+		struct procmap_query query;
+		int error = procmapQuery(_mapsFd, address, coveringOrNext ? PROCMAP_QUERY_COVERING_OR_NEXT_VMA : 0, query);
+
+		if (error == 0) {
+			start = query.vma_start;
+			end = query.vma_end;
+			protection = procmapProtection(query.vma_flags);
+			shared = (query.vma_flags & PROCMAP_QUERY_VMA_SHARED) != 0;
+			offset = query.vma_offset;
+			return true;
+		}
+
+		if (error == ENOENT) {
+			return false;
+		}
+
+		close(_mapsFd);
+		_mapsFd = -1;
+
+		// ENOTTY: the kernel predates PROCMAP_QUERY; EINVAL on a fresh descriptor: it rejects this layout of the query
+		if (error == ENOTTY || (fresh && error == EINVAL)) {
+			procmapQueryUnsupported.store(true, std::memory_order_relaxed);
+			return false;
+		}
+
+		if (fresh) {
+			return false;
+		}
+	}
+
+	return false;
+};
+
 DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInfo(uintptr_t address) const {
 	if (isDead()) {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryRegionInfo");
 	}
 
 	MemoryRegionInfo info;
+	uintptr_t endAddress;
+
+	if (_queryRegion(address, false, info.startAddress, endAddress, info.protection, info.shared, info.mapOffset)) {
+		info.pageCount = (endAddress - info.startAddress) / sysconf(_SC_PAGESIZE);
+		return info;
+	}
+
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");
 	std::string line;
-
-	uintptr_t endAddress;
 
 	while (std::getline(file, line)) {
 		char perms[8];
@@ -683,6 +821,23 @@ void DarlingServer::Process::syncMemory(uintptr_t address, size_t size, int sync
 uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
 	if (isDead()) {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call getNextRegion");
+	}
+
+	if (address != UINTPTR_MAX) {
+		uintptr_t start;
+		uintptr_t end;
+		int protection;
+		bool shared;
+		uint64_t offset;
+
+		// the VMA covering or following `address + 1`; if that one starts at or below `address`, the next region follows it
+		bool found = _queryRegion(address + 1, true, start, end, protection, shared, offset);
+		if (found && start <= address) {
+			found = _queryRegion(end, true, start, end, protection, shared, offset);
+		}
+		if (found) {
+			return start;
+		}
 	}
 
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/maps");

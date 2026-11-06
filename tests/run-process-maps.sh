@@ -11,7 +11,7 @@ root=$(cd "${1:-$here/..}" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-"$here/host/extract-static.sh" "$root/src/process.cpp" parseMapsLine > "$work/fns.inc"
+"$here/host/extract-static.sh" "$root/src/process.cpp" parseMapsLine procmapQuery procmapProtection > "$work/fns.inc"
 ${CXX:-c++} -std=c++17 -g -O0 -fsanitize="${SANITIZE:-address,undefined}" -fno-sanitize-recover=undefined \
 	-DPROCESS_MAPS_INC="\"$work/fns.inc\"" -o "$work/t" "$here/host/process_maps_test.cpp"
 "$work/t"
