@@ -549,6 +549,20 @@ wait_result_t thread_block(thread_continue_t continuation) {
 boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 	thread->xnu_thread.wait_result = wresult;
+
+	// Cancel any pending wait timer, like XNU's thread_unblock() does.
+	//
+	// Without this, a timed wait that completes normally leaves the wait timer
+	// armed; it fires later, during an unrelated untimed wait, and delivers a
+	// spurious THREAD_TIMED_OUT (which surfaces as MACH_RCV_TIMED_OUT from a
+	// receive issued with MACH_MSG_TIMEOUT_NONE).
+	if (thread->xnu_thread.wait_timer_is_set) {
+		if (timer_call_cancel(&thread->xnu_thread.wait_timer)) {
+			thread->xnu_thread.wait_timer_active--;
+		}
+		thread->xnu_thread.wait_timer_is_set = FALSE;
+	}
+
 	dtape_hooks->thread_resume(thread->context);
 	return TRUE;
 };
