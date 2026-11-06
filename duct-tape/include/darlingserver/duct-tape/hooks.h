@@ -53,7 +53,7 @@ typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remo
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
 typedef dtape_task_t* (*dtape_hook_task_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef dtape_task_t* (*dtape_hook_task_lookup_eternal_f)(dtape_eternal_id_t eid, bool retain);
-typedef void (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
+typedef bool (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
 typedef bool (*dtape_hook_task_get_memory_region_info_f)(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info);
 typedef uintptr_t (*dtape_hook_task_allocate_pages_f)(void* task_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
 typedef int (*dtape_hook_task_free_pages_f)(void* task_context, uintptr_t address, size_t page_count);

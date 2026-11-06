@@ -531,19 +531,45 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
 };
 
 kern_return_t _mach_make_memory_entry(vm_map_t target_map, memory_object_size_t* size, memory_object_offset_t offset, vm_prot_t permission, ipc_port_t* object_handle, ipc_port_t parent_entry) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
+};
+
+static bool is_named_entry_port(ipc_port_t port) {
+	return IP_VALID(port) && ip_kotype(port) == IKOT_NAMED_ENTRY;
 };
 
 kern_return_t mach_memory_entry_access_tracking(ipc_port_t entry_port, int* access_tracking, uint32_t* access_tracking_reads, uint32_t* access_tracking_writes) {
-	dtape_stub_unsafe();
+	if (!is_named_entry_port(entry_port)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	// access tracking is not available (as on release XNU kernels)
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_memory_entry_ownership(ipc_port_t entry_port, task_t owner, int ledger_tag, int ledger_flags) {
-	dtape_stub_unsafe();
+	if (ledger_flags & ~VM_LEDGER_FLAGS) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (ledger_tag <= 0 || ledger_tag > VM_LEDGER_TAG_MAX) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (!is_named_entry_port(entry_port)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	// there are no memory ledgers; ownership has no observable effect
+	dtape_stub_safe();
+	return KERN_SUCCESS;
 };
 
 kern_return_t mach_memory_entry_purgable_control(ipc_port_t entry_port, vm_purgable_t control, int* state) {
-	dtape_stub_unsafe();
+	// XNU answers a port that is not a named entry with KERN_INVALID_ARGUMENT,
+	// and so does every control (GET_STATE included) on a non-purgeable object;
+	// neither kind of entry exists here
+	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp, mach_msg_type_number_t* namesCntp, mach_zone_info_array_t* infop, mach_msg_type_number_t* infoCntp, mach_memory_info_array_t* memoryInfop, mach_msg_type_number_t* memoryInfoCntp) {
@@ -551,11 +577,15 @@ kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp,
 };
 
 kern_return_t mach_memory_object_memory_entry(host_t host, boolean_t internal, vm_size_t size, vm_prot_t permission, memory_object_t pager, ipc_port_t* entry_handle) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_memory_object_memory_entry_64(host_t host, boolean_t internal, vm_object_offset_t size, vm_prot_t permission, memory_object_t pager, ipc_port_t* entry_handle) {
-	dtape_stub_unsafe();
+	// Clients reach this through MIG; failing the call, not the server, lets them fall back.
+	dtape_stub("no memory entries");
+	return KERN_NOT_SUPPORTED;
 };
 
 void pmap_require(pmap_t pmap) {
@@ -624,15 +654,35 @@ kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size
 };
 
 kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t* count) {
-	dtape_stub_unsafe();
+	if (!count) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	// validate the request as XNU does, so unknown flavors keep their usual error
+	switch (flavor) {
+		case VM_PAGE_INFO_BASIC:
+			// XNU also accepts one int less (the structure was once unpadded)
+			if (*count != VM_PAGE_INFO_BASIC_COUNT && *count != VM_PAGE_INFO_BASIC_COUNT - 1) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			break;
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
+
+	// Page accounting is not implemented; let the caller handle unsupported queries.
+	*count = 0;
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_vm_page_query(vm_map_t map, mach_vm_offset_t offset, int* disposition, int* ref_count) {
-	dtape_stub_unsafe();
+	return vm_map_page_query_internal(map, offset, disposition, ref_count);
 };
 
 kern_return_t mach_vm_page_range_query(vm_map_t map, mach_vm_offset_t address, mach_vm_size_t size, mach_vm_address_t dispositions_addr, mach_vm_size_t* dispositions_count) {
-	dtape_stub_unsafe();
+	// Page accounting is not implemented; let the caller handle unsupported queries.
+	if (dispositions_count) *dispositions_count = 0;
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_vm_protect(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection) {
@@ -760,7 +810,11 @@ region_info_out:
 			return kr;
 		};
 		default:
-			dtape_stub_unsafe("Unimplemented flavor");
+			// the flavor is guest-controlled: reject it as XNU does, never abort the server
+			dtape_log_debug("%s: unsupported flavor %d", __FUNCTION__, flavor);
+			if (object_name)
+				*object_name = IP_NULL;
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 
@@ -1138,7 +1192,10 @@ kern_return_t mach_zone_info_for_zone(host_priv_t host, mach_zone_name_t name, m
 };
 
 kern_return_t vm_map_page_query_internal(vm_map_t target_map, vm_map_offset_t offset, int* disposition, int* ref_count) {
-	dtape_stub_unsafe();
+	// Page accounting is not implemented; let the caller handle unsupported queries.
+	if (disposition) *disposition = 0;
+	if (ref_count) *ref_count = 0;
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t vm_map_purgable_control(vm_map_t map, vm_map_offset_t address, vm_purgable_t control, int* state) {

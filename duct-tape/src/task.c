@@ -218,6 +218,10 @@ bool dtape_task_try_resume(dtape_task_t* task) {
 };
 
 void task_deallocate(task_t xtask) {
+	if (xtask == TASK_NULL) {
+		return;
+	}
+
 	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
 	os_ref_count_t count = os_ref_release(&xtask->ref_count);
 	if (count > 0) {
@@ -300,17 +304,27 @@ kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mac
 };
 
 kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
+	if (xtask == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
 
 	switch (flavor) {
 		case TASK_BASIC_INFO_32:
 		case TASK_BASIC_INFO_64:
+#ifdef TASK_BASIC_INFO_64_2
+		case TASK_BASIC_INFO_64_2:
+#endif
 		case MACH_TASK_BASIC_INFO: {
 			uint64_t utimeus;
 			uint64_t stimeus;
 			dtape_memory_info_t mem_info;
 
-			dtape_hooks->task_get_memory_info(task->context, &mem_info);
+			if (!dtape_hooks->task_get_memory_info(task->context, &mem_info)) {
+				// the process is gone; XNU rejects queries on inactive tasks the same way
+				return KERN_INVALID_ARGUMENT;
+			}
 
 			dtape_log_debug("%s: TODO: fetch utimeus and stimeus somehow", __FUNCTION__);
 			utimeus = 0;
@@ -350,6 +364,25 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 				info->system_time.seconds = stimeus / USEC_PER_SEC;
 				info->system_time.microseconds = stimeus % USEC_PER_SEC;
 				info->policy = 0;
+#ifdef TASK_BASIC_INFO_64_2
+			} else if (flavor == TASK_BASIC_INFO_64_2) {
+				struct task_basic_info_64_2* info = (void*)task_info_out;
+
+				if (*task_info_count < TASK_BASIC_INFO_64_2_COUNT) {
+					return KERN_INVALID_ARGUMENT;
+				}
+
+				*task_info_count = TASK_BASIC_INFO_64_2_COUNT;
+
+				info->suspend_count = task->xnu_task.user_stop_count;
+				info->virtual_size = mem_info.virtual_size;
+				info->resident_size = mem_info.resident_size;
+				info->user_time.seconds = utimeus / USEC_PER_SEC;
+				info->user_time.microseconds = utimeus % USEC_PER_SEC;
+				info->system_time.seconds = stimeus / USEC_PER_SEC;
+				info->system_time.microseconds = stimeus % USEC_PER_SEC;
+				info->policy = 0;
+#endif
 			} else {
 				struct mach_task_basic_info* info = (void*)task_info_out;
 
@@ -465,7 +498,10 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			memset(info, 0, orig_info_count * sizeof(natural_t));
 
 			dtape_memory_info_t meminfo;
-			dtape_hooks->task_get_memory_info(task->context, &meminfo);
+			if (!dtape_hooks->task_get_memory_info(task->context, &meminfo)) {
+				// the process is gone; XNU rejects queries on inactive tasks the same way
+				return KERN_INVALID_ARGUMENT;
+			}
 
 			info->page_size = meminfo.page_size;
 			info->resident_size = meminfo.resident_size;
@@ -521,7 +557,9 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 		};
 
 		default:
-			dtape_stub_unsafe("unimplemented flavor");
+			// the flavor is guest-controlled: reject it as XNU does, never abort the server
+			dtape_log_debug("%s: unsupported flavor %u", __FUNCTION__, flavor);
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 
@@ -585,7 +623,14 @@ kern_return_t task_restartable_ranges_synchronize(task_t task) {
 };
 
 kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t behavior) {
-	dtape_stub_unsafe();
+	if (task == TASK_NULL) {
+		return KERN_INVALID_TASK;
+	}
+	if (behavior & ~TASK_EXC_GUARD_ALL) {
+		return KERN_INVALID_VALUE;
+	}
+	task->task_exc_guard = behavior;
+	return KERN_SUCCESS;
 };
 
 kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
@@ -593,7 +638,8 @@ kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_
 };
 
 kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
-	dtape_stub_unsafe();
+	// memorystatus is not implemented here, so mirror XNU's !CONFIG_MEMORYSTATUS stub (xnu task.c:6949-6957)
+	return KERN_FAILURE;
 };
 
 kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {

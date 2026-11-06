@@ -28,6 +28,84 @@ long sysconf(int name);
 #define _SC_NPROCESSORS_CONF 83
 #define _SC_NPROCESSORS_ONLN 84
 
+// Linux file access
+int open(const char* path, int flags, ...);
+long read(int fd, void* buffer, unsigned long count);
+int close(int fd);
+#define LINUX_O_RDONLY 0
+#define LINUX_O_CLOEXEC 02000000
+
+// reads the first CPU number from cpu<N>/topology/thread_siblings_list.
+// returns false if the CPU has no topology information (e.g. it's offline).
+static bool first_thread_sibling(unsigned long cpu, unsigned long* first) {
+	static const char prefix[] = "/sys/devices/system/cpu/cpu";
+	static const char suffix[] = "/topology/thread_siblings_list";
+	char path[sizeof(prefix) + 20 + sizeof(suffix)];
+	char digits[20];
+	size_t digit_count = 0;
+	size_t length = 0;
+	char buffer[32];
+	long result;
+	int fd;
+
+	do {
+		digits[digit_count++] = '0' + (cpu % 10);
+		cpu /= 10;
+	} while (cpu != 0);
+
+	memcpy(path, prefix, sizeof(prefix) - 1);
+	length = sizeof(prefix) - 1;
+	while (digit_count > 0) {
+		path[length++] = digits[--digit_count];
+	}
+	memcpy(&path[length], suffix, sizeof(suffix));
+
+	fd = open(path, LINUX_O_RDONLY | LINUX_O_CLOEXEC);
+	if (fd < 0) {
+		return false;
+	}
+	result = read(fd, buffer, sizeof(buffer) - 1);
+	close(fd);
+
+	if (result <= 0 || buffer[0] < '0' || buffer[0] > '9') {
+		return false;
+	}
+	buffer[result] = '\0';
+
+	*first = 0;
+	for (const char* ptr = buffer; *ptr >= '0' && *ptr <= '9'; ++ptr) {
+		*first = (*first * 10) + (*ptr - '0');
+	}
+	return true;
+};
+
+// counts the physical cores that have at least one online CPU.
+// returns 0 if the topology can't be determined.
+static uint32_t count_online_cores(uint32_t max_cpus) {
+	uint32_t cores = 0;
+
+	for (uint32_t cpu = 0; cpu < max_cpus; ++cpu) {
+		unsigned long first;
+
+		if (!first_thread_sibling(cpu, &first)) {
+			continue;
+		}
+
+		// the sibling list only contains online CPUs, so each core with an online
+		// CPU has exactly one CPU that is the first entry in its own sibling list
+		if (first == cpu) {
+			++cores;
+		}
+	}
+
+	return cores;
+};
+
+static void cache_core_count(void* context) {
+	uint32_t* cached_core_count = context;
+	*cached_core_count = count_online_cores(sysconf(_SC_NPROCESSORS_CONF));
+};
+
 static void cache_sysinfo(void* context) {
 	struct sysinfo* cached_sysinfo = context;
 
@@ -39,6 +117,8 @@ static void cache_sysinfo(void* context) {
 kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t* count) {
 	static libsimple_once_t once_token = LIBSIMPLE_ONCE_INITIALIZER;
 	static struct sysinfo cached_sysinfo;
+	static libsimple_once_t core_count_once_token = LIBSIMPLE_ONCE_INITIALIZER;
+	static uint32_t cached_core_count;
 
 	if (host == HOST_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -76,11 +156,23 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 
 			// if there's room for the modern structure, fill in some additional info
 			if (*count >= HOST_BASIC_INFO_COUNT) {
-				// TODO: properly differentiate physical vs. logical cores
-				dtape_stub_safe("modern HOST_BASIC_INFO");
+				libsimple_once(&core_count_once_token, cache_core_count, &cached_core_count);
+
 				basic_info->cpu_threadtype = CPU_THREADTYPE_NONE;
-				basic_info->physical_cpu = basic_info->avail_cpus;
-				basic_info->physical_cpu_max = basic_info->max_cpus;
+
+				if (cached_core_count != 0 && cached_core_count <= basic_info->avail_cpus) {
+					basic_info->physical_cpu = cached_core_count;
+					// offline CPUs have no topology information; assume they have
+					// the same number of threads per core as the online ones
+					basic_info->physical_cpu_max = (uint32_t)(((uint64_t)basic_info->max_cpus * cached_core_count) / basic_info->avail_cpus);
+					if (basic_info->physical_cpu_max < basic_info->physical_cpu) {
+						basic_info->physical_cpu_max = basic_info->physical_cpu;
+					}
+				} else {
+					basic_info->physical_cpu = basic_info->avail_cpus;
+					basic_info->physical_cpu_max = basic_info->max_cpus;
+				}
+
 				basic_info->logical_cpu = basic_info->avail_cpus;
 				basic_info->logical_cpu_max = basic_info->max_cpus;
 

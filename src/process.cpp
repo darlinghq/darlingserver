@@ -369,7 +369,14 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 	} else {
 		// notify the parent process (if we have one) that we've arrived
 		if (auto parent = _parentProcess.lock()) {
-			dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
+			{
+				// the parent may have died (or be dying) before we checked in;
+				// its fork-wait semaphore is gone then and there's no one left to wake up
+				std::shared_lock parentLock(parent->_rwlock);
+				if (parent->_dtapeForkWaitSemaphore) {
+					dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
+				}
+			}
 			parent->_notifyListeningKqchannels(NOTE_FORK, nsid());
 		}
 	}
@@ -448,10 +455,13 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryInfo");
 	}
 
-	MemoryInfo info;
+	MemoryInfo info {};
 	std::ifstream file("/proc/" + std::to_string(_pid) + "/statm");
 
-	file >> info.virtualSize >> info.residentSize;
+	if (!(file >> info.virtualSize >> info.residentSize)) {
+		// the process died after the check above
+		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryInfo");
+	}
 
 	info.virtualSize *= sysconf(_SC_PAGESIZE);
 	info.residentSize *= sysconf(_SC_PAGESIZE);
@@ -727,9 +737,14 @@ void DarlingServer::Process::notifyDead() {
 	// dtape_thread_release needs a microthread context, so we call it within a kernel microthread
 	// also destroy the fork-wait semaphore here
 	Thread::kernelAsync([self = shared_from_this()]() {
-		if (self->_dtapeForkWaitSemaphore) {
-			dtape_semaphore_destroy(self->_dtapeForkWaitSemaphore);
+		dtape_semaphore_t* forkWaitSemaphore = nullptr;
+		{
+			std::unique_lock lock(self->_rwlock);
+			forkWaitSemaphore = self->_dtapeForkWaitSemaphore;
 			self->_dtapeForkWaitSemaphore = nullptr;
+		}
+		if (forkWaitSemaphore) {
+			dtape_semaphore_destroy(forkWaitSemaphore);
 		}
 		dtape_task_release(self->_dtapeTask);
 		self->_dtapeTask = nullptr;

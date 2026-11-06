@@ -1236,8 +1236,23 @@ _psynch_cvwait(__unused proc_t p, user_addr_t cv, uint64_t cvlsgen,
 			struct timespec ts;
 			ts.tv_sec = (__darwin_time_t)sec;
 			ts.tv_nsec = (nsec & 0x3fffffff);
+#ifdef __DARLING__
+			// callers pass "practically forever" as a very large tv_sec; the
+			// nanosecond product would overflow and wrap to an arbitrary (possibly
+			// already expired) interval. saturate to a huge interval that also
+			// can't overflow when added to the current time below.
+			uint64_t interval_ns;
+			uint64_t secs = (ts.tv_sec < 0) ? 0 : (uint64_t)ts.tv_sec;
+			if (secs > (UINT64_MAX / 2 - (uint64_t)ts.tv_nsec) / NSEC_PER_SEC) {
+				interval_ns = UINT64_MAX / 2;
+			} else {
+				interval_ns = secs * NSEC_PER_SEC + (uint64_t)ts.tv_nsec;
+			}
+			nanoseconds_to_absolutetime(interval_ns, &abstime);
+#else
 			nanoseconds_to_absolutetime(
 					(uint64_t)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec, &abstime);
+#endif
 			clock_absolutetime_interval_to_deadline(abstime, &abstime);
 		}
 
