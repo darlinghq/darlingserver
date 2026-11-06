@@ -385,6 +385,11 @@ timer_call_entry_enqueue_deadline(
 	}
 	new_mpqueue->count++;
 
+#ifdef __DARLING__
+	// Arm the timer for the actual head of the queue, under the queue lock.
+	timer_queue_cancel(new_mpqueue, deadline, thead->tc_pqlink.deadline);
+#endif
+
 	return old_mpqueue;
 }
 
@@ -1003,6 +1008,9 @@ timer_queue_expire_with_options(
 		queue->earliest_soft_deadline = cur_deadline = UINT64_MAX;
 	}
 
+#ifdef __DARLING__
+	timer_queue_cancel(queue, deadline, cur_deadline);
+#endif
 	timer_queue_unlock(queue);
 
 	return cur_deadline;

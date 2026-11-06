@@ -28,6 +28,10 @@
 #include <sys/fcntl.h>
 #include <sys/syscall.h>
 #include <darlingserver/kqchan.hpp>
+#include <limits.h>
+#include <list>
+#include <map>
+#include <mutex>
 
 static DarlingServer::Log callLog("calls");
 
@@ -1010,6 +1014,118 @@ void DarlingServer::Call::SetExecutablePath::processCall() {
 
 	_sendReply(code);
 }
+
+namespace {
+
+	// The last known path of each file that has been given a file reference. References are shared
+	// between processes, so this can't live in any one of them. The server only remembers these paths:
+	// it never accesses them, and the process asking for a path checks that it still leads to the file.
+	class FileRefPaths {
+	public:
+		void remember(uint64_t device, uint64_t inode, std::string path) {
+			std::unique_lock lock(_mutex);
+			const Key key(device, inode);
+			auto found = _entries.find(key);
+
+			if (found != _entries.end()) {
+				_order.erase(found->second);
+				_entries.erase(found);
+			}
+
+			_order.emplace_front(key, std::move(path));
+			_entries.emplace(key, _order.begin());
+
+			if (_entries.size() > maximumEntries) {
+				_entries.erase(_order.back().first);
+				_order.pop_back();
+			}
+		};
+
+		bool lookup(uint64_t device, uint64_t inode, std::string& path) {
+			std::unique_lock lock(_mutex);
+			auto found = _entries.find(Key(device, inode));
+
+			if (found == _entries.end()) {
+				return false;
+			}
+
+			_order.splice(_order.begin(), _order, found->second);
+			path = found->second->second;
+			return true;
+		};
+
+	private:
+		using Key = std::pair<uint64_t, uint64_t>;
+		using Entry = std::pair<Key, std::string>;
+
+		static constexpr size_t maximumEntries = 65536;
+
+		std::mutex _mutex;
+		std::list<Entry> _order; // most recently used first
+		std::map<Key, std::list<Entry>::iterator> _entries;
+	};
+
+	FileRefPaths fileRefPaths;
+
+};
+
+void DarlingServer::Call::FileRefRegister::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			if (_body.path_length == 0) {
+				code = -EINVAL;
+			} else if (_body.path_length >= PATH_MAX) {
+				code = -ENAMETOOLONG;
+			} else {
+				std::string path;
+				path.resize(_body.path_length);
+
+				if (!process->readMemory((uintptr_t)_body.path, path.data(), _body.path_length, &code)) {
+					code = -code;
+				} else {
+					fileRefPaths.remember(_body.device, _body.inode, std::move(path));
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::FileRefPath::processCall() {
+	int code = 0;
+	uint64_t fullLength = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			std::string path;
+
+			if (!fileRefPaths.lookup(_body.device, _body.inode, path)) {
+				code = -ENOENT;
+			} else {
+				fullLength = path.length();
+
+				if (path.length() >= _body.buffer_size) {
+					code = -ENAMETOOLONG;
+				} else if (!process->writeMemory((uintptr_t)_body.buffer, path.c_str(), path.length() + 1, &code)) {
+					code = -code;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, fullLength);
+};
 
 void DarlingServer::Call::GetExecutablePath::processCall() {
 	int code = 0;
