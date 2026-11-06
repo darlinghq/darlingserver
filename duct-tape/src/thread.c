@@ -1499,11 +1499,11 @@ kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wire
 };
 
 kern_return_t thread_getstatus_to_user(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t* count) {
-	dtape_stub_unsafe();
+	return thread_get_state_to_user(thread, flavor, tstate, count);
 };
 
 kern_return_t thread_setstatus_from_user(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t count) {
-	dtape_stub_unsafe();
+	return thread_set_state_from_user(thread, flavor, tstate, count);
 };
 
 boolean_t thread_should_abort(thread_t thread) {
