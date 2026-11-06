@@ -25,7 +25,8 @@
 #include <darlingserver/logging.hpp>
 
 #include <fstream>
-#include <regex>
+#include <cstdio>
+#include <cstring>
 
 #include <sys/mman.h>
 
@@ -475,7 +476,23 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 	return info;
 };
 
-static const std::regex memoryRegionEntryRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)\\s+((?:r|w|x|p|s|\\-)+)\\s+([0-9a-fA-F]+)");
+// parses the "start-end perms offset" prefix of a `/proc/<pid>/maps` line
+static bool parseMapsLine(const std::string& line, uintptr_t& start, uintptr_t& end, char (&perms)[8], uintptr_t& offset) {
+	unsigned long long startValue = 0;
+	unsigned long long endValue = 0;
+	unsigned long long offsetValue = 0;
+	char permsValue[8] = {0};
+
+	if (sscanf(line.c_str(), "%llx-%llx %7s %llx", &startValue, &endValue, permsValue, &offsetValue) != 4) {
+		return false;
+	}
+
+	start = startValue;
+	end = endValue;
+	offset = offsetValue;
+	memcpy(perms, permsValue, sizeof(perms));
+	return true;
+};
 
 DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInfo(uintptr_t address) const {
 	if (isDead()) {
@@ -489,15 +506,13 @@ DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInf
 	uintptr_t endAddress;
 
 	while (std::getline(file, line)) {
-		std::smatch match;
+		char perms[8];
+		uintptr_t mapOffset;
 
-		if (!std::regex_search(line, match, memoryRegionEntryRegex)) {
+		if (!parseMapsLine(line, info.startAddress, endAddress, perms, mapOffset)) {
 			processLog.warning() << "Encountered malformed `/proc/<pid>/maps` entry? Definitely a bug (on our part)." << processLog.endLog;
 			continue;
 		}
-
-		info.startAddress = std::stoul(match[1].str(), nullptr, 16);
-		endAddress = std::stoul(match[2].str(), nullptr, 16);
 
 		if (endAddress <= address || info.startAddress > address) {
 			continue;
@@ -505,23 +520,21 @@ DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInf
 
 		info.pageCount = (endAddress - info.startAddress) / sysconf(_SC_PAGESIZE);
 
-		info.mapOffset = std::stoul(match[4].str(), nullptr, 16);
-
-		auto perms = match[3].str();
+		info.mapOffset = mapOffset;
 
 		info.protection = 0;
 
-		if (perms.find('r') != std::string::npos) {
+		if (strchr(perms, 'r')) {
 			info.protection |= PROT_READ;
 		}
-		if (perms.find('w') != std::string::npos) {
+		if (strchr(perms, 'w')) {
 			info.protection |= PROT_WRITE;
 		}
-		if (perms.find('x') != std::string::npos) {
+		if (strchr(perms, 'x')) {
 			info.protection |= PROT_EXEC;
 		}
 
-		info.shared = perms.find('s') != std::string::npos;
+		info.shared = strchr(perms, 's') != nullptr;
 
 		return info;
 	}
@@ -667,8 +680,6 @@ void DarlingServer::Process::syncMemory(uintptr_t address, size_t size, int sync
 	return thread->syncMemory(address, size, sync_flags);
 };
 
-static const std::regex memoryRegionEntryAddressRegex("([0-9a-fA-F]+)\\-([0-9a-fA-F]+)");
-
 uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
 	if (isDead()) {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call getNextRegion");
@@ -678,15 +689,15 @@ uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
 	std::string line;
 
 	while (std::getline(file, line)) {
-		std::smatch match;
+		uintptr_t startAddress;
+		uintptr_t endAddress;
+		uintptr_t mapOffset;
+		char perms[8];
 
-		if (!std::regex_search(line, match, memoryRegionEntryAddressRegex)) {
+		if (!parseMapsLine(line, startAddress, endAddress, perms, mapOffset)) {
 			processLog.warning() << "Encountered malformed `/proc/<pid>/maps` entry? Definitely a bug (on our part)." << processLog.endLog;
 			continue;
 		}
-
-		auto startAddress = std::stoul(match[1].str(), nullptr, 16);
-		auto endAddress = std::stoul(match[2].str(), nullptr, 16);
 
 		if (startAddress <= address) {
 			continue;
