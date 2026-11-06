@@ -321,7 +321,10 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			uint64_t stimeus;
 			dtape_memory_info_t mem_info;
 
-			dtape_hooks->task_get_memory_info(task->context, &mem_info);
+			if (!dtape_hooks->task_get_memory_info(task->context, &mem_info)) {
+				// the process is gone; XNU rejects queries on inactive tasks the same way
+				return KERN_INVALID_ARGUMENT;
+			}
 
 			dtape_log_debug("%s: TODO: fetch utimeus and stimeus somehow", __FUNCTION__);
 			utimeus = 0;
@@ -495,7 +498,10 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			memset(info, 0, orig_info_count * sizeof(natural_t));
 
 			dtape_memory_info_t meminfo;
-			dtape_hooks->task_get_memory_info(task->context, &meminfo);
+			if (!dtape_hooks->task_get_memory_info(task->context, &meminfo)) {
+				// the process is gone; XNU rejects queries on inactive tasks the same way
+				return KERN_INVALID_ARGUMENT;
+			}
 
 			info->page_size = meminfo.page_size;
 			info->resident_size = meminfo.resident_size;

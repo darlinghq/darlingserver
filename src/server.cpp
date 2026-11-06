@@ -270,12 +270,19 @@ struct DTapeHooks {
 		return process->_dtapeTask;
 	};
 
-	static void dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
-		auto info = static_cast<DarlingServer::Process*>(task_context)->memoryInfo();
+	static bool dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
+		DarlingServer::Process::MemoryInfo info;
+		try {
+			info = static_cast<DarlingServer::Process*>(task_context)->memoryInfo();
+		} catch (const std::system_error&) {
+			// the process has died (or is dying)
+			return false;
+		}
 		memory_info->virtual_size = info.virtualSize;
 		memory_info->resident_size = info.residentSize;
 		memory_info->page_size = info.pageSize;
 		memory_info->region_count = info.regionCount;
+		return true;
 	};
 
 	static bool dtape_hook_task_get_memory_region_info(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info) {
