@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <sys/un.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 typedef uint32_t mach_port_type_t;
 typedef uint32_t mach_port_right_t;
@@ -249,6 +250,21 @@ int main(int argc, char** argv) {
 	pidInit = getInitProcess(prefix_path);
 	joinNamespace(pidInit, CLONE_NEWNS, "mnt");
 #endif
+
+	// darlingserver only accepts messages from its own uid, so send as the socket's owner
+	struct stat socketStat;
+	if (lstat(__dserver_socket_address_data.sun_path, &socketStat) != 0 || !S_ISSOCK(socketStat.st_mode)) {
+		fprintf(stderr, "Cannot find the darlingserver socket at %s\n", __dserver_socket_address_data.sun_path);
+		return 1;
+	}
+	if (original_uid != 0 && socketStat.st_uid != original_uid) {
+		fprintf(stderr, "The darlingserver socket at %s is not owned by the invoking user\n", __dserver_socket_address_data.sun_path);
+		return 1;
+	}
+	if (setgid(socketStat.st_gid) != 0 || setuid(socketStat.st_uid) != 0 || getuid() != socketStat.st_uid || geteuid() != socketStat.st_uid) {
+		fprintf(stderr, "Failed to switch to the darlingserver socket owner: %s\n", strerror(errno));
+		return 1;
+	}
 
 	__dserver_main_thread_socket_fd = setup_socket();
 

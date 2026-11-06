@@ -476,6 +476,11 @@ DarlingServer::Server::Server(std::string prefix):
 		throw std::system_error(errno, std::generic_category(), "Failed to bind socket");
 	}
 
+	// the mode bind() gives the socket depends on the inherited umask (or a default ACL on the prefix)
+	if (chmod(_socketPath.c_str(), 0600) != 0) {
+		throw std::system_error(errno, std::generic_category(), "Failed to set socket permissions");
+	}
+
 	_wakeupFD = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 	if (_wakeupFD < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to create eventfd for on-demand epoll wakeups");

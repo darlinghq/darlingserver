@@ -58,6 +58,10 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			throw std::invalid_argument("Invalid call number");
 	}
 
+	if (requestMessage.uid() != getuid()) {
+		throw std::runtime_error("System-reported message UID != darlingserver UID");
+	}
+
 	if ((header->number & DSERVER_CALL_UNMANAGED_FLAG) == 0) {
 		// now let's lookup (and possibly create) the process and thread making this call
 		process = processRegistry().registerIfAbsent(header->pid, [&]() {
@@ -123,6 +127,10 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			// ignore this call
 			// TODO: instead of ignoring it, we should return a generic reply indicating `-ESRCH` or something like that.
 			return nullptr;
+		}
+
+		if (thread->process() != process) {
+			throw std::runtime_error("Message TID belongs to a different process");
 		}
 
 		thread->setAddress(requestMessage.address());
