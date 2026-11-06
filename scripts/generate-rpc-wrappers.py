@@ -231,6 +231,22 @@ calls = [
 		('buffer_size', 'uint64_t')
 	], []),
 
+	('file_ref_register', [
+		('device', 'uint64_t'),
+		('inode', 'uint64_t'),
+		('path', 'const char*', 'uint64_t'),
+		('path_length', 'uint64_t'),
+	], []),
+
+	('file_ref_path', [
+		('device', 'uint64_t'),
+		('inode', 'uint64_t'),
+		('buffer', 'char*', 'uint64_t'),
+		('buffer_size', 'uint64_t'),
+	], [
+		('length', 'uint64_t'),
+	]),
+
 	('get_executable_path', [
 		('pid', 'int32_t'),
 		('buffer', 'char*', 'uint64_t'),
