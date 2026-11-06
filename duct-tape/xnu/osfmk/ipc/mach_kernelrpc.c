@@ -36,6 +36,8 @@
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
 #include <kern/kalloc.h>
+#include <kern/host.h>
+#include <ipc/ipc_voucher.h>
 #include <vm/vm_protos.h>
 #include <kdp/kdp_dyld.h>
 

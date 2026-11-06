@@ -386,6 +386,18 @@ ipc_register_mach_voucher_attr_manager(
 	mach_voucher_attr_key_t                 *key,
 	ipc_voucher_attr_control_t              *control);
 
+/*
+ * Unprefixed wrapper defined in ipc_voucher.c. The MIG-generated
+ * mach_voucher_server.h only declares the _kernelrpc_-prefixed trap it
+ * dispatches to; mach_kernelrpc.c calls this unprefixed name directly.
+ */
+extern kern_return_t
+mach_voucher_extract_attr_recipe(
+	ipc_voucher_t                           voucher,
+	mach_voucher_attr_key_t                 key,
+	mach_voucher_attr_raw_recipe_t          raw_recipe,
+	mach_voucher_attr_raw_recipe_size_t     *in_out_size);
+
 __END_DECLS
 
 #endif  /* _IPC_IPC_VOUCHER_H_ */

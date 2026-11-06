@@ -33,22 +33,24 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, long int offs
 int munmap(void* addr, size_t length);
 long sysconf(int name);
 
+/* memfd_create provided by freebsd_compat.c (shim over shm_open(SHM_ANON)) */
 int memfd_create(const char *name, unsigned int flags);
 
 int close(int fd);
 int ftruncate(int fd, off_t length);
 
-#define MAP_ANONYMOUS 0x20
-#define MAP_SHARED 0x01
-#define MAP_PRIVATE 0x02
+/* mmap/mprotect constants — FreeBSD values (not Linux) */
+#define MAP_ANONYMOUS 0x1000  /* FreeBSD MAP_ANON; Linux wrongly uses 0x20 */
+#define MAP_SHARED    0x0001
+#define MAP_PRIVATE   0x0002
 
-#define PROT_READ 0x1
-#define PROT_WRITE 0x2
-#define PROT_EXEC 0x4
+#define PROT_READ  0x01
+#define PROT_WRITE 0x02
+#define PROT_EXEC  0x04
 
 #define MAP_FAILED ((void*)-1)
 
-#define _SC_PAGESIZE 30
+#define _SC_PAGESIZE 47   /* FreeBSD sysconf index; Linux uses 30 */
 
 #define MFD_CLOEXEC 0x1
 

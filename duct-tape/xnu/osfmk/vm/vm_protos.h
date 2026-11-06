@@ -107,6 +107,67 @@ extern int get_vmmap_entries(vm_map_t);
 #endif
 extern int get_map_nentries(vm_map_t);
 
+/*
+ * Unprefixed wrappers defined in vm_user.c. The MIG-generated mach_vm.h /
+ * mach_vm_server.h only declare the _kernelrpc_-prefixed trap routines they
+ * dispatch to; callers elsewhere in the kernel (ipc_kmsg.c, ipc_misc.c,
+ * mach_kernelrpc.c, vm32_user.c) call these unprefixed names directly.
+ */
+extern kern_return_t mach_vm_allocate_external(
+	vm_map_t                map,
+	mach_vm_offset_t        *addr,
+	mach_vm_size_t          size,
+	int                     flags);
+extern kern_return_t mach_vm_deallocate(
+	vm_map_t                map,
+	mach_vm_offset_t        start,
+	mach_vm_size_t          size);
+extern kern_return_t mach_vm_protect(
+	vm_map_t                map,
+	mach_vm_offset_t        start,
+	mach_vm_size_t          size,
+	boolean_t               set_maximum,
+	vm_prot_t               new_protection);
+extern kern_return_t mach_vm_read(
+	vm_map_t                map,
+	mach_vm_address_t       addr,
+	mach_vm_size_t          size,
+	pointer_t               *data,
+	mach_msg_type_number_t  *data_size);
+extern kern_return_t mach_vm_map_external(
+	vm_map_t                target_map,
+	mach_vm_offset_t        *address,
+	mach_vm_size_t          initial_size,
+	mach_vm_offset_t        mask,
+	int                     flags,
+	ipc_port_t              port,
+	vm_object_offset_t      offset,
+	boolean_t               copy,
+	vm_prot_t               cur_protection,
+	vm_prot_t               max_protection,
+	vm_inherit_t            inheritance);
+extern kern_return_t mach_vm_purgable_control(
+	vm_map_t                map,
+	mach_vm_offset_t        address,
+	vm_purgable_t           control,
+	int                     *state);
+extern kern_return_t vm_deallocate(
+	vm_map_t                map,
+	vm_offset_t             start,
+	vm_size_t               size);
+extern kern_return_t mach_vm_remap_external(
+	vm_map_t                target_map,
+	mach_vm_offset_t        *address,
+	mach_vm_size_t          size,
+	mach_vm_offset_t        mask,
+	int                     flags,
+	vm_map_t                src_map,
+	mach_vm_offset_t        memory_address,
+	boolean_t               copy,
+	vm_prot_t               *cur_protection,
+	vm_prot_t               *max_protection,
+	vm_inherit_t            inheritance);
+
 extern vm_map_offset_t vm_map_page_mask(vm_map_t);
 
 extern kern_return_t vm_map_purgable_control(
