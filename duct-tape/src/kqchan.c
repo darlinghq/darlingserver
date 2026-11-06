@@ -71,8 +71,11 @@ void dtape_kqchan_mach_port_modify(dtape_kqchan_mach_port_t* kqchan, uint64_t re
 };
 
 void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqchan) {
-	kqchan->callback = NULL;
-	kqchan->context = NULL;
+	// this can race with kqchan_notify() on another worker.
+	// clear the callback first and publish the cleared context with release semantics,
+	// so a notifier that sees the cleared context also sees the cleared callback.
+	__atomic_store_n(&kqchan->callback, NULL, __ATOMIC_RELAXED);
+	__atomic_store_n(&kqchan->context, NULL, __ATOMIC_RELEASE);
 };
 
 bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size) {
@@ -133,14 +136,30 @@ kevent_ctx_t kevent_get_context(thread_t xthread) {
 	return &thread->kevent_ctx;
 };
 
+// invokes the notification callback unless notifications have been disabled.
+//
+// the callback and context are each read exactly once (context first; see
+// dtape_kqchan_mach_port_disable_notifications()), so a concurrent disable
+// can no longer make us call a NULL callback or pass a NULL context.
+// this only narrows the race with disabling, though: a notification that has
+// already read both may still run after the owner has been told to go away.
+static void kqchan_notify(dtape_kqchan_mach_port_t* kqchan) {
+	void* context = __atomic_load_n(&kqchan->context, __ATOMIC_ACQUIRE);
+	dtape_kqchan_mach_port_notification_callback_f callback = __atomic_load_n(&kqchan->callback, __ATOMIC_RELAXED);
+
+	if (!callback) {
+		return;
+	}
+
+	dtape_log_debug("%s: kqchan=%p; invoking callback...", __FUNCTION__, kqchan);
+
+	callback(context);
+};
+
 static void knote_post(struct knote* kn, long hint) {
 	dtape_kqchan_mach_port_t* kqchan = __container_of(kn, dtape_kqchan_mach_port_t, knote);
 
-	dtape_log_debug("%s: kn=%p, kqchan=%p, kqchan->callback=%p", __FUNCTION__, kn, kqchan, kqchan->callback);
-
-	if (!kqchan->callback) {
-		return;
-	}
+	dtape_log_debug("%s: kn=%p, kqchan=%p", __FUNCTION__, kn, kqchan);
 
 #if 0
 	if (!dtape_kqchan_mach_port_has_events(kqchan)) {
@@ -148,9 +167,7 @@ static void knote_post(struct knote* kn, long hint) {
 	}
 #endif
 
-	dtape_log_debug("%s: kn=%p, kqchan=%p; invoking callback...", __FUNCTION__, kn, kqchan);
-
-	kqchan->callback(kqchan->context);
+	kqchan_notify(kqchan);
 };
 
 void knote(struct klist* list, long hint) {
@@ -193,7 +210,7 @@ static void kqchan_waitq_waiter_entry(void* context, wait_result_t wait_result) 
 			break;
 		} else {
 			if (filt_machportpeek(&kqchan->knote) & FILTER_ACTIVE) {
-				kqchan->callback(kqchan->context);
+				kqchan_notify(kqchan);
 			}
 			// wait until it's read
 			if (!dtape_semaphore_down_simple(kqchan->waiter_read_semaphore)) {
