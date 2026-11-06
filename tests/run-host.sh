@@ -3,6 +3,8 @@
 #
 # Builds tests/host/<test>_test.cpp and runs it. No darlingserver build is needed.
 #   message_*  links <source-root>/src/message.cpp, compiled unchanged (real sockets, real MessageQueue).
+#   logging    links <source-root>/src/logging.cpp, compiled unchanged against stand-in server, process
+#              and thread headers (tests/host/logging-stubs).
 #   call_*     includes Call::callFromMessage cut verbatim out of <source-root>/src/call.cpp
 #              (tests/host/extract-function.py) against stand-in types (tests/host/call_stubs.hpp).
 # SANITIZE overrides the sanitizer list (ASan needs far more address space than `ulimit -v` allows).
@@ -20,6 +22,9 @@ flags="-std=c++17 -g -O0 -fsanitize=${SANITIZE:-address,undefined} -fno-sanitize
 case $test in
 	message_*)
 		$cxx $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/message.cpp" "$here/host/log_stub.cpp"
+		;;
+	logging)
+		$cxx -I"$here/host/logging-stubs" $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/logging.cpp"
 		;;
 	call_*)
 		python3 "$here/host/extract-function.py" "$root/src/call.cpp" "$work/call.inc"

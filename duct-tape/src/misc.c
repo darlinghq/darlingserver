@@ -67,6 +67,11 @@ ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
 
 
 void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
+	// don't format messages that would be dropped anyway
+	if (dtape_hooks->log_enabled && !dtape_hooks->log_enabled(level)) {
+		return;
+	}
+
 	char message[4096];
 	vsnprintf(message, sizeof(message), format, args);
 	dtape_hooks->log(level, message);
