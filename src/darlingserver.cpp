@@ -769,6 +769,12 @@ int main(int argc, char** argv) {
 	perma_drop_privileges(originalUID, originalGID);
 	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
 
+	// a client can exit while we are writing to one of its pipes or sockets;
+	// that must fail with EPIPE instead of killing the server.
+	// this is done only here, after launchd's process has been created, because an ignored
+	// SIGPIPE survives execve() and launchd (and every process it spawns) must start with the default.
+	signal(SIGPIPE, SIG_IGN);
+
 #if DSERVER_ASAN
 	// set up a signal handler to print leak info
 	struct sigaction leak_info_action;

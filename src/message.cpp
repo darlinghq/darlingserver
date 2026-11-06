@@ -535,7 +535,7 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 			break;
 		}
 
-		ret = sendmmsg(socket, mmsgs, len, MSG_DONTWAIT);
+		ret = sendmmsg(socket, mmsgs, len, MSG_DONTWAIT | MSG_NOSIGNAL);
 
 		if (ret < 0) {
 			if (errno == EAGAIN) {
