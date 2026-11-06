@@ -147,6 +147,7 @@ calls = [
 	('set_thread_handles', [
 		('pthread_handle', 'uint64_t'),
 		('dispatch_qaddr', 'uint64_t'),
+		('cancel_marked_addr', 'uint64_t'),
 	], []),
 
 	('vchroot', [
@@ -296,6 +297,8 @@ calls = [
 	('pthread_canceled', [
 		('action', 'int32_t'),
 	], []),
+
+	('pthread_testcancel', [], []),
 
 	('pthread_markcancel', [
 		('thread_port', 'uint32_t'),

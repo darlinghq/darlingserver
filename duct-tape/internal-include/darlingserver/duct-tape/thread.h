@@ -56,6 +56,7 @@ struct dtape_thread {
 	caddr_t uu_wchan;
 	int (*uu_continuation)(int);
 	const char* uu_wmesg;
+	int uu_flag;
 
 	struct thread xnu_thread;
 };

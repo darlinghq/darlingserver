@@ -6,6 +6,7 @@
 
 #include <sys/proc.h>
 #include <sys/pthread_shims.h>
+#include <mach/thread_act.h>
 
 lck_grp_attr_t* pthread_lck_grp_attr = LCK_GRP_ATTR_NULL;
 lck_grp_t* pthread_lck_grp = LCK_GRP_NULL;
@@ -619,7 +620,19 @@ static kern_return_t shim_psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_el
 //
 
 static void shim___pthread_testcancel(int presyscall) {
-	dtape_stub();
+	thread_t self = current_thread();
+	dtape_thread_t* uthread = get_bsdthread_info(self);
+
+	uthread->uu_flag &= ~UT_NOTCANCELPT;
+
+	if ((uthread->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL) {
+		if (presyscall != 0) {
+			unix_syscall_return(EINTR);
+			/* NOTREACHED */
+		} else {
+			thread_abort_safely(self);
+		}
+	}
 };
 
 static void* shim_uthread_get_uukwe(struct uthread* uthread) {
@@ -628,8 +641,8 @@ static void* shim_uthread_get_uukwe(struct uthread* uthread) {
 };
 
 static int shim_uthread_is_cancelled(struct uthread* uthread) {
-	dtape_stub();
-	return 0;
+	dtape_thread_t* thread = (void*)uthread;
+	return (thread->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL;
 };
 
 void shim_uthread_set_returnval(struct uthread* uthread, int retval) {
@@ -676,3 +689,50 @@ extern void dtape_psynch_thread_dying(thread_t thread, void* kwe);
 void dtape_psynch_thread_destroy(dtape_thread_t* thread) {
 	dtape_psynch_thread_dying(&thread->xnu_thread, &thread->kwe);
 };
+
+//
+// <adapted from="xnu://7195.141.2/bsd/kern/kern_sig.c">
+//
+
+bool dtape_thread_pthread_markcancel(dtape_thread_t* uth) {
+	if ((uth->uu_flag & (UT_VFORK | UT_CANCEL | UT_CANCELED)) == 0) {
+		uth->uu_flag |= (UT_CANCEL | UT_NO_SIGMASK);
+		if (((uth->uu_flag & UT_NOTCANCELPT) == 0)
+		    && ((uth->uu_flag & UT_CANCELDISABLE) == 0)) {
+			thread_abort_safely(&uth->xnu_thread);
+		}
+	}
+
+	// also true if it was already marked, e.g. before it told us where its TSD is
+	return (uth->uu_flag & UT_CANCEL) != 0;
+};
+
+// the check that __pthread_testcancel() does on syscall entry
+bool dtape_thread_pthread_testcancel(dtape_thread_t* uth) {
+	uth->uu_flag &= ~UT_NOTCANCELPT;
+
+	return (uth->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL;
+};
+
+int dtape_thread_pthread_canceled(dtape_thread_t* uth, int action) {
+	switch (action) {
+	case 1:
+		uth->uu_flag &= ~UT_CANCELDISABLE;
+		return 0;
+	case 2:
+		uth->uu_flag |= UT_CANCELDISABLE;
+		return 0;
+	case 0:
+	default:
+		if ((uth->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL) {
+			uth->uu_flag &= ~UT_CANCEL;
+			uth->uu_flag |= (UT_CANCELED | UT_NO_SIGMASK);
+			return 0;
+		}
+		return EINVAL;
+	}
+};
+
+//
+// </adapted>
+//

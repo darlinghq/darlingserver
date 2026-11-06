@@ -324,8 +324,40 @@ void DarlingServer::Thread::setAddress(Address address) {
 	_address = address;
 };
 
-void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress) {
+void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress, uintptr_t cancelMarkedAddress) {
 	dtape_thread_set_handles(_dtapeThread, pthreadHandle, dispatchQueueAddress);
+
+	std::unique_lock lock(_rwlock);
+	_cancelMarkedAddress = cancelMarkedAddress;
+};
+
+int DarlingServer::Thread::pthreadCanceled(int action) {
+	return -dtape_thread_pthread_canceled(_dtapeThread, action);
+};
+
+bool DarlingServer::Thread::pthreadTestcancel() {
+	return dtape_thread_pthread_testcancel(_dtapeThread);
+};
+
+void DarlingServer::Thread::pthreadMarkcancel() {
+	if (!dtape_thread_pthread_markcancel(_dtapeThread)) {
+		return;
+	}
+
+	uintptr_t address;
+	{
+		std::shared_lock lock(_rwlock);
+		address = _cancelMarkedAddress;
+	}
+
+	// let the thread know that it has to ask us at cancellation points
+	if (address != 0) {
+		uintptr_t marked = 1;
+		auto proc = process();
+		if (!proc || !proc->writeMemory(address, &marked, sizeof(marked))) {
+			threadLog.warning() << *this << ": failed to set the cancel flag" << threadLog.endLog;
+		}
+	}
 };
 
 bool DarlingServer::Thread::waitingForReply() const {
