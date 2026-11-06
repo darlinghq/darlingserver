@@ -18,12 +18,17 @@
  */
 
 #include <darlingserver/message.hpp>
+#include <darlingserver/logging.hpp>
 #include <unistd.h>
 #include <cstdlib>
 #include <stdexcept>
 #include <new>
 #include <mutex>
 #include <system_error>
+#include <darlingserver/logging.hpp>
+#include <cstring>
+
+static DarlingServer::Log messageLog("message");
 
 DarlingServer::Address::Address() {
 	_address.sun_family = AF_UNIX;
@@ -530,7 +535,7 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 			break;
 		}
 
-		ret = sendmmsg(socket, mmsgs, len, MSG_DONTWAIT);
+		ret = sendmmsg(socket, mmsgs, len, MSG_DONTWAIT | MSG_NOSIGNAL);
 
 		if (ret < 0) {
 			if (errno == EAGAIN) {
@@ -538,13 +543,17 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 				break;
 			} else if (errno == EINTR) {
 				ret = 0;
-			} else if (errno == EPIPE || errno == ECONNREFUSED) {
-				// this means that peer of the first message we tried to send has died.
-				// we'll just drop that message and try the others.
+			} else if (errno == ENOBUFS || errno == ENOMEM) {
+				canSendMore = false;
+				break;
+			} else if (errno == EBADF || errno == ENOTSOCK || errno == EFAULT) {
+				throw std::system_error(errno, std::generic_category(), "Failed to send messages through socket");
+			} else {
+				// sendmmsg reports an error only for the first message, so the failure belongs to that message's
+				// destination (e.g. its peer died or its address is unusable); drop it and keep sending the rest.
+				messageLog.warning() << "Dropping outgoing message: " << strerror(errno) << messageLog.endLog;
 				_messages.pop_front();
 				ret = 0;
-			} else {
-				throw std::system_error(errno, std::generic_category(), "Failed to send messages through socket");
 			}
 		}
 
@@ -589,6 +598,11 @@ bool DarlingServer::MessageQueue::receiveMany(int socket) {
 
 		for (size_t i = 0; i < ret; ++i) {
 			messages[i].rawHeader() = mmsgs[i].msg_hdr;
+			if (mmsgs[i].msg_hdr.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
+				// body or descriptor set did not fit; dropping it here lets its destructor close the received descriptors
+				messageLog.warning() << "Dropping incoming message that did not fit the receive buffer (flags " << mmsgs[i].msg_hdr.msg_flags << ")" << messageLog.endLog;
+				continue;
+			}
 			messages[i].data().resize(mmsgs[i].msg_len);
 			messages[i].setAddress(Address(*(const struct sockaddr_un*)mmsgs[i].msg_hdr.msg_name, mmsgs[i].msg_hdr.msg_namelen));
 			_messages.push_back(std::move(messages[i]));

@@ -91,6 +91,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			return nullptr;
 		}
 
+		// checked before thread registration so a rejected message cannot change a thread's reply address
+		if (process->id() != requestMessage.pid()) {
+			throw std::runtime_error("System-reported message PID != darlingserver-recorded PID");
+		}
+
 		thread = threadRegistry().registerIfAbsent(header->tid, [&]() {
 			std::shared_ptr<Thread> tmp = nullptr;
 
@@ -121,10 +126,6 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		}
 
 		thread->setAddress(requestMessage.address());
-
-		if (process->id() != requestMessage.pid()) {
-			throw std::runtime_error("System-reported message PID != darlingserver-recorded PID");
-		}
 	}
 
 	auto pidString = (process) ? (std::to_string(process->id()) + " (" + std::to_string(process->nsid()) + ")") : (std::to_string(header->pid) + " (-1)");
@@ -155,10 +156,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		Message replyToSave(pushReplyCall->reply_size, 0);
 
 		// extract the reply-push synchronization pipe
-		auto pipeDesc = requestMessage.extractDescriptorAtIndex(requestMessage.descriptors().size() - 1);
+		// owned here so it is closed on every exit; the client is blocked on the read end and EOF releases it
+		FD pipeDesc(requestMessage.extractDescriptorAtIndex(requestMessage.descriptors().size() - 1));
 		char tmp = 1;
 
-		if (pipeDesc < 0) {
+		if (!pipeDesc) {
 			throw std::runtime_error("Failed to extract reply-push synchronization pipe");
 		}
 
@@ -192,9 +194,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		callLog.debug() << *thread << ": Saved client-pushed reply (" << ((thread->_pendingSavedReply) ? "pending" : "normal") << ")" << callLog.endLog;
 
 		// write a byte to the pipe so the caller can continue
-		write(pipeDesc, &tmp, sizeof(tmp));
-		// and close it
-		close(pipeDesc);
+		write(pipeDesc.fd(), &tmp, sizeof(tmp));
 
 		return nullptr;
 	}
@@ -315,6 +315,7 @@ void DarlingServer::Call::Checkin::processCall() {
 
 void DarlingServer::Call::Checkout::processCall() {
 	int code = 0;
+	bool threadDied = false;
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
@@ -374,6 +375,7 @@ void DarlingServer::Call::Checkout::processCall() {
 				}
 			} else {
 				thread->notifyDead();
+				threadDied = true;
 
 				// if this was the last thread in the process, it'll be automatically unregistered
 			}
@@ -384,9 +386,17 @@ void DarlingServer::Call::Checkout::processCall() {
 		code = -ESRCH;
 	}
 
-	// clear the thread pointer so that the reply will be sent directly through the server
-	// (otherwise, we would attempt to send it through the thread, which is now dead)
-	_thread.reset();
+	if (threadDied) {
+		// A dead thread cannot send its reply, so reproduce the active-call cleanup
+		// normally performed by Thread::pushCallReply before replying directly.
+		auto self = shared_from_this();
+		if (auto thread = _thread.lock()) {
+			thread->deactivateCall(self);
+		}
+		_thread.reset();
+		_sendReply(code);
+		return;
+	}
 
 	_sendReply(code);
 };

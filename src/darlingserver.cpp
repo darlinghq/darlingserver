@@ -593,8 +593,14 @@ int main(int argc, char** argv) {
 
 		// now set our increased rlimit
 		if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
-			fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
-			//exit(1);
+			// In a rootless user namespace, raising the hard limit can fail.
+			// Still raise the soft limit to the inherited hard limit so
+			// processes holding numerous descriptors/memfds don't fail with EMFILE.
+			increased_limit.rlim_cur = increased_limit.rlim_max = default_limit.rlim_max;
+			if (setrlimit(RLIMIT_NOFILE, &increased_limit) != 0) {
+				fprintf(stderr, "Warning: failed to increase FD rlimit: %s\n", strerror(errno));
+				//exit(1);
+			}
 		}
 
 #endif
@@ -762,6 +768,12 @@ int main(int argc, char** argv) {
 	// drop our privileges
 	perma_drop_privileges(originalUID, originalGID);
 	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+
+	// a client can exit while we are writing to one of its pipes or sockets;
+	// that must fail with EPIPE instead of killing the server.
+	// this is done only here, after launchd's process has been created, because an ignored
+	// SIGPIPE survives execve() and launchd (and every process it spawns) must start with the default.
+	signal(SIGPIPE, SIG_IGN);
 
 #if DSERVER_ASAN
 	// set up a signal handler to print leak info

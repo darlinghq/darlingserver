@@ -1537,6 +1537,8 @@ for call in calls:
 			library_source.write("\t\t++valid_fd_count;\n")
 			library_source.write("\t}\n")
 
+		# the indices come from the reply body, so they must be checked against the descriptors that were received
+		bad_index_condition = " || ".join("reply_msg.reply.body." + param[0] + " >= valid_fd_count" for param in reply_parameters if is_fd(param))
 		library_source.write(textwrap.indent(textwrap.dedent("""\
 			if (valid_fd_count > 0) {
 				dserver_rpc_hooks_cmsghdr_t* reply_cmsg = DSERVER_RPC_HOOKS_CMSG_FIRSTHDR(&replymsg);
@@ -1544,6 +1546,12 @@ for call in calls:
 					return dserver_rpc_hooks_get_bad_message_status();
 				}
 				dserver_rpc_hooks_memcpy(fds, DSERVER_RPC_HOOKS_CMSG_DATA(reply_cmsg), sizeof(int) * valid_fd_count);
+				if (""" + bad_index_condition + """) {
+					for (int fd_index = 0; fd_index < valid_fd_count; ++fd_index) {
+						dserver_rpc_hooks_close_fd(fds[fd_index]);
+					}
+					return dserver_rpc_hooks_get_bad_message_status();
+				}
 			}
 			"""), '\t'))
 
