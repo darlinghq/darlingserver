@@ -674,6 +674,41 @@ calls = [
 		('message_count', 'uint64_t'),
 		('fd', '@fd'),
 	], UNMANAGED_CALL),
+
+	#
+	# fileports
+	#
+
+	('fileport_makeport', [
+		('fd', '@fd'),
+	], [
+		('port_name', 'uint32_t'),
+	]),
+
+	('fileport_makefd', [
+		('port_name', 'uint32_t'),
+	], [
+		('fd', '@fd'),
+	]),
+
+	#
+	# system configuration
+	#
+	# `config` points to a `dserver_system_config_t` (see rpc-supplement.h)
+	# and `config_size` must be its size.
+	#
+
+	('set_system_config', [
+		('config', 'const void*', 'uint64_t'),
+		('config_size', 'uint64_t'),
+	], []),
+
+	('get_system_config', [
+		('config', 'void*', 'uint64_t'),
+		('config_size', 'uint64_t'),
+	], []),
+
+	('wait_system_config', [], [], ALLOW_INTERRUPTIONS),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

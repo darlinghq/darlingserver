@@ -5,6 +5,7 @@ Host-only tests, no darlingserver build needed. From the repository root:
 ```sh
 tests/run-host.sh call_push_reply_pipe   # the push_reply synchronization pipe is closed on every exit
 tests/run-host.sh message_send           # a reply that fails for its destination only is dropped
+tests/run-host.sh message_credentials    # cached sender credentials are correct, also after fork()
 ```
 
 Pass a second argument (a checkout, or a `git archive` of another revision) to run the same test
@@ -20,3 +21,7 @@ server socket (EBADF, still fatal). ENOBUFS, ENOMEM and EFAULT cannot be provoke
 `call_push_reply_pipe` cuts the real `Call::callFromMessage` out of `src/call.cpp` and runs it against
 stand-in `Message`, `Process`, `Thread` and registry types (`tests/host/call_stubs.hpp`), with a real
 pipe standing in for the client's synchronization pipe. Only the function body is real.
+
+`message_credentials` compiles the unchanged `src/message.cpp` and sends `Message`s over an
+SO_PASSCRED socket pair, before and after `Message::initializeServerCredentials()`, and from a forked
+child (the kernel rejects a message whose PID is not the sender's, so a stale cached PID fails).

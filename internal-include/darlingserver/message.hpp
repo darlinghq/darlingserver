@@ -85,6 +85,16 @@ namespace DarlingServer {
 		Message(size_t bufferSpace = 256, size_t descriptorSpace = 4, std::function<void()> sendNotificationCallback = nullptr);
 		~Message();
 
+		/**
+		 * Caches this process's PID, UID and GID for the credentials attached to every Message,
+		 * instead of querying them for each one.
+		 *
+		 * Call this once, before any other thread is started and after the final change of
+		 * the process's IDs. Without it, every Message queries them itself. A forked child
+		 * discards the cache.
+		 */
+		static void initializeServerCredentials();
+
 		Message(Message&&);
 		Message& operator=(Message&&);
 

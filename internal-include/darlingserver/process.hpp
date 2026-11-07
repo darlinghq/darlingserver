@@ -93,6 +93,13 @@ namespace DarlingServer {
 		std::string _cachedVchrootPath;
 		std::shared_ptr<FD> _vchrootDescriptor;
 		dtape_task_t* _dtapeTask;
+
+		// `/proc/<pid>/maps`, kept open for PROCMAP_QUERY region lookups; guarded by its own mutex
+		// so a lookup never issues the ioctl on a descriptor that another thread closed.
+		mutable std::mutex _mapsMutex;
+		mutable int _mapsFd = -1;
+		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset) const;
+		void _closeMapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;

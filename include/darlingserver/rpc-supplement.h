@@ -228,6 +228,100 @@ typedef union dserver_s2c_call {
         dserver_s2c_call_msync_t msync;
 } dserver_s2c_call_t;
 
+//
+// system configuration
+//
+
+/**
+ * The system configuration holds the values of the `org.darlinghq.security`
+ * preferences domain that darlingserver is the authority for. A guest daemon
+ * reads the domain through CFPreferences and pushes it with
+ * `set_system_config`; darlingserver itself parses no plists.
+ *
+ * Until the first push, darlingserver uses built-in defaults (no enforcement).
+ * `wait_system_config` returns once the first push has been accepted.
+ *
+ * Only a caller whose user ID (as darlingserver tracks it for the process) is 0
+ * may push. A push is validated completely before anything is applied, so a
+ * rejected push changes nothing. Anyone may read the configuration back with
+ * `get_system_config`.
+ */
+
+#define DSERVER_SYSTEM_CONFIG_VERSION 1
+
+// size of `trust_store_path`, including the terminating NUL (MAXPATHLEN on Darwin)
+#define DSERVER_SYSTEM_CONFIG_PATH_MAX 1024
+
+// bits in `present`: which keys the pushed domain contained
+#define DSERVER_SYSTEM_CONFIG_HAS_CODE_SIGNING_POLICY (1u << 0)
+#define DSERVER_SYSTEM_CONFIG_HAS_CSR_ACTIVE_CONFIG   (1u << 1)
+#define DSERVER_SYSTEM_CONFIG_HAS_SEAL_IMAGES         (1u << 2)
+#define DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH    (1u << 3)
+
+#define DSERVER_SYSTEM_CONFIG_HAS_ALL ( \
+		DSERVER_SYSTEM_CONFIG_HAS_CODE_SIGNING_POLICY | \
+		DSERVER_SYSTEM_CONFIG_HAS_CSR_ACTIVE_CONFIG | \
+		DSERVER_SYSTEM_CONFIG_HAS_SEAL_IMAGES | \
+		DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH \
+	)
+
+// values of `CodeSigningPolicy` ("off", "warn" and "enforce" in the domain)
+enum dserver_code_signing_policy {
+	dserver_code_signing_policy_off = 0,
+	dserver_code_signing_policy_warn = 1,
+	dserver_code_signing_policy_enforce = 2,
+};
+
+typedef struct dserver_system_config {
+	/**
+	 * Must be `DSERVER_SYSTEM_CONFIG_VERSION`.
+	 */
+	uint32_t version;
+
+	/**
+	 * Must be `sizeof(dserver_system_config_t)`.
+	 */
+	uint32_t size;
+
+	/**
+	 * A combination of `DSERVER_SYSTEM_CONFIG_HAS_*` bits.
+	 *
+	 * In a push, every field whose bit is clear must be zero, and darlingserver uses its default for it.
+	 * Read back, the bits say which values came from the last push; every field holds the value in effect.
+	 */
+	uint32_t present;
+
+	/**
+	 * One of `dserver_code_signing_policy`. Default: off.
+	 */
+	uint32_t code_signing_policy;
+
+	/**
+	 * Same meaning as the `csr-active-config` NVRAM variable: `CSR_ALLOW_*` flags from `<sys/csr.h>`.
+	 * Only `CSR_VALID_FLAGS` may be set. Default: `CSR_DISABLE_FLAGS` (what `csrutil disable` sets).
+	 *
+	 * After the first push, a push may only clear flags (turn protections on), never set flags
+	 * that are not in effect; relaxing the configuration takes a restart of the prefix.
+	 */
+	uint32_t csr_active_config;
+
+	/**
+	 * 0 or 1. Default: 0.
+	 */
+	uint32_t seal_images;
+
+	/**
+	 * Number of pushes accepted so far; 0 means the built-in defaults are in effect.
+	 * Filled in by darlingserver when read back; must be zero in a push.
+	 */
+	uint64_t generation;
+
+	/**
+	 * An absolute, NUL-terminated path. Empty (all zero) when not present, which is also the default.
+	 */
+	char trust_store_path[DSERVER_SYSTEM_CONFIG_PATH_MAX];
+} dserver_system_config_t;
+
 #if __cplusplus
 };
 #endif

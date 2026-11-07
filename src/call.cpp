@@ -28,6 +28,7 @@
 #include <sys/fcntl.h>
 #include <sys/syscall.h>
 #include <darlingserver/kqchan.hpp>
+#include <darlingserver/system-config.hpp>
 #include <limits.h>
 #include <list>
 #include <map>
@@ -136,9 +137,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		thread->setAddress(requestMessage.address());
 	}
 
-	auto pidString = (process) ? (std::to_string(process->id()) + " (" + std::to_string(process->nsid()) + ")") : (std::to_string(header->pid) + " (-1)");
-	auto tidString = (thread) ? (std::to_string(thread->id()) + " (" + std::to_string(thread->nsid()) + ")") : (std::to_string(header->tid) + " (-1)");
-	callLog.debug() << "Received call #" << header->number << " (" << dserver_callnum_to_string(header->number) << ") from PID " << pidString << ", TID " << tidString << callLog.endLog;
+	if (callLog.enabled(Log::Type::Debug)) {
+		auto pidString = (process) ? (std::to_string(process->id()) + " (" + std::to_string(process->nsid()) + ")") : (std::to_string(header->pid) + " (-1)");
+		auto tidString = (thread) ? (std::to_string(thread->id()) + " (" + std::to_string(thread->nsid()) + ")") : (std::to_string(header->tid) + " (-1)");
+		callLog.debug() << "Received call #" << header->number << " (" << dserver_callnum_to_string(header->number) << ") from PID " << pidString << ", TID " << tidString << callLog.endLog;
+	}
 
 	if (header->number == dserver_callnum_s2c) {
 		// this is an S2C reply
@@ -730,6 +733,176 @@ void DarlingServer::Call::KqchanProcOpen::processCall() {
 	}
 
 	_sendReply(code, socket);
+};
+
+void DarlingServer::Call::FileportMakeport::processCall() {
+	int code = 0;
+	uint32_t portName = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			if (_body.fd < 0) {
+				code = -EBADF;
+			} else {
+				// the fileport takes ownership of the descriptor
+				int fd = _body.fd;
+				_body.fd = -1;
+
+				switch (dtape_fileport_makeport(process->_dtapeTask, fd, &portName)) {
+					case dtape_fileport_result_ok:
+						break;
+					case dtape_fileport_result_no_resources:
+						code = -EAGAIN;
+						break;
+					case dtape_fileport_result_invalid_port:
+						code = -EINVAL;
+						break;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, portName);
+};
+
+void DarlingServer::Call::FileportMakefd::processCall() {
+	int code = 0;
+	int fd = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			switch (dtape_fileport_makefd(process->_dtapeTask, _body.port_name, &fd)) {
+				case dtape_fileport_result_ok:
+					break;
+				case dtape_fileport_result_no_resources:
+					code = -EMFILE;
+					break;
+				case dtape_fileport_result_invalid_port:
+					// not a send right to a fileport
+					code = -EINVAL;
+					break;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	// the reply takes ownership of the new descriptor
+	_sendReply(code, fd);
+};
+
+static DarlingServer::Log systemConfigLog("sysconfig");
+
+// raised once by the first accepted push. every waiter passes the count on when it wakes up,
+// so the latch stays raised for later waiters too.
+static dtape_semaphore_t* systemConfigLatch(dtape_task_t* kernelTask) {
+	static std::once_flag once;
+	static dtape_semaphore_t* latch = nullptr;
+	std::call_once(once, [kernelTask]() {
+		latch = dtape_semaphore_create(kernelTask, 0);
+	});
+	return latch;
+};
+
+void DarlingServer::Call::SetSystemConfig::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			int uid = -1;
+			dtape_task_uidgid(process->_dtapeTask, -1, -1, &uid, nullptr);
+
+			// the configuration comes from the root-owned `/Library/Preferences`, so only root may push it.
+			// this is checked before the caller's memory is looked at.
+			if (uid != 0) {
+				code = -EPERM;
+			} else if (_body.config_size != sizeof(dserver_system_config_t)) {
+				code = -EINVAL;
+			} else if (auto latch = systemConfigLatch(Process::kernelProcess()->_dtapeTask); !latch) {
+				code = -ENOMEM;
+			} else {
+				dserver_system_config_t config;
+				bool isFirst = false;
+
+				if (!process->readMemory(_body.config, &config, sizeof(config), &code)) {
+					// readMemory returns a positive error code, but we want a negative one
+					code = -code;
+				} else {
+					code = SystemConfig::sharedInstance().apply(config, isFirst);
+				}
+
+				if (code == 0) {
+					systemConfigLog.info() << "Process " << process->id() << " (" << process->nsid() << ") set the system configuration" << systemConfigLog.endLog;
+					if (isFirst) {
+						dtape_semaphore_up(latch);
+					}
+				} else {
+					systemConfigLog.warning() << "Rejected the system configuration from process " << process->id() << " (" << process->nsid() << "): " << code << systemConfigLog.endLog;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::GetSystemConfig::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			if (_body.config_size != sizeof(dserver_system_config_t)) {
+				code = -EINVAL;
+			} else {
+				auto config = SystemConfig::sharedInstance().current();
+				if (!process->writeMemory(_body.config, &config, sizeof(config), &code)) {
+					// writeMemory returns a positive error code, but we want a negative one
+					code = -code;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::WaitSystemConfig::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (thread->process()) {
+			if (SystemConfig::sharedInstance().current().generation == 0) {
+				if (auto latch = systemConfigLatch(Process::kernelProcess()->_dtapeTask); !latch) {
+					code = -ENOMEM;
+				} else if (dtape_semaphore_down_simple(latch)) {
+					// wake up the next waiter (or leave the latch raised for later ones)
+					dtape_semaphore_up(latch);
+				} else {
+					code = -EINTR;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
 };
 
 void DarlingServer::Call::ForkWaitForChild::processCall() {
