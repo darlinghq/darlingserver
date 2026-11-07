@@ -178,7 +178,11 @@ namespace DarlingServer {
 		bool readMemory(uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode = nullptr) const;
 		bool writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode = nullptr) const;
 
-		void notifyCheckin(Architecture architecture);
+		/**
+		 * Handles a check-in from this process's image. `isFork` is set by a new child after fork();
+		 * only that check-in ends its parent's wait in fork().
+		 */
+		void notifyCheckin(Architecture architecture, bool isFork);
 		void setPendingReplacement();
 
 		void registerKqchan(std::shared_ptr<Kqchan> kqchan);

@@ -317,7 +317,7 @@ bool DarlingServer::Process::writeMemory(uintptr_t remoteAddress, const void* lo
 	return _readOrWriteMemory(true, remoteAddress, const_cast<void*>(localBuffer), length, errorCode);
 };
 
-void DarlingServer::Process::notifyCheckin(Architecture architecture) {
+void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFork) {
 	std::unique_lock lock(_rwlock);
 
 	bool didExec = _pendingReplacement;
@@ -397,7 +397,7 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		mainThread->_s2cReplySempahore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptEnterSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptExitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
-	} else {
+	} else if (isFork) {
 		// fork case
 
 		if (architecture != _architecture) {
@@ -412,7 +412,10 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 	if (didExec) {
 		// notify listeners that we have exec'd (i.e. been replaced)
 		_notifyListeningKqchannels(NOTE_EXEC, 0);
-	} else {
+	} else if (isFork) {
+		// only a fork child's check-in: its parent waits in fork() for exactly this one. a check-in
+		// from an exec'd image whose exec has not been reported yet must not wake the parent, or the
+		// parent's next fork() returns before that child has checked in and inherited its ports.
 		// notify the parent process (if we have one) that we've arrived
 		if (auto parent = _parentProcess.lock()) {
 			{
