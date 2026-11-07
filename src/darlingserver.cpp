@@ -284,6 +284,14 @@ void spawnLaunchd(const char* prefix)
 
 	setenv("__mldr_DYLD_ROOT_PATH", LIBEXEC_PATH, 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
+
+	// These describe the host user and its host paths. launchd sets them for
+	// each job from the job's own account, but never replaces inherited ones.
+	static const char* const hostIdentityVars[] = { "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR" };
+	for (const char* var: hostIdentityVars) {
+		unsetenv(var);
+	}
+
 	detachStdio();
 	execl(DarlingServer::Config::defaultMldrPath.data(), "mldr!" LIBEXEC_PATH "/usr/libexec/darling/vchroot", "vchroot", prefix, initPath, NULL);
 
