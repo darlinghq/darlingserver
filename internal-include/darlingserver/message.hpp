@@ -28,6 +28,7 @@
 #include <mutex>
 #include <optional>
 #include <functional>
+#include <array>
 
 namespace DarlingServer {
 	class Address {
@@ -171,6 +172,9 @@ namespace DarlingServer {
 	class MessageQueue {
 	private:
 		std::deque<Message> _messages;
+		// receiveMany()'s receive buffers; a slot is refilled only after its message was taken,
+		// so a round that receives little does not allocate a whole new set of buffers
+		std::array<std::optional<Message>, 16> _receiveSlots;
 		mutable std::mutex _lock;
 		std::function<void()> _messageArrivalNotificationCallback = nullptr;
 

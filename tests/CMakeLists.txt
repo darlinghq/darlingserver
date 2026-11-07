@@ -23,7 +23,7 @@ endfunction()
 
 # tests that compile the real source files unchanged
 
-foreach(topic message_recv message_send message_credentials)
+foreach(topic message_recv message_recv_reuse message_send message_credentials)
 	dserver_host_test(${topic} TEMP_DIR SOURCES ${host}/${topic}_test.cpp ${root}/src/message.cpp ${host}/log_stub.cpp)
 endforeach()
 

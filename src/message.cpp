@@ -93,6 +93,9 @@ void DarlingServer::Address::setRawSize(size_t newRawSize) {
 DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std::function<void()> sendNotificationCallback):
 	_sendNotificationCallback(sendNotificationCallback)
 {
+	// allocate the data buffer first: if that throws, the destructor does not run and would not free the control buffer
+	_buffer.resize(bufferSpace);
+
 	size_t controlLen = CMSG_SPACE(sizeof(struct ucred)) + (descriptorSpace > 0 ? CMSG_SPACE(sizeof(int) * descriptorSpace) : 0);
 	_controlHeader = static_cast<decltype(_controlHeader)>(malloc(controlLen));
 
@@ -117,8 +120,6 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std:
 			memcpy(CMSG_DATA(fdHeader) + (sizeof(int) * i), &fd, sizeof(int));
 		}
 	}
-
-	_buffer.resize(bufferSpace);
 
 	_header.msg_name = &_socketAddress.raw();
 	_header.msg_namelen = _socketAddress.rawSize();
@@ -599,14 +600,15 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 bool DarlingServer::MessageQueue::receiveMany(int socket) {
 	bool canReadMore = true;
 	std::unique_lock lock(_lock);
-	struct mmsghdr mmsgs[16];
+	struct mmsghdr mmsgs[std::tuple_size<decltype(_receiveSlots)>::value];
 	int ret = 0;
 
 	while (ret >= 0) {
-		std::array<Message, sizeof(mmsgs) / sizeof(*mmsgs)> messages;
-
-		for (size_t i = 0; i < messages.size(); ++i) {
-			mmsgs[i].msg_hdr = messages[i].rawHeader();
+		for (size_t i = 0; i < _receiveSlots.size(); ++i) {
+			if (!_receiveSlots[i]) {
+				_receiveSlots[i].emplace();
+			}
+			mmsgs[i].msg_hdr = _receiveSlots[i]->rawHeader();
 			mmsgs[i].msg_len = 0;
 		}
 
@@ -626,16 +628,36 @@ bool DarlingServer::MessageQueue::receiveMany(int socket) {
 			}
 		}
 
-		for (size_t i = 0; i < ret; ++i) {
-			messages[i].rawHeader() = mmsgs[i].msg_hdr;
+		size_t received = ret;
+
+		// give every received message its header before anything below can throw,
+		// so that each one owns the descriptors it carries
+		for (size_t i = 0; i < received; ++i) {
+			_receiveSlots[i]->rawHeader() = mmsgs[i].msg_hdr;
+		}
+
+		// the slots that received a message are emptied in any case (moved into the queue, dropped, or on an exception),
+		// which also closes the descriptors of a message that is not queued
+		struct SlotRelease {
+			decltype(_receiveSlots)& slots;
+			size_t count;
+			~SlotRelease() {
+				for (size_t i = 0; i < count; ++i) {
+					slots[i].reset();
+				}
+			};
+		} release { _receiveSlots, received };
+
+		for (size_t i = 0; i < received; ++i) {
+			auto& message = *_receiveSlots[i];
 			if (mmsgs[i].msg_hdr.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
 				// body or descriptor set did not fit; dropping it here lets its destructor close the received descriptors
 				messageLog.warning() << "Dropping incoming message that did not fit the receive buffer (flags " << mmsgs[i].msg_hdr.msg_flags << ")" << messageLog.endLog;
 				continue;
 			}
-			messages[i].data().resize(mmsgs[i].msg_len);
-			messages[i].setAddress(Address(*(const struct sockaddr_un*)mmsgs[i].msg_hdr.msg_name, mmsgs[i].msg_hdr.msg_namelen));
-			_messages.push_back(std::move(messages[i]));
+			message.data().resize(mmsgs[i].msg_len);
+			message.setAddress(Address(*(const struct sockaddr_un*)mmsgs[i].msg_hdr.msg_name, mmsgs[i].msg_hdr.msg_namelen));
+			_messages.push_back(std::move(message));
 		}
 
 		if (drained) {
