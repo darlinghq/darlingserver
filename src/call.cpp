@@ -716,6 +716,68 @@ void DarlingServer::Call::KqchanProcOpen::processCall() {
 	_sendReply(code, socket);
 };
 
+void DarlingServer::Call::FileportMakeport::processCall() {
+	int code = 0;
+	uint32_t portName = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			if (_body.fd < 0) {
+				code = -EBADF;
+			} else {
+				// the fileport takes ownership of the descriptor
+				int fd = _body.fd;
+				_body.fd = -1;
+
+				switch (dtape_fileport_makeport(process->_dtapeTask, fd, &portName)) {
+					case dtape_fileport_result_ok:
+						break;
+					case dtape_fileport_result_no_resources:
+						code = -EAGAIN;
+						break;
+					case dtape_fileport_result_invalid_port:
+						code = -EINVAL;
+						break;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, portName);
+};
+
+void DarlingServer::Call::FileportMakefd::processCall() {
+	int code = 0;
+	int fd = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			switch (dtape_fileport_makefd(process->_dtapeTask, _body.port_name, &fd)) {
+				case dtape_fileport_result_ok:
+					break;
+				case dtape_fileport_result_no_resources:
+					code = -EMFILE;
+					break;
+				case dtape_fileport_result_invalid_port:
+					// not a send right to a fileport
+					code = -EINVAL;
+					break;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	// the reply takes ownership of the new descriptor
+	_sendReply(code, fd);
+};
+
 void DarlingServer::Call::ForkWaitForChild::processCall() {
 	int code = 0;
 

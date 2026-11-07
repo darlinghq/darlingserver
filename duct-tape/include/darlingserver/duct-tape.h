@@ -56,6 +56,24 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(dtape_task_t* owning_task, uint32_t port, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags, dtape_kqchan_mach_port_notification_callback_f notification_callback, void* context);
 dtape_semaphore_t* dtape_semaphore_create(dtape_task_t* owning_task, int initial_value);
 
+/**
+ * Creates a fileport for @p fd in @p task and stores the name of the task's new send right to it in @p out_port_name.
+ * The fileport takes ownership of @p fd, even on failure. The descriptor is closed when the last send right is gone.
+ *
+ * Returns `dtape_fileport_result_no_resources` if the port could not be allocated
+ * and `dtape_fileport_result_invalid_port` if the right could not be added to the task.
+ */
+dtape_fileport_result_t dtape_fileport_makeport(dtape_task_t* task, int fd, uint32_t* out_port_name);
+
+/**
+ * Stores a new descriptor (a `dup()` of the one held by the fileport named @p port_name in @p task) in @p out_fd.
+ * The caller owns the new descriptor. The task's send right is not consumed.
+ *
+ * Returns `dtape_fileport_result_invalid_port` if @p port_name does not name a send right to a fileport
+ * and `dtape_fileport_result_no_resources` if the descriptor could not be duplicated.
+ */
+dtape_fileport_result_t dtape_fileport_makefd(dtape_task_t* task, uint32_t port_name, int* out_fd);
+
 void dtape_kqchan_mach_port_destroy(dtape_kqchan_mach_port_t* kqchan);
 void dtape_semaphore_destroy(dtape_semaphore_t* semaphore);
 

@@ -27,6 +27,12 @@ typedef enum dtape_semaphore_wait_result {
 	dtape_semaphore_wait_result_interrupted = 1,
 } dtape_semaphore_wait_result_t;
 
+typedef enum dtape_fileport_result {
+	dtape_fileport_result_ok = 0,
+	dtape_fileport_result_invalid_port = 1,
+	dtape_fileport_result_no_resources = 2,
+} dtape_fileport_result_t;
+
 typedef void (*dtape_thread_continuation_callback_f)(void* context);
 
 typedef struct dtape_memory_info {
