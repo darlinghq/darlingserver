@@ -3,6 +3,8 @@
 #
 # Builds tests/host/<test>_test.cpp and runs it. No darlingserver build is needed.
 #   message_*  links <source-root>/src/message.cpp, compiled unchanged (real sockets, real MessageQueue).
+#   workqueue_*  header-only: includes <source-root>/internal-include/darlingserver/workers.hpp unchanged;
+#              SINGLE_THREADED=0 builds it as the multi-threaded queue.
 #   logging    links <source-root>/src/logging.cpp, compiled unchanged against stand-in server, process
 #              and thread headers (tests/host/logging-stubs).
 #   call_*     includes Call::callFromMessage cut verbatim out of <source-root>/src/call.cpp
@@ -26,6 +28,10 @@ flags="-std=c++17 -g -O0 -fsanitize=${SANITIZE:-address,undefined} -fno-sanitize
 case $test in
 	message_*)
 		$cxx $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/message.cpp" "$here/host/log_stub.cpp"
+		;;
+	workqueue_*)
+		echo "#define LIBEXEC_PATH \"/usr/local/libexec/darling\"" > "$work/darling-config.h" # config.hpp only needs these two names
+		$cxx $flags -I"$work" -pthread -DDSERVER_SINGLE_THREADED=${SINGLE_THREADED:-1} -o "$work/t" "$here/host/${test}_test.cpp"
 		;;
 	logging)
 		$cxx -I"$here/host/logging-stubs" $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/logging.cpp"

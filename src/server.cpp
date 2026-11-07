@@ -466,6 +466,9 @@ struct DTapeHooks {
 	};
 };
 
+// set while the main loop runs a call inline; the loop flushes the outbox itself right afterwards, so no eventfd wakeup is needed
+static thread_local bool runningInline = false;
+
 DarlingServer::Server::Server(std::string prefix):
 	_prefix(prefix),
 	_socketPath(_prefix + "/.darlingserver.sock"),
@@ -531,6 +534,9 @@ DarlingServer::Server::Server(std::string prefix):
 		// if it does, that means the main loop has been waiting a LONG time for the listener socket to become writable again.
 		// in that case, we don't really care if the eventfd is being incremented; we can't send anything anyways.
 		// once the socket becomes writable again, the eventfd will be monitored again.
+		if (runningInline) {
+			return;
+		}
 		eventfd_write(_wakeupFD, 1);
 	});
 
@@ -580,28 +586,42 @@ void DarlingServer::Server::start() {
 					continue;
 				}
 				if (call) {
-					_workQueue.push(call->thread());
+					auto thread = call->thread();
+					runningInline = true;
+					bool ranInline = _workQueue.tryRunInline(thread);
+					runningInline = false;
+					if (!ranInline) {
+						_workQueue.push(std::move(thread));
+					}
 				}
 			}
 		}
 
-		// reset the eventfd by reading from it
-		eventfd_t value;
-		eventfd_read(_wakeupFD, &value);
+		// reset the eventfd by reading from it (only needed once it has fired; it is one-shot, so a fired eventfd is no longer armed)
+		if (!_wakeupArmed) {
+			eventfd_t value;
+			eventfd_read(_wakeupFD, &value);
+		}
 
 		if (_canWrite) {
 			_canWrite = _outbox.sendMany(_listenerSocket);
 		}
 
-		struct epoll_event settings;
-		settings.data.ptr = &_wakeupFD;
-		settings.events = (_canWrite) ? (EPOLLIN | EPOLLONESHOT) : 0;
+		// the eventfd is only watched while we can write; avoid the syscall when that hasn't changed
+		if (_wakeupArmed != _canWrite) {
+			struct epoll_event settings;
+			settings.data.ptr = &_wakeupFD;
+			settings.events = (_canWrite) ? (EPOLLIN | EPOLLONESHOT) : 0;
 
-		if (epoll_ctl(_epollFD, EPOLL_CTL_MOD, _wakeupFD, &settings) < 0) {
-			throw std::system_error(errno, std::generic_category(), "Failed to modify eventfd in epoll context");
+			if (epoll_ctl(_epollFD, EPOLL_CTL_MOD, _wakeupFD, &settings) < 0) {
+				throw std::system_error(errno, std::generic_category(), "Failed to modify eventfd in epoll context");
+			}
+
+			_wakeupArmed = _canWrite;
 		}
 
 		struct epoll_event events[16];
+
 		int ret = epoll_wait(_epollFD, events, 16, -1);
 
 		if (ret < 0) {
@@ -624,6 +644,8 @@ void DarlingServer::Server::start() {
 					_canWrite = true;
 				}
 			} else if (event->data.ptr == &_wakeupFD) {
+				// one-shot: the kernel disarmed it when it reported the event
+				_wakeupArmed = false;
 				// we allow the loop to go back to the top and try to send some messages
 				// (if _canWrite is true, the eventfd will be reset; otherwise, there's no point in resetting it)
 			} else if (event->data.ptr == &_timerFD) {

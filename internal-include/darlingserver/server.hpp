@@ -47,6 +47,7 @@ namespace DarlingServer {
 		bool _canRead = false;
 		bool _canWrite = true;
 		int _wakeupFD;
+		bool _wakeupArmed = true;
 		int _timerFD;
 		uint64_t _currentTimerDeadline = 0;
 		std::mutex _timerLock;
