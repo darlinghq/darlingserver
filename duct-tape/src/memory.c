@@ -169,7 +169,9 @@ static size_t dtape_map_find_shared_entries_locked(dtape_map_t* map, uint64_t ad
 	}
 
 	RB_FOREACH(entry, dtape_map_shared_entry_head, &map->shared_entries) {
-		if (entry->address + entry->size < address || entry->address > address + size) {
+		// entries and the region are half-open ranges: an entry that ends where the region starts,
+		// or starts where it ends, is only adjacent to it
+		if (entry->address + entry->size <= address || entry->address >= address + size) {
 			continue;
 		}
 
