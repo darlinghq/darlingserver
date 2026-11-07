@@ -726,6 +726,23 @@ calls = [
 	], [
 		('pid', 'int32_t'),
 	]),
+
+	#
+	# platform identity
+	#
+	# `identity` points to a `dserver_platform_identity_t` (see rpc-supplement.h)
+	# and `identity_size` must be its size.
+	#
+
+	('set_platform_identity', [
+		('identity', 'const void*', 'uint64_t'),
+		('identity_size', 'uint64_t'),
+	], []),
+
+	('get_platform_identity', [
+		('identity', 'void*', 'uint64_t'),
+		('identity_size', 'uint64_t'),
+	], []),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

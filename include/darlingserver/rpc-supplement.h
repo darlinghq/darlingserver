@@ -327,6 +327,135 @@ typedef struct dserver_system_config {
 	char trust_store_path[DSERVER_SYSTEM_CONFIG_PATH_MAX];
 } dserver_system_config_t;
 
+//
+// platform identity
+//
+
+/**
+ * The platform identity holds the values of the `org.darlinghq.platform`
+ * preferences domain that the layers below CoreFoundation report: `hw.model`,
+ * `machdep.cpu.brand_string`, `hw.memsize` (and `host_info()`), `gethostuuid()`,
+ * and the IOPlatformExpertDevice properties that iokitd publishes. As with the
+ * system configuration, a guest daemon reads the domain through CFPreferences
+ * and pushes it with `set_platform_identity`. It pushes the identity before the
+ * system configuration, so `wait_system_config` also covers the identity.
+ *
+ * Until the first push, and for every key a push leaves out, darlingserver uses
+ * its defaults:
+ *   - `model`: MacBookPro16,1 on x86_64 and i386, Mac14,2 on arm64;
+ *   - `product_name`: the default model on x86_64 and i386, none on arm64;
+ *   - `board_id`: Mac-E1008331FDC96864 on x86_64 and i386, none on arm64;
+ *   - `platform_uuid`: derived from the host's machine ID (see below);
+ *   - `serial_number`: "DARLING-" and 8 hex digits from the same derivation;
+ *   - `cpu_brand_string`, `memory_size`: none, so the host's values are used;
+ *   - `rom`, `mlb_serial_number`, `system_id`, `provisioning_udid`: none
+ *     (these are never synthesized).
+ *
+ * The platform UUID is derived the way machine-id(5) recommends for
+ * application-specific IDs: HMAC-SHA256 keyed with the 16-byte machine ID over
+ * a fixed Darling application ID. The first 16 bytes of the result, with the
+ * RFC 4122 version 4 and variant bits set, are the UUID; the next 4 bytes give
+ * the serial number. The raw machine ID is never handed out. If the host has no
+ * machine ID, the UUID is all zero and the serial number is empty.
+ *
+ * Only a caller whose user ID is 0 may push; anyone may read the identity back
+ * with `get_platform_identity`. A push is validated completely before anything
+ * is applied. A later push applies to processes that read the identity
+ * afterwards; libsystem_kernel reads it once per process.
+ */
+
+#define DSERVER_PLATFORM_IDENTITY_VERSION 1
+
+// size of each string field, including the terminating NUL
+#define DSERVER_PLATFORM_IDENTITY_STRING_MAX 64
+
+// bits in `present`: which keys the pushed domain contained
+#define DSERVER_PLATFORM_IDENTITY_HAS_MODEL             (1u << 0)
+#define DSERVER_PLATFORM_IDENTITY_HAS_PRODUCT_NAME      (1u << 1)
+#define DSERVER_PLATFORM_IDENTITY_HAS_BOARD_ID          (1u << 2)
+#define DSERVER_PLATFORM_IDENTITY_HAS_SERIAL_NUMBER     (1u << 3)
+#define DSERVER_PLATFORM_IDENTITY_HAS_PLATFORM_UUID     (1u << 4)
+#define DSERVER_PLATFORM_IDENTITY_HAS_CPU_BRAND_STRING  (1u << 5)
+#define DSERVER_PLATFORM_IDENTITY_HAS_MEMORY_SIZE       (1u << 6)
+#define DSERVER_PLATFORM_IDENTITY_HAS_ROM               (1u << 7)
+#define DSERVER_PLATFORM_IDENTITY_HAS_MLB_SERIAL_NUMBER (1u << 8)
+#define DSERVER_PLATFORM_IDENTITY_HAS_SYSTEM_ID         (1u << 9)
+#define DSERVER_PLATFORM_IDENTITY_HAS_PROVISIONING_UDID (1u << 10)
+
+#define DSERVER_PLATFORM_IDENTITY_HAS_ALL ((1u << 11) - 1)
+
+typedef struct dserver_platform_identity {
+	/**
+	 * Must be `DSERVER_PLATFORM_IDENTITY_VERSION`.
+	 */
+	uint32_t version;
+
+	/**
+	 * Must be `sizeof(dserver_platform_identity_t)`.
+	 */
+	uint32_t size;
+
+	/**
+	 * A combination of `DSERVER_PLATFORM_IDENTITY_HAS_*` bits.
+	 *
+	 * In a push, every field whose bit is clear must be zero, and darlingserver uses its default for it.
+	 * Read back, the bits say which values came from the last push. Every field holds the value in effect,
+	 * or zero (an empty string) when there is none.
+	 */
+	uint32_t present;
+
+	/**
+	 * Must be zero.
+	 */
+	uint32_t reserved;
+
+	/**
+	 * Number of pushes accepted so far; 0 means the defaults are in effect.
+	 * Filled in by darlingserver when read back; must be zero in a push.
+	 */
+	uint64_t generation DSERVER_RPC_ALIGN64;
+
+	/**
+	 * `MemorySize`: the memory size in bytes that `hw.memsize` and `host_info()` report. Nonzero when pushed.
+	 */
+	uint64_t memory_size DSERVER_RPC_ALIGN64;
+
+	/**
+	 * `PlatformUUID`: what `gethostuuid()` and `IOPlatformUUID` report. Not the nil UUID when pushed.
+	 */
+	uint8_t platform_uuid[16];
+
+	/**
+	 * `SystemID`: 16 bytes, not all zero when pushed.
+	 */
+	uint8_t system_id[16];
+
+	/**
+	 * `ProvisioningUDID`: when pushed, must equal the platform UUID in effect.
+	 */
+	uint8_t provisioning_udid[16];
+
+	/**
+	 * `ROM`: 6 bytes, not all zero when pushed.
+	 */
+	uint8_t rom[6];
+
+	/**
+	 * Must be zero.
+	 */
+	uint8_t rom_reserved[2];
+
+	/**
+	 * When pushed, each string is printable ASCII, not empty, and NUL-terminated inside its field.
+	 */
+	char model[DSERVER_PLATFORM_IDENTITY_STRING_MAX];             // `Model`
+	char product_name[DSERVER_PLATFORM_IDENTITY_STRING_MAX];      // `ProductName`
+	char board_id[DSERVER_PLATFORM_IDENTITY_STRING_MAX];          // `BoardID`
+	char serial_number[DSERVER_PLATFORM_IDENTITY_STRING_MAX];     // `SerialNumber`
+	char mlb_serial_number[DSERVER_PLATFORM_IDENTITY_STRING_MAX]; // `MLBSerialNumber`
+	char cpu_brand_string[DSERVER_PLATFORM_IDENTITY_STRING_MAX];  // `CPUBrandString`
+} dserver_platform_identity_t;
+
 #if __cplusplus
 };
 #endif
