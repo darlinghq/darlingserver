@@ -33,6 +33,7 @@
 
 namespace DarlingServer {
 	class CallWithReply;
+	class Process;
 
 	class Call {
 	public:
@@ -53,6 +54,12 @@ namespace DarlingServer {
 		static DarlingServer::Log rpcReplyLog;
 
 		static void sendReply(Message&& reply);
+
+		// under the target's code signing policy, whether `tracer` may trace `target`; 0, EPERM or EBUSY
+		int _mediateAttach(std::shared_ptr<Process> target, std::shared_ptr<Process> tracer);
+
+		// under the target's code signing policy, whether the caller may change how `target` is traced; 0 or EPERM
+		int _mediateTracing(std::shared_ptr<Process> target);
 
 	public:
 		Call(std::shared_ptr<Thread> thread, Address replyAddress, dserver_rpc_callhdr_t* callHeader);

@@ -9,7 +9,7 @@ tests/run-host.sh code_signing
 ```
 
 `code_signing` compiles the unchanged `src/code-signing.cpp` and `src/trust-store.cpp` with the
-code signature parser. It checks:
+code signature parser and `duct-tape/src/csr.c`. It checks:
 
 - image verification from a file descriptor against `fixtures/codesign` (signed by `codesign` on
   macOS 27): status, signer (ad-hoc or certificate), CDHash, identifier, team ID and the
@@ -34,7 +34,10 @@ code signature parser. It checks:
   truncated, trailing data, impossible counts; a store written by `tools/dc-trustcache.py`;
 - that the store path stays inside the prefix (`..`, relative paths, absolute and relative
   symbolic links, links to host paths) and a missing store is not an error;
-- that a public key darlingserver's own user could change is not used.
+- that a public key darlingserver's own user could change is not used;
+- the task port rules (Q14) for each flavor, user, `CS_GET_TASK_ALLOW`, hardened runtime,
+  platform binaries and `CSR_ALLOW_TASK_FOR_PID`; the attach rule with `PT_DENY_ATTACH`; and the
+  policies `off`, `warn` and `enforce`.
 
-What needs a running darlingserver (registration once per exec, fork inheritance) is covered by
-guest tests.
+What needs a running darlingserver (registration once per exec, fork inheritance, the
+`task_for_pid()` hook and `ptrace()` mediation) is covered by guest tests.

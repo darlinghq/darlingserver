@@ -125,6 +125,42 @@ namespace DarlingServer {
 		 */
 		bool libraryValidationAllows(const dserver_cs_state_t& main, const Image& mainImage, const Image& library, std::string& error);
 
+		enum class PortFlavor {
+			Control,
+			Read,
+			Inspect,
+			Name,
+		};
+
+		/**
+		 * Whether a caller may obtain a task port of @p flavor for a target process under
+		 * enforcement (Q14): its own always; name and inspect ports of processes of the same user
+		 * (or as root); read and control ports of processes that allow debugging
+		 * (`CS_GET_TASK_ALLOW`) of the same user (or as root), and otherwise only as root, and then
+		 * not for hardened or platform processes unless System Integrity Protection allows it.
+		 *
+		 * @param csrActiveConfig The `csr-active-config` in effect now.
+		 */
+		bool taskPortRule(bool isSelf, uint32_t callerUid, uint32_t targetUid, const dserver_cs_state_t& target, PortFlavor flavor, uint32_t csrActiveConfig);
+
+		/**
+		 * Whether a caller may make a process be traced (ptrace attach) under enforcement: never
+		 * a process that denied attachment, otherwise the rule for a control port.
+		 */
+		bool attachRule(bool isSelf, uint32_t callerUid, uint32_t targetUid, const dserver_cs_state_t& target, uint32_t csrActiveConfig);
+
+		enum class Verdict {
+			Allowed,
+			// the policy is `warn` and enforcement would have denied it; allowed, but worth a warning
+			WouldDeny,
+			Denied,
+		};
+
+		/**
+		 * Applies the target's code signing policy to what a rule decided.
+		 */
+		Verdict applyPolicy(uint32_t targetPolicy, bool ruleAllows);
+
 		/**
 		 * The flags a `cs_update_flags` call may set and clear.
 		 */

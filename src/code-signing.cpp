@@ -20,6 +20,7 @@
 #include <darlingserver/code-signing.hpp>
 #include <darlingserver/dc_codesign.h>
 #include <darlingserver/dc_entitlements.h>
+#include <darlingserver/duct-tape/csr.h>
 
 #include <kern/cs_blobs.h>
 
@@ -493,6 +494,54 @@ bool DarlingServer::CodeSigning::libraryValidationAllows(const dserver_cs_state_
 
 	error = "the library is neither a platform binary nor signed by the same team";
 	return false;
+};
+
+bool DarlingServer::CodeSigning::taskPortRule(bool isSelf, uint32_t callerUid, uint32_t targetUid, const dserver_cs_state_t& target, PortFlavor flavor, uint32_t csrActiveConfig) {
+	// a process always has its own task port
+	if (isSelf) {
+		return true;
+	}
+
+	bool root = (callerUid == 0);
+	bool sameUser = (callerUid == targetUid);
+
+	switch (flavor) {
+		case PortFlavor::Name:
+		case PortFlavor::Inspect:
+			return root || sameUser;
+
+		case PortFlavor::Read:
+		case PortFlavor::Control:
+		default:
+			// a target that allows debugging can be debugged by its own user and by root
+			if ((target.flags & CS_GET_TASK_ALLOW) && (root || sameUser)) {
+				return true;
+			}
+
+			// otherwise only root, and with System Integrity Protection on, not for hardened or platform processes
+			if (root) {
+				bool protectedTarget = (target.flags & (CS_RUNTIME | CS_PLATFORM_BINARY)) != 0;
+				return !protectedTarget || dtape_csr_allows_task_for_pid(csrActiveConfig);
+			}
+
+			return false;
+	}
+};
+
+bool DarlingServer::CodeSigning::attachRule(bool isSelf, uint32_t callerUid, uint32_t targetUid, const dserver_cs_state_t& target, uint32_t csrActiveConfig) {
+	if (target.darling_flags & DSERVER_CS_DENY_ATTACH) {
+		return false;
+	}
+
+	return taskPortRule(isSelf, callerUid, targetUid, target, PortFlavor::Control, csrActiveConfig);
+};
+
+DarlingServer::CodeSigning::Verdict DarlingServer::CodeSigning::applyPolicy(uint32_t targetPolicy, bool ruleAllows) {
+	if (ruleAllows || targetPolicy == dserver_code_signing_policy_off) {
+		return Verdict::Allowed;
+	}
+
+	return (targetPolicy == dserver_code_signing_policy_enforce) ? Verdict::Denied : Verdict::WouldDeny;
 };
 
 uint32_t DarlingServer::CodeSigning::settableFlags() {

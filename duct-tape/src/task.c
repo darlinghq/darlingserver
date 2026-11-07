@@ -664,6 +664,7 @@ static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pi
 	dtape_task_t* looked_up_task = NULL;
 	ipc_port_t right = IPC_PORT_NULL;
 	mach_port_name_t out_name = MACH_PORT_NULL;
+	dtape_task_port_flavor_t hook_flavor;
 
 	receiving_task = port_name_to_task(target_tport);
 	if (receiving_task == TASK_NULL) {
@@ -672,6 +673,26 @@ static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pi
 
 	looked_up_task = dtape_hooks->task_lookup(pid, true, true);
 	if (!looked_up_task) {
+		goto out;
+	}
+
+	switch (flavor) {
+	case TASK_FLAVOR_NAME:
+		hook_flavor = dtape_task_port_flavor_name;
+		break;
+	case TASK_FLAVOR_READ:
+		hook_flavor = dtape_task_port_flavor_read;
+		break;
+	case TASK_FLAVOR_INSPECT:
+		hook_flavor = dtape_task_port_flavor_inspect;
+		break;
+	default:
+		hook_flavor = dtape_task_port_flavor_control;
+		break;
+	}
+
+	// the server decides, according to the code signing policy of the target
+	if (!dtape_hooks->task_port_allowed(dtape_task_for_xnu_task(current_task())->context, looked_up_task->context, hook_flavor)) {
 		goto out;
 	}
 

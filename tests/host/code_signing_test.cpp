@@ -17,13 +17,14 @@
  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-// darlingserver's image verification and trust store (src/code-signing.cpp and
+// darlingserver's image verification, trust store and access rules (src/code-signing.cpp and
 // src/trust-store.cpp, compiled unchanged) against the binaries in tests/fixtures/codesign,
 // signed by `codesign` on macOS, and malformed variants of them.
 // Usage: code_signing_test <fixture directory> <work directory> [<tool trust store> <tool public key>]
 #include <darlingserver/code-signing.hpp>
 #include <darlingserver/trust-store.hpp>
 #include <darlingserver/dc_codesign.h>
+#include <darlingserver/duct-tape/csr.h>
 
 #include <kern/cs_blobs.h>
 
@@ -51,6 +52,9 @@ static int fails;
 
 static std::string fixtureDir;
 static std::string workDir;
+
+// <sys/csr.h>
+static constexpr uint32_t testCsrAllowTaskForPid = 1u << 2;
 
 static std::vector<uint8_t> readFile(const std::string& path) {
 	std::ifstream file(path, std::ios::binary);
@@ -507,6 +511,85 @@ static void testTrustStore(const char* toolStore, const char* toolPublicKey) {
 	EVP_PKEY_free(rsaKey);
 }
 
+//
+// access rules
+//
+
+static dserver_cs_state_t stateWith(uint32_t flags, uint32_t policy = dserver_code_signing_policy_enforce, uint32_t darlingFlags = 0) {
+	dserver_cs_state_t state{};
+	state.version = DSERVER_CS_STATE_VERSION;
+	state.size = sizeof(state);
+	state.status = dserver_cs_status_valid;
+	state.flags = flags;
+	state.darling_flags = darlingFlags;
+	state.code_signing_policy = policy;
+	return state;
+}
+
+static void testTaskPortRules() {
+	const uint32_t sipOn = 0;
+	const uint32_t sipAllowsTfp = testCsrAllowTaskForPid;
+	CHECK(dtape_csr_allows_task_for_pid(sipAllowsTfp) && !dtape_csr_allows_task_for_pid(sipOn), "CSR_ALLOW_TASK_FOR_PID matches <sys/csr.h>");
+
+	auto plain = stateWith(CS_SIGNED | CS_VALID);
+	auto gta = stateWith(CS_SIGNED | CS_VALID | CS_GET_TASK_ALLOW);
+	auto hardened = stateWith(CS_SIGNED | CS_VALID | CS_RUNTIME);
+	auto hardenedGta = stateWith(CS_SIGNED | CS_VALID | CS_RUNTIME | CS_GET_TASK_ALLOW);
+	auto platform = stateWith(CS_SIGNED | CS_VALID | CS_PLATFORM_BINARY);
+	auto unsignedState = stateWith(0);
+
+	struct Row {
+		const char* what;
+		bool self;
+		uint32_t caller;
+		uint32_t target;
+		const dserver_cs_state_t* state;
+		PortFlavor flavor;
+		uint32_t csr;
+		bool expected;
+	} rows[] = {
+		{ "self, control", true, 501, 501, &hardened, PortFlavor::Control, sipOn, true },
+		{ "same user, name", false, 501, 501, &hardened, PortFlavor::Name, sipOn, true },
+		{ "same user, inspect", false, 501, 501, &hardened, PortFlavor::Inspect, sipOn, true },
+		{ "other user, name", false, 502, 501, &plain, PortFlavor::Name, sipOn, false },
+		{ "other user, inspect", false, 502, 501, &plain, PortFlavor::Inspect, sipOn, false },
+		{ "root, inspect of another user", false, 0, 501, &plain, PortFlavor::Inspect, sipOn, true },
+		{ "same user, control, no get-task-allow", false, 501, 501, &plain, PortFlavor::Control, sipOn, false },
+		{ "same user, read, no get-task-allow", false, 501, 501, &plain, PortFlavor::Read, sipOn, false },
+		{ "same user, control, unsigned", false, 501, 501, &unsignedState, PortFlavor::Control, sipOn, false },
+		{ "same user, control, get-task-allow", false, 501, 501, &gta, PortFlavor::Control, sipOn, true },
+		{ "same user, read, get-task-allow", false, 501, 501, &gta, PortFlavor::Read, sipOn, true },
+		{ "same user, control, hardened + get-task-allow", false, 501, 501, &hardenedGta, PortFlavor::Control, sipOn, true },
+		{ "other user, control, get-task-allow", false, 502, 501, &gta, PortFlavor::Control, sipOn, false },
+		{ "root, control, get-task-allow", false, 0, 501, &gta, PortFlavor::Control, sipOn, true },
+		{ "root, control, plain", false, 0, 501, &plain, PortFlavor::Control, sipOn, true },
+		{ "root, control, unsigned", false, 0, 501, &unsignedState, PortFlavor::Control, sipOn, true },
+		{ "root, control, hardened, SIP on", false, 0, 501, &hardened, PortFlavor::Control, sipOn, false },
+		{ "root, read, hardened, SIP on", false, 0, 501, &hardened, PortFlavor::Read, sipOn, false },
+		{ "root, control, platform, SIP on", false, 0, 0, &platform, PortFlavor::Control, sipOn, false },
+		{ "root, control, hardened, SIP allows task_for_pid", false, 0, 501, &hardened, PortFlavor::Control, sipAllowsTfp, true },
+		{ "root, control, platform, SIP allows task_for_pid", false, 0, 0, &platform, PortFlavor::Control, sipAllowsTfp, true },
+		{ "same user, control, hardened, SIP allows task_for_pid", false, 501, 501, &hardened, PortFlavor::Control, sipAllowsTfp, false },
+	};
+
+	for (const auto& row : rows) {
+		CHECK(taskPortRule(row.self, row.caller, row.target, *row.state, row.flavor, row.csr) == row.expected, std::string("task port rule: ") + row.what);
+	}
+
+	auto denied = stateWith(CS_SIGNED | CS_VALID | CS_GET_TASK_ALLOW, dserver_code_signing_policy_enforce, DSERVER_CS_DENY_ATTACH);
+	CHECK(attachRule(false, 501, 501, gta, sipOn), "attach rule: same user, get-task-allow");
+	CHECK(!attachRule(false, 501, 501, plain, sipOn), "attach rule: same user, no get-task-allow");
+	CHECK(!attachRule(false, 501, 501, denied, sipOn), "attach rule: deny-attach wins over get-task-allow");
+	CHECK(!attachRule(false, 0, 501, denied, sipAllowsTfp), "attach rule: deny-attach wins over root and SIP");
+	CHECK(!attachRule(true, 501, 501, denied, sipOn), "attach rule: deny-attach also refuses being traced at its own request");
+
+	CHECK(applyPolicy(dserver_code_signing_policy_off, false) == Verdict::Allowed, "policy off: nothing is denied");
+	CHECK(applyPolicy(dserver_code_signing_policy_warn, false) == Verdict::WouldDeny, "policy warn: allowed, with a warning");
+	CHECK(applyPolicy(dserver_code_signing_policy_enforce, false) == Verdict::Denied, "policy enforce: denied");
+	CHECK(applyPolicy(dserver_code_signing_policy_enforce, true) == Verdict::Allowed, "policy enforce: allowed when the rule allows");
+	CHECK(applyPolicy(7, false) == Verdict::WouldDeny, "unknown policy: not enforced");
+}
+
 static void testLibraryValidation() {
 	std::string error;
 	Image hardenedMain = verifyFixture("adhoc-runtime-ent"); // CS_FORCED_LV
@@ -570,6 +653,7 @@ int main(int argc, char** argv) {
 	testTampering();
 	testUnparsableSignatures();
 	testTrustStore(argc > 4 ? argv[3] : nullptr, argc > 4 ? argv[4] : nullptr);
+	testTaskPortRules();
 	testLibraryValidation();
 	testFlagRules();
 

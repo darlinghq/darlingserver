@@ -63,15 +63,16 @@ case $test in
 		arg=$here/fixtures/codesign
 		;;
 	code_signing)
-		# src/code-signing.cpp and src/trust-store.cpp with the parser, compiled unchanged; only
-		# <kern/cs_blobs.h> comes from XNU. The trust store that tools/dc-trustcache.py writes is
-		# checked too when python3 and openssl are there.
-		xnu="-I$root/include -idirafter $root/duct-tape/xnu/osfmk"
+		# src/code-signing.cpp and src/trust-store.cpp with the parser and duct-tape/src/csr.c, compiled
+		# unchanged; only <kern/cs_blobs.h> and <sys/csr.h> come from XNU. The trust store that
+		# tools/dc-trustcache.py writes is checked too when python3 and openssl are there.
+		xnu="-I$root/include -I$root/duct-tape/include -idirafter $root/duct-tape/xnu/osfmk -idirafter $root/duct-tape/xnu/bsd"
 		san="-fsanitize=${SANITIZE:-address,undefined} -fno-sanitize-recover=undefined"
 		$cc -std=gnu11 -g -O0 $san $xnu $(pkg-config --cflags libxml-2.0) -c "$root/src/codesign/dc_codesign.c" -o "$work/dc_codesign.o"
 		$cc -std=gnu11 -g -O0 $san $xnu $(pkg-config --cflags libxml-2.0) -c "$root/src/codesign/dc_entitlements.c" -o "$work/dc_entitlements.o"
+		$cc -g -O0 $san $xnu -c "$root/duct-tape/src/csr.c" -o "$work/csr.o"
 		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/code-signing.cpp" "$root/src/trust-store.cpp" \
-			"$work/dc_codesign.o" "$work/dc_entitlements.o" -lcrypto $(pkg-config --libs libxml-2.0)
+			"$work/dc_codesign.o" "$work/dc_entitlements.o" "$work/csr.o" -lcrypto $(pkg-config --libs libxml-2.0)
 		mkdir "$work/data"
 		set -- "$here/fixtures/codesign" "$work/data"
 		if command -v python3 >/dev/null && command -v openssl >/dev/null; then

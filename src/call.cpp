@@ -1193,6 +1193,10 @@ void DarlingServer::Call::SetTracer::processCall() {
 			}
 		}
 
+		if (code == 0 && tracerProcess) {
+			code = _mediateAttach(targetProcess, tracerProcess);
+		}
+
 		if (code == 0) {
 			if (!targetProcess->setTracerProcess(tracerProcess)) {
 				// again, not negated because this isn't an internal error;
@@ -1228,8 +1232,11 @@ void DarlingServer::Call::PtraceSigexc::processCall() {
 	if (auto maybeProcess = processRegistry().lookupEntryByNSID(_body.target)) {
 		auto process = *maybeProcess;
 
-		dtape_task_set_sigexc_enabled(process->_dtapeTask, _body.enabled);
-		dtape_task_try_resume(process->_dtapeTask);
+		code = _mediateTracing(process);
+		if (code == 0) {
+			dtape_task_set_sigexc_enabled(process->_dtapeTask, _body.enabled);
+			dtape_task_try_resume(process->_dtapeTask);
+		}
 	} else {
 		// not negated because this isn't an internal error
 		code = ESRCH;
@@ -1243,8 +1250,12 @@ void DarlingServer::Call::PtraceThupdate::processCall() {
 
 	if (auto maybeThread = threadRegistry().lookupEntryByNSID(_body.target)) {
 		auto thread = *maybeThread;
+		auto process = thread->process();
 
-		thread->setPendingSignal(_body.signum);
+		code = process ? _mediateTracing(process) : 0;
+		if (code == 0) {
+			thread->setPendingSignal(_body.signum);
+		}
 	} else {
 		// not negated because this isn't an internal error
 		code = ESRCH;
@@ -1666,6 +1677,66 @@ static int lookUpCodeSigningTarget(const std::shared_ptr<DarlingServer::Process>
 	target = *maybeTarget;
 
 	return (!modify || caller->guestUID() == 0) ? 0 : -EPERM;
+};
+
+int DarlingServer::Call::_mediateAttach(std::shared_ptr<Process> target, std::shared_ptr<Process> tracer) {
+	using namespace CodeSigning;
+
+	auto state = target->codeSigningState();
+	if (state.code_signing_policy == dserver_code_signing_policy_off) {
+		return 0;
+	}
+
+	bool isSelf = (tracer == target);
+	std::shared_ptr<Process> caller;
+	if (auto thread = _thread.lock()) {
+		caller = thread->process();
+	}
+
+	// only the tracer itself (attaching) or the target (asking to be traced) may set a tracer
+	bool fromParty = caller && (caller == tracer || caller == target);
+
+	auto csr = SystemConfig::sharedInstance().current().csr_active_config;
+	bool allowed = fromParty && attachRule(isSelf, tracer->guestUID(), target->guestUID(), state, csr);
+	auto verdict = applyPolicy(state.code_signing_policy, allowed);
+
+	if (verdict == Verdict::Denied) {
+		codeSigningLog.warning() << "Attaching " << *tracer << " to " << *target << " denied" << codeSigningLog.endLog;
+		// not negated, like the other errors of this call; ptrace() reports EBUSY for a process that denied attachment
+		return (state.darling_flags & DSERVER_CS_DENY_ATTACH) ? EBUSY : EPERM;
+	} else if (verdict == Verdict::WouldDeny) {
+		codeSigningLog.info() << "Attaching " << *tracer << " to " << *target << " would be denied under enforcement" << codeSigningLog.endLog;
+	}
+
+	return 0;
+};
+
+int DarlingServer::Call::_mediateTracing(std::shared_ptr<Process> target) {
+	using namespace CodeSigning;
+
+	auto state = target->codeSigningState();
+	if (state.code_signing_policy == dserver_code_signing_policy_off) {
+		return 0;
+	}
+
+	std::shared_ptr<Process> caller;
+	if (auto thread = _thread.lock()) {
+		caller = thread->process();
+	}
+
+	// only the process's tracer, or the process itself, may change how it is traced
+	bool allowed = caller && (caller == target || caller == target->tracerProcess());
+	auto verdict = applyPolicy(state.code_signing_policy, allowed);
+
+	if (verdict == Verdict::Denied) {
+		codeSigningLog.warning() << "Tracing request for " << *target << " from a process that is not its tracer denied" << codeSigningLog.endLog;
+		// not negated, like the other errors of these calls
+		return EPERM;
+	} else if (verdict == Verdict::WouldDeny) {
+		codeSigningLog.info() << "Tracing request for " << *target << " from a process that is not its tracer would be denied under enforcement" << codeSigningLog.endLog;
+	}
+
+	return 0;
 };
 
 void DarlingServer::Call::CsRegisterImage::processCall() {

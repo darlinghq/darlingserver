@@ -28,3 +28,7 @@ bool dtape_csr_config_is_valid(uint32_t config) {
 uint32_t dtape_csr_default_config(void) {
 	return CSR_DISABLE_FLAGS;
 };
+
+bool dtape_csr_allows_task_for_pid(uint32_t config) {
+	return (config & CSR_ALLOW_TASK_FOR_PID) != 0;
+};
