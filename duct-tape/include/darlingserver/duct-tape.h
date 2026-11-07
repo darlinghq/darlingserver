@@ -12,6 +12,7 @@
 
 #include <darlingserver/duct-tape/types.h>
 #include <darlingserver/duct-tape/hooks.h>
+#include <darlingserver/duct-tape/csr.h>
 
 #ifdef __cplusplus
 extern "C" {

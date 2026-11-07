@@ -275,6 +275,7 @@ add_library(darlingserver_duct_tape STATIC
 	src/condvar.c
 	src/debug.c
 	src/fileport.c
+	src/csr.c
 
 	xnu/libkern/os/refcnt.c
 	xnu/libkern/gen/OSAtomicOperations.c
