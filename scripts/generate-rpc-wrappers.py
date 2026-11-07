@@ -783,7 +783,8 @@ calls = [
 	]),
 
 	# the `csops` operations that change flags; only some flags may be set, and fewer cleared.
-	# allowed for the process itself and for root. returns the new flags.
+	# allowed for the process itself and for root; library validation (CS_REQUIRE_LV and
+	# CS_FORCED_LV) only for the process itself. returns the new flags.
 	('cs_update_flags', [
 		('pid', 'int32_t'),
 		('set_flags', 'uint32_t'),
@@ -796,7 +797,8 @@ calls = [
 	('cs_deny_attach', [], []),
 
 	# verifies an image (a library dyld is about to map) without registering it; also says
-	# whether the calling process's library validation policy would accept it
+	# whether the calling process's library validation policy would accept it. `page_size_log2`
+	# is the CodeDirectory's hash page size (0 when there is none).
 	('cs_verify_image', [
 		('image', '@fd'),
 		('image_offset', 'uint64_t'),
@@ -804,6 +806,7 @@ calls = [
 		('status', 'uint32_t'),
 		('flags', 'uint32_t'),
 		('code_limit', 'uint64_t'),
+		('page_size_log2', 'uint32_t'),
 		('library_validation_ok', 'bool'),
 	]),
 ]

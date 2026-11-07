@@ -1836,7 +1836,16 @@ void DarlingServer::Call::CsUpdateFlags::processCall() {
 			if ((_body.set_flags & ~CodeSigning::settableFlags()) != 0 || (_body.clear_flags & ~CodeSigning::clearableFlags()) != 0) {
 				code = -EINVAL;
 			} else if ((code = lookUpCodeSigningTarget(process, _body.pid, true, target)) == 0) {
-				flags = target->updateCodeSigningFlags(_body.set_flags, _body.clear_flags);
+				if ((_body.clear_flags & CodeSigning::libraryValidationFlags()) != 0) {
+					// a process can only turn its own library validation off
+					auto image = target->codeSigningImage();
+					if (target != process || !CodeSigning::clearLibraryValidationRule(target->codeSigningState().code_signing_policy, image ? *image : CodeSigning::Image())) {
+						code = -EPERM;
+					}
+				}
+				if (code == 0) {
+					flags = target->updateCodeSigningFlags(_body.set_flags, _body.clear_flags);
+				}
 			}
 		} else {
 			code = -ESRCH;
@@ -1869,6 +1878,7 @@ void DarlingServer::Call::CsVerifyImage::processCall() {
 	uint32_t status = dserver_cs_status_invalid;
 	uint32_t flags = 0;
 	uint64_t codeLimit = 0;
+	uint32_t pageSizeLog2 = 0;
 	bool libraryValidationOk = false;
 
 	if (auto thread = _thread.lock()) {
@@ -1882,6 +1892,7 @@ void DarlingServer::Call::CsVerifyImage::processCall() {
 			status = library.state.status;
 			flags = library.state.flags;
 			codeLimit = library.state.code_limit;
+			pageSizeLog2 = library.pageSizeLog2;
 			// library validation only refuses anything under enforcement
 			libraryValidationOk = !enforced || CodeSigning::libraryValidationAllows(state, mainImage ? *mainImage : CodeSigning::Image(), library, error);
 		} else {
@@ -1891,5 +1902,5 @@ void DarlingServer::Call::CsVerifyImage::processCall() {
 		code = -ESRCH;
 	}
 
-	_sendReply(code, status, flags, codeLimit, libraryValidationOk);
+	_sendReply(code, status, flags, codeLimit, pageSizeLog2, libraryValidationOk);
 };

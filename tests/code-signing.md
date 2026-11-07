@@ -28,7 +28,10 @@ code signature parser and `duct-tape/src/csr.c`. It checks:
 - library validation: off without `CS_FORCED_LV`/`CS_REQUIRE_LV` or with the
   `disable-library-validation` entitlement; platform libraries load; the same team
   ID only counts with the same signing key; ad-hoc and unsigned libraries are refused;
-- that `cs_update_flags` can only add restrictions and only remove validity or privileges;
+- that `cs_update_flags` can only add restrictions (and `CS_KILLED`) and only remove validity,
+  privileges or library validation; that `CS_OPS_CLEAR_LV` needs the clear-library-validation
+  entitlement only under `enforce`;
+- the hash page size `cs_verify_image` reports (4 KiB and 16 KiB fixtures, none when unsigned);
 - the trust store format: a valid and an empty store, another key, an RSA key, changed entries
   or signature, unsorted or duplicate entries, another issuer, wrong signature length,
   truncated, trailing data, impossible counts; a store written by `tools/dc-trustcache.py`;

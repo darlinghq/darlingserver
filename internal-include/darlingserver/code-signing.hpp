@@ -50,6 +50,13 @@ namespace DarlingServer {
 			// the entitlements set `com.apple.security.cs.disable-library-validation`
 			bool disablesLibraryValidation = false;
 
+			// the entitlements set the entitlement that lets a process turn its own library validation
+			// off (`CS_OPS_CLEAR_LV`)
+			bool mayClearLibraryValidation = false;
+
+			// log2 of the hash page size of the CodeDirectory that is used (0 when there is none)
+			uint8_t pageSizeLog2 = 0;
+
 			// for a certificate signature whose integrity was checked: the SHA-256 digest of the
 			// signing certificate's public key (otherwise all zero)
 			std::array<uint8_t, 32> signerKey{};
@@ -166,6 +173,18 @@ namespace DarlingServer {
 		 */
 		uint32_t settableFlags();
 		uint32_t clearableFlags();
+
+		/**
+		 * The flags `CS_OPS_CLEAR_LV` clears. Only the process itself may clear them, and under
+		 * `enforce` only with the entitlement (see `clearLibraryValidationRule`).
+		 */
+		uint32_t libraryValidationFlags();
+
+		/**
+		 * Whether a process may turn its own library validation off: always, unless its policy is
+		 * `enforce` and its image lacks the entitlement for it.
+		 */
+		bool clearLibraryValidationRule(uint32_t policy, const Image& image);
 	};
 };
 

@@ -55,6 +55,8 @@ static constexpr const char* codeDirectoryDigestsAttribute = "1.2.840.113635.100
 // the entitlements that are looked up
 static constexpr const char* getTaskAllowEntitlement = "com.apple.security.get-task-allow";
 static constexpr const char* disableLibraryValidationEntitlement = "com.apple.security.cs.disable-library-validation";
+// CLEAR_LV_ENTITLEMENT in xnu's <sys/codesign.h>
+static constexpr const char* clearLibraryValidationEntitlement = "com.apple.private.security.clear-library-validation";
 
 DarlingServer::CodeSigning::Image::Image() {
 	memset(&state, 0, sizeof(state));
@@ -431,13 +433,14 @@ DarlingServer::CodeSigning::Image DarlingServer::CodeSigning::verifyImage(int fd
 
 	bool getTaskAllow = false;
 	if (image.entitlements) {
-		static const char* const keys[] = { getTaskAllowEntitlement, disableLibraryValidationEntitlement };
-		enum dc_cs_entitlement_value values[2];
+		static const char* const keys[] = { getTaskAllowEntitlement, disableLibraryValidationEntitlement, clearLibraryValidationEntitlement };
+		enum dc_cs_entitlement_value values[3];
 
 		// a malformed document grants nothing; the blob is still bound to the signature, so it is kept
-		if (dc_cs_entitlements_lookup(image.entitlements + 8, image.entitlements_length - 8, keys, 2, values) == 0) {
+		if (dc_cs_entitlements_lookup(image.entitlements + 8, image.entitlements_length - 8, keys, 3, values) == 0) {
 			getTaskAllow = (values[0] == DC_CS_ENTITLEMENT_TRUE);
 			result.disablesLibraryValidation = (values[1] == DC_CS_ENTITLEMENT_TRUE);
+			result.mayClearLibraryValidation = (values[2] == DC_CS_ENTITLEMENT_TRUE);
 		}
 
 		result.entitlements.assign(image.entitlements, image.entitlements + image.entitlements_length);
@@ -457,6 +460,7 @@ DarlingServer::CodeSigning::Image DarlingServer::CodeSigning::verifyImage(int fd
 	result.state.entitlements_length = static_cast<uint32_t>(result.entitlements.size());
 	result.state.der_entitlements_length = static_cast<uint32_t>(result.derEntitlements.size());
 	result.state.code_limit = image.code_limit;
+	result.pageSizeLog2 = image.page_size_log2;
 	result.state.exec_seg_base = image.exec_seg_base;
 	result.state.exec_seg_limit = image.exec_seg_limit;
 	result.state.exec_seg_flags = image.exec_seg_flags;
@@ -546,12 +550,22 @@ DarlingServer::CodeSigning::Verdict DarlingServer::CodeSigning::applyPolicy(uint
 
 uint32_t DarlingServer::CodeSigning::settableFlags() {
 	// what CS_OPS_MARKHARD, CS_OPS_MARKKILL, CS_OPS_MARKRESTRICT and CS_OPS_SET_STATUS may add:
-	// flags that only make a process more restricted
-	return CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV | CS_EXEC_SET_HARD | CS_EXEC_SET_KILL | CS_EXEC_SET_ENFORCEMENT;
+	// flags that only make a process more restricted. CS_KILLED records that an invalidated
+	// CS_KILL process was killed.
+	return CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV | CS_EXEC_SET_HARD | CS_EXEC_SET_KILL | CS_EXEC_SET_ENFORCEMENT | CS_KILLED;
 };
 
 uint32_t DarlingServer::CodeSigning::clearableFlags() {
-	// what CS_OPS_MARKINVALID and CS_OPS_CLEARINSTALLER may remove: validity and privileges.
-	// Clearing library validation (CS_OPS_CLEAR_LV) needs an entitlement and is not offered.
-	return CS_VALID | CS_INSTALLER | CS_DATAVAULT_CONTROLLER | CS_EXEC_INHERIT_SIP;
+	// what CS_OPS_MARKINVALID, CS_OPS_CLEARINSTALLER and CS_OPS_CLEAR_LV may remove: validity,
+	// privileges and (only for the process itself, see clearLibraryValidationRule) library validation
+	return CS_VALID | CS_INSTALLER | CS_DATAVAULT_CONTROLLER | CS_EXEC_INHERIT_SIP | libraryValidationFlags();
+};
+
+uint32_t DarlingServer::CodeSigning::libraryValidationFlags() {
+	return CS_REQUIRE_LV | CS_FORCED_LV;
+};
+
+bool DarlingServer::CodeSigning::clearLibraryValidationRule(uint32_t policy, const Image& image) {
+	// macOS asks for an entitlement; nothing is restricted unless the policy says so
+	return policy != dserver_code_signing_policy_enforce || image.mayClearLibraryValidation;
 };

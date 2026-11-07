@@ -636,8 +636,28 @@ static void testLibraryValidation() {
 
 static void testFlagRules() {
 	CHECK((settableFlags() & (CS_VALID | CS_GET_TASK_ALLOW | CS_PLATFORM_BINARY | CS_INSTALLER | CS_DEBUGGED)) == 0, "cs_update_flags: privileges cannot be set");
-	CHECK((clearableFlags() & (CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV | CS_RUNTIME | CS_FORCED_LV)) == 0, "cs_update_flags: restrictions cannot be cleared");
+	CHECK((clearableFlags() & (CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_RUNTIME)) == 0, "cs_update_flags: restrictions cannot be cleared");
 	CHECK((settableFlags() & CS_HARD) && (settableFlags() & CS_KILL) && (clearableFlags() & CS_VALID), "cs_update_flags: CS_OPS_MARKHARD, MARKKILL and MARKINVALID are possible");
+	CHECK((settableFlags() & CS_KILLED) != 0, "cs_update_flags: CS_KILLED can be recorded");
+
+	// CS_OPS_CLEAR_LV
+	CHECK(libraryValidationFlags() == (CS_REQUIRE_LV | CS_FORCED_LV), "CS_OPS_CLEAR_LV clears CS_REQUIRE_LV and CS_FORCED_LV");
+	CHECK((clearableFlags() & libraryValidationFlags()) == libraryValidationFlags(), "cs_update_flags: library validation can be cleared");
+	Image plain = verifyFixture("adhoc-runtime-ent");
+	Image entitled = plain;
+	entitled.mayClearLibraryValidation = true;
+	CHECK(!plain.mayClearLibraryValidation, "adhoc-runtime-ent: no clear-library-validation entitlement");
+	CHECK(clearLibraryValidationRule(dserver_code_signing_policy_off, plain), "CS_OPS_CLEAR_LV: allowed without the entitlement under off");
+	CHECK(clearLibraryValidationRule(dserver_code_signing_policy_warn, plain), "CS_OPS_CLEAR_LV: allowed without the entitlement under warn");
+	CHECK(!clearLibraryValidationRule(dserver_code_signing_policy_enforce, plain), "CS_OPS_CLEAR_LV: refused without the entitlement under enforce");
+	CHECK(clearLibraryValidationRule(dserver_code_signing_policy_enforce, entitled), "CS_OPS_CLEAR_LV: allowed with the entitlement under enforce");
+}
+
+static void testPageSize() {
+	// F_ADDFILESIGS_RETURN rounds the signed range up to this page size
+	CHECK(verifyFixture("linker-signed").pageSizeLog2 == 12, "linker-signed: 4 KiB hash pages");
+	CHECK(verifyFixture("adhoc").pageSizeLog2 == 14, "adhoc: 16 KiB hash pages");
+	CHECK(verifyFixture("unsigned").pageSizeLog2 == 0, "unsigned: no hash page size");
 }
 
 int main(int argc, char** argv) {
@@ -656,6 +676,7 @@ int main(int argc, char** argv) {
 	testTaskPortRules();
 	testLibraryValidation();
 	testFlagRules();
+	testPageSize();
 
 	printf("%d failure(s)\n", fails);
 	return fails ? 1 : 0;
