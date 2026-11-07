@@ -706,6 +706,26 @@ calls = [
 	], []),
 
 	('wait_system_config', [], [], ALLOW_INTERRUPTIONS),
+
+	#
+	# host process IDs
+	#
+	# Darling processes live in their own PID namespace. Protocols shared with
+	# host programs (e.g. EWMH's _NET_WM_PID) need the PID as the host sees it.
+	#
+
+	# the calling process's PID in the host's PID namespace
+	('host_pid', [], [
+		('host_pid', 'int32_t'),
+	]),
+
+	# the (namespaced) PID of the Darling process with the given host PID;
+	# fails with ESRCH for any other host process
+	('pid_for_host_pid', [
+		('host_pid', 'int32_t'),
+	], [
+		('pid', 'int32_t'),
+	]),
 ]
 
 ALLOWED_PRIVATE_TYPES = [
