@@ -30,16 +30,17 @@ namespace DarlingServer {
 	class Process;
 
 	class Log {
-	private:
-		std::string _category;
-		bool _alwaysLog = false;
-
+	public:
 		enum class Type {
 			Debug = 1,
 			Info = 2,
 			Warning = 3,
 			Error = 4,
 		};
+
+	private:
+		std::string _category;
+		bool _alwaysLog = false;
 
 		void _log(Type type, std::string message) const;
 		static std::string _typeToString(Type type);
@@ -56,6 +57,12 @@ namespace DarlingServer {
 
 		class Stream;
 		friend class Stream;
+
+		/**
+		 * Returns whether a message of the given type would be written.
+		 * Callers can use this to skip expensive formatting for messages that would be dropped.
+		 */
+		bool enabled(Type type) const;
 
 		Stream debug() const;
 		Stream info() const;
@@ -74,7 +81,7 @@ namespace DarlingServer {
 	private:
 		Type _type;
 		const Log& _log;
-		std::ostringstream _buffer;
+		std::unique_ptr<std::ostringstream> _buffer; // null if this stream's messages are dropped
 
 		Stream(Type type, const Log& log);
 
@@ -91,7 +98,9 @@ namespace DarlingServer {
 
 		template<class T>
 		std::enable_if_t<!std::is_base_of_v<Loggable, T>, Stream&> operator<<(const T& value) {
-			_buffer << value;
+			if (_buffer) {
+				*_buffer << value;
+			}
 			return *this;
 		};
 	};

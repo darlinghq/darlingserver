@@ -830,6 +830,9 @@ int main(int argc, char** argv) {
 	sigaction(SIGUSR1, &leak_info_action, NULL);
 #endif
 
+	// our IDs no longer change, so the credentials sent with every message can be cached
+	DarlingServer::Message::initializeServerCredentials();
+
 	// create the server
 	auto server = new DarlingServer::Server(prefix);
 

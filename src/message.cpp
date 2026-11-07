@@ -27,8 +27,41 @@
 #include <system_error>
 #include <darlingserver/logging.hpp>
 #include <cstring>
+#include <optional>
+#include <pthread.h>
 
 static DarlingServer::Log messageLog("message");
+
+// set by Message::initializeServerCredentials(); written once before any other thread exists
+static std::optional<struct ucred> cachedCredentials;
+
+static struct ucred outgoingCredentials() {
+	if (cachedCredentials) {
+		return *cachedCredentials;
+	}
+
+	struct ucred creds;
+	creds.pid = getpid();
+	creds.uid = getuid();
+	creds.gid = getgid();
+	return creds;
+};
+
+void DarlingServer::Message::initializeServerCredentials() {
+	if (cachedCredentials) {
+		throw std::logic_error("Server credentials already initialized");
+	}
+
+	// a forked child has a different PID and must not send the parent's
+	int result = pthread_atfork(nullptr, nullptr, []() {
+		cachedCredentials.reset();
+	});
+	if (result != 0) {
+		throw std::system_error(result, std::generic_category(), "Failed to register fork handler for the server credentials");
+	}
+
+	cachedCredentials = outgoingCredentials();
+};
 
 DarlingServer::Address::Address() {
 	_address.sun_family = AF_UNIX;
@@ -70,10 +103,7 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std:
 	_controlHeader->cmsg_len = CMSG_LEN(sizeof(struct ucred));
 	_controlHeader->cmsg_level = SOL_SOCKET;
 	_controlHeader->cmsg_type = SCM_CREDENTIALS;
-	struct ucred ourCreds;
-	ourCreds.pid = getpid();
-	ourCreds.uid = getuid();
-	ourCreds.gid = getgid();
+	struct ucred ourCreds = outgoingCredentials();
 	// the cmsg man page says memcpy should be used with CMSG_DATA instead of direct pointer access
 	memcpy(CMSG_DATA(_controlHeader), &ourCreds, sizeof(ourCreds));
 
@@ -353,10 +383,7 @@ void DarlingServer::Message::_ensureCredentialsHeader() {
 	credHeader->cmsg_level = SOL_SOCKET;
 	credHeader->cmsg_type = SCM_CREDENTIALS;
 
-	struct ucred creds;
-	creds.pid = getpid();
-	creds.uid = getuid();
-	creds.gid = getgid();
+	struct ucred creds = outgoingCredentials();
 	memcpy(CMSG_DATA(credHeader), &creds, sizeof(struct ucred));
 };
 

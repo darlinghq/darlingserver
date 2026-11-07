@@ -116,8 +116,27 @@ struct DTapeHooks {
 		}
 	};
 
+	static DarlingServer::Log& dtapeLog() {
+		static DarlingServer::Log log("dtape");
+		return log;
+	};
+
+	static bool dtape_hook_log_enabled(dtape_log_level_t level) {
+		switch (level) {
+			case dtape_log_level_debug:
+				return dtapeLog().enabled(DarlingServer::Log::Type::Debug);
+			case dtape_log_level_info:
+				return dtapeLog().enabled(DarlingServer::Log::Type::Info);
+			case dtape_log_level_warning:
+				return dtapeLog().enabled(DarlingServer::Log::Type::Warning);
+			case dtape_log_level_error:
+			default:
+				return dtapeLog().enabled(DarlingServer::Log::Type::Error);
+		}
+	};
+
 	static void dtape_hook_log(dtape_log_level_t level, const char* message) {
-		static const auto log = DarlingServer::Log("dtape");
+		const auto& log = dtapeLog();
 		auto process = DarlingServer::Process::currentProcess();
 		auto thread = DarlingServer::Thread::currentThread();
 		pid_t pid = process ? process->id() : -1;
@@ -400,6 +419,7 @@ struct DTapeHooks {
 		.timer_arm = dtape_hook_timer_arm,
 
 		.log = dtape_hook_log,
+		.log_enabled = dtape_hook_log_enabled,
 		.get_load_info = dtape_hook_get_load_info,
 
 		.thread_suspend = dtape_hook_thread_suspend,

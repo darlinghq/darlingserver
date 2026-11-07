@@ -28,6 +28,7 @@ typedef dtape_thread_t* (*dtape_hook_current_thread_f)(void);
 typedef void (*dtape_hook_timer_arm_f)(uint64_t absolute_ns, bool override);
 
 typedef void (*dtape_hook_log_f)(dtape_log_level_t level, const char* message);
+typedef bool (*dtape_hook_log_enabled_f)(dtape_log_level_t level);
 typedef void (*dtape_hook_get_load_info_f)(dtape_load_info_t* load_info);
 
 typedef void (*dtape_hook_thread_suspend_f)(void* thread_context, dtape_thread_continuation_callback_f continuation_callback, void* continuation_contex, libsimple_lock_t* unlock_me);
@@ -79,6 +80,7 @@ typedef struct dtape_hooks {
 	dtape_hook_timer_arm_f timer_arm;
 
 	dtape_hook_log_f log;
+	dtape_hook_log_enabled_f log_enabled;
 	dtape_hook_get_load_info_f get_load_info;
 
 	dtape_hook_thread_suspend_f thread_suspend;

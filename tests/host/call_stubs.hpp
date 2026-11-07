@@ -37,7 +37,13 @@ static void dtape_semaphore_up(void*) {}
 struct NullBuf : std::streambuf { int overflow(int c) override { return c; } };
 static NullBuf nullBuf;
 static std::ostream nullStream(&nullBuf);
+namespace DarlingServer {
+	struct Log {
+		enum class Type { Debug = 1, Info = 2, Warning = 3, Error = 4 };
+	};
+};
 struct LogStub {
+	bool enabled(DarlingServer::Log::Type) const { return true; }
 	std::ostream& debug() const { return nullStream; }
 	std::ostream& error() const { return nullStream; }
 	static constexpr const char* endLog = "";
