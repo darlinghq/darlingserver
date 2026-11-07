@@ -8,6 +8,11 @@
 extern "C" {
 #endif
 
+// These structures are shared by 32-bit and 64-bit clients and the 64-bit server, but 32-bit x86
+// aligns 64-bit members to 4 bytes only. Align them to 8 bytes everywhere, as the generated RPC
+// structures do, so that every architecture uses the same layout.
+#define DSERVER_RPC_ALIGN64 __attribute__((aligned(8)))
+
 //
 // kqueue channels
 //
@@ -89,9 +94,9 @@ typedef struct dserver_kqchan_call_notification {
 
 typedef struct dserver_kqchan_call_mach_port_modify {
 	dserver_kqchan_callhdr_t header;
-	uint64_t receive_buffer;
-	uint64_t receive_buffer_size;
-	uint64_t saved_filter_flags;
+	uint64_t receive_buffer DSERVER_RPC_ALIGN64;
+	uint64_t receive_buffer_size DSERVER_RPC_ALIGN64;
+	uint64_t saved_filter_flags DSERVER_RPC_ALIGN64;
 } dserver_kqchan_call_mach_port_modify_t;
 
 typedef struct dserver_kqchan_reply_mach_port_modify {
@@ -100,22 +105,22 @@ typedef struct dserver_kqchan_reply_mach_port_modify {
 
 typedef struct dserver_kqchan_call_mach_port_read {
 	dserver_kqchan_callhdr_t header;
-	uint64_t default_buffer;
-	uint64_t default_buffer_size;
+	uint64_t default_buffer DSERVER_RPC_ALIGN64;
+	uint64_t default_buffer_size DSERVER_RPC_ALIGN64;
 } dserver_kqchan_call_mach_port_read_t;
 
 typedef struct dserver_kqchan_reply_mach_port_read {
 	dserver_kqchan_replyhdr_t header;
 	struct {
-		uint64_t ident;
+		uint64_t ident DSERVER_RPC_ALIGN64;
 		int16_t filter;
 		uint16_t flags;
 		int32_t qos;
-		uint64_t udata;
+		uint64_t udata DSERVER_RPC_ALIGN64;
 		uint32_t fflags;
 		uint32_t xflags;
-		int64_t data;
-		uint64_t ext[4];
+		int64_t data DSERVER_RPC_ALIGN64;
+		uint64_t ext[4] DSERVER_RPC_ALIGN64;
 	} kev;
 } dserver_kqchan_reply_mach_port_read_t;
 
@@ -135,7 +140,7 @@ typedef struct dserver_kqchan_call_proc_read {
 typedef struct dserver_kqchan_reply_proc_read {
 	dserver_kqchan_replyhdr_t header;
 	uint32_t fflags;
-	int64_t data;
+	int64_t data DSERVER_RPC_ALIGN64;
 } dserver_kqchan_reply_proc_read_t;
 
 //
@@ -169,24 +174,24 @@ typedef struct dserver_s2c_replyhdr {
 
 typedef struct dserver_s2c_call_mmap {
 	dserver_s2c_callhdr_t header;
-	uint64_t address;
-	uint64_t length;
+	uint64_t address DSERVER_RPC_ALIGN64;
+	uint64_t length DSERVER_RPC_ALIGN64;
 	int32_t protection;
 	int32_t flags;
 	int32_t fd;
-	int64_t offset;
+	int64_t offset DSERVER_RPC_ALIGN64;
 } dserver_s2c_call_mmap_t;
 
 typedef struct dserver_s2c_reply_mmap {
 	dserver_s2c_replyhdr_t header;
-	uint64_t address;
+	uint64_t address DSERVER_RPC_ALIGN64;
 	int errno_result;
 } dserver_s2c_reply_mmap_t;
 
 typedef struct dserver_s2c_call_munmap {
 	dserver_s2c_callhdr_t header;
-	uint64_t address;
-	uint64_t length;
+	uint64_t address DSERVER_RPC_ALIGN64;
+	uint64_t length DSERVER_RPC_ALIGN64;
 } dserver_s2c_call_munmap_t;
 
 typedef struct dserver_s2c_reply_munmap {
@@ -197,8 +202,8 @@ typedef struct dserver_s2c_reply_munmap {
 
 typedef struct dserver_s2c_call_mprotect {
 	dserver_s2c_callhdr_t header;
-	uint64_t address;
-	uint64_t length;
+	uint64_t address DSERVER_RPC_ALIGN64;
+	uint64_t length DSERVER_RPC_ALIGN64;
 	int protection;
 } dserver_s2c_call_mprotect_t;
 
@@ -210,8 +215,8 @@ typedef struct dserver_s2c_reply_mprotect {
 
 typedef struct dserver_s2c_call_msync {
 	dserver_s2c_callhdr_t header;
-	uint64_t address;
-	uint64_t size;
+	uint64_t address DSERVER_RPC_ALIGN64;
+	uint64_t size DSERVER_RPC_ALIGN64;
 	int sync_flags;
 } dserver_s2c_call_msync_t;
 
