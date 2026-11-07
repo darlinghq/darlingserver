@@ -518,6 +518,42 @@ void DarlingServer::MessageQueue::push(Message&& message) {
 	}
 };
 
+void DarlingServer::MessageQueue::_notifyIfNotEmpty() {
+	std::unique_lock lock(_lock);
+
+	if (_messages.empty()) {
+		return;
+	}
+
+	auto callback = _messageArrivalNotificationCallback;
+	lock.unlock();
+	if (callback) {
+		callback();
+	}
+};
+
+void DarlingServer::MessageQueue::pushAndSend(Message&& message, int socket) {
+	{
+		std::scoped_lock lock(_lock);
+		_messages.push_back(std::move(message));
+	}
+
+	bool canSendMore;
+
+	try {
+		canSendMore = sendMany(socket);
+	} catch (...) {
+		// the messages are still queued; let the owner retry (and see the error) on its side
+		_notifyIfNotEmpty();
+		throw;
+	}
+
+	if (!canSendMore) {
+		// the socket is full; the owner has to send the rest once it is writable again
+		_notifyIfNotEmpty();
+	}
+};
+
 std::optional<DarlingServer::Message> DarlingServer::MessageQueue::pop() {
 	std::scoped_lock lock(_lock);
 	if (_messages.size() > 0) {
