@@ -340,15 +340,33 @@ bool DarlingServer::Thread::pthreadTestcancel() {
 };
 
 void DarlingServer::Thread::pthreadMarkcancel() {
-	if (!dtape_thread_pthread_markcancel(_dtapeThread)) {
+	dtape_thread_t* dtapeThread = nullptr;
+
+	{
+		std::shared_lock lock(_rwlock);
+		if (_dead || !_dtapeThread) {
+			return;
+		}
+		// the duct-taped thread is released asynchronously once we're dead,
+		// so keep it alive while we use it outside the lock
+		dtapeThread = _dtapeThread;
+		dtape_thread_retain(dtapeThread);
+	}
+
+	bool marked = dtape_thread_pthread_markcancel(dtapeThread);
+	dtape_thread_release(dtapeThread);
+
+	if (!marked) {
 		return;
 	}
 
-	uintptr_t address;
-	{
-		std::shared_lock lock(_rwlock);
-		address = _cancelMarkedAddress;
+	// a thread checks out (which marks it dead) before it unmaps its stack, and with it its TSD.
+	// holding the lock across the write keeps it from dying in between, so we never write into freed memory.
+	std::shared_lock lock(_rwlock);
+	if (_dead) {
+		return;
 	}
+	uintptr_t address = _cancelMarkedAddress;
 
 	// let the thread know that it has to ask us at cancellation points.
 	// the TSD slot is pointer-sized: 4 bytes for i386 processes, 8 bytes otherwise.
@@ -1504,6 +1522,9 @@ void DarlingServer::Thread::notifyDead() {
 
 		threadLog.info() << *this << ": thread dying" << threadLog.endLog;
 		_dead = true;
+
+		// the thread's TSD may be unmapped from now on
+		_cancelMarkedAddress = 0;
 
 		if (!_activeCall) {
 			// if we have no active call, we won't ever need to run again,
