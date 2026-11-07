@@ -34,11 +34,16 @@
 #include <darlingserver/rpc.h>
 #include <darlingserver/logging.hpp>
 #include <darlingserver/registry.hpp>
+#include <darlingserver/rpc-supplement.h>
 
 struct DTapeHooks;
 
 namespace DarlingServer {
 	class Thread;
+
+	namespace CodeSigning {
+		struct Image;
+	};
 	class Server;
 	class Call;
 
@@ -112,6 +117,12 @@ namespace DarlingServer {
 		bool _dead = false;
 		std::shared_ptr<Process> _selfReference = nullptr;
 		std::vector<uint32_t> _groups;
+
+		// code signing state; see `dserver_cs_state_t`
+		dserver_cs_state_t _csState;
+		std::shared_ptr<const CodeSigning::Image> _csImage;
+		bool _csMayRegister = false;
+		void _resetCodeSigningState();
 
 #if DSERVER_EXTENDED_DEBUG
 		std::unordered_map<uint32_t, uintptr_t> _registeredNames;
@@ -197,6 +208,41 @@ namespace DarlingServer {
 
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);
+
+		/**
+		 * The process's (guest) user ID, as the process itself set it.
+		 */
+		uint32_t guestUID() const;
+
+		/**
+		 * The process's code signing state.
+		 */
+		dserver_cs_state_t codeSigningState() const;
+
+		/**
+		 * The image the process registered, if a signed one was.
+		 */
+		std::shared_ptr<const CodeSigning::Image> codeSigningImage() const;
+
+		/**
+		 * Records the image the process starts from.
+		 *
+		 * @returns `false` if, under the `enforce` policy, the process may not register an image (a
+		 *          forked process, or one that already registered since it started).
+		 */
+		bool registerCodeSigningImage(std::shared_ptr<const CodeSigning::Image> image);
+
+		/**
+		 * Sets and clears `CS_*` flags; the caller decides which ones may be changed.
+		 *
+		 * @returns The new flags.
+		 */
+		uint32_t updateCodeSigningFlags(uint32_t set, uint32_t clear);
+
+		/**
+		 * Records that the process called ptrace(PT_DENY_ATTACH).
+		 */
+		void denyAttach();
 
 		std::string executablePath() const;
 		void setExecutablePath(std::string path);

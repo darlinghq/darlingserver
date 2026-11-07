@@ -12,6 +12,8 @@
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
+#   code_signing  links <source-root>/src/code-signing.cpp with the parser and runs against
+#              tests/fixtures/codesign.
 #   codesign   links <source-root>/src/codesign (the code signature parser), compiled unchanged, the host's
 #              libcrypto and libxml2, and runs against tests/fixtures/codesign of this checkout.
 # SANITIZE overrides the sanitizer list (ASan needs far more address space than `ulimit -v` allows).
@@ -59,6 +61,18 @@ case $test in
 			"$here/host/${test}_test.c" "$root/src/codesign/dc_codesign.c" "$root/src/codesign/dc_entitlements.c" \
 			-lcrypto $(pkg-config --libs libxml-2.0)
 		arg=$here/fixtures/codesign
+		;;
+	code_signing)
+		# src/code-signing.cpp with the parser, compiled unchanged; only <kern/cs_blobs.h> comes from XNU
+		xnu="-I$root/include -idirafter $root/duct-tape/xnu/osfmk"
+		san="-fsanitize=${SANITIZE:-address,undefined} -fno-sanitize-recover=undefined"
+		$cc -std=gnu11 -g -O0 $san $xnu $(pkg-config --cflags libxml-2.0) -c "$root/src/codesign/dc_codesign.c" -o "$work/dc_codesign.o"
+		$cc -std=gnu11 -g -O0 $san $xnu $(pkg-config --cflags libxml-2.0) -c "$root/src/codesign/dc_entitlements.c" -o "$work/dc_entitlements.o"
+		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/code-signing.cpp" \
+			"$work/dc_codesign.o" "$work/dc_entitlements.o" -lcrypto $(pkg-config --libs libxml-2.0)
+		mkdir "$work/data"
+		"$work/t" "$here/fixtures/codesign" "$work/data"
+		exit
 		;;
 	*)
 		echo "unknown test: $test" >&2

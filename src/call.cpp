@@ -30,6 +30,8 @@
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/system-config.hpp>
 #include <darlingserver/platform-identity.hpp>
+#include <darlingserver/code-signing.hpp>
+#include <kern/cs_blobs.h>
 #include <limits.h>
 #include <list>
 #include <map>
@@ -1616,3 +1618,181 @@ void DarlingServer::Call::PidForHostPid::processCall() {
 };
 
 DSERVER_CLASS_SOURCE_DEFS;
+
+//
+// code signing
+//
+
+static DarlingServer::Log codeSigningLog("codesign");
+
+// looks up the process `pid` (0 for the caller); anyone may read the state of any process,
+// only root may change that of another process
+static int lookUpCodeSigningTarget(const std::shared_ptr<DarlingServer::Process>& caller, int32_t pid, bool modify, std::shared_ptr<DarlingServer::Process>& target) {
+	if (pid == 0 || pid == caller->nsid()) {
+		target = caller;
+		return 0;
+	}
+
+	auto maybeTarget = DarlingServer::processRegistry().lookupEntryByNSID(pid);
+	if (!maybeTarget) {
+		return -ESRCH;
+	}
+	target = *maybeTarget;
+
+	return (!modify || caller->guestUID() == 0) ? 0 : -EPERM;
+};
+
+void DarlingServer::Call::CsRegisterImage::processCall() {
+	int code = 0;
+	uint32_t flags = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			// read before anything is recorded; the descriptor stays ours (and is closed with the call).
+			// pages and the CMS signature are only checked when the process's policy asks for it.
+			auto policy = process->codeSigningState().code_signing_policy;
+			auto image = std::make_shared<CodeSigning::Image>(CodeSigning::verifyImage(_body.image, _body.image_offset, CodeSigning::checksForPolicy(policy), {}));
+
+			if (!process->registerCodeSigningImage(image)) {
+				code = -EPERM;
+			} else {
+				flags = image->state.flags;
+				if (image->state.status == dserver_cs_status_invalid && !image->error.empty()) {
+					codeSigningLog.info() << *process << ": the image's signature is not valid: " << image->error << codeSigningLog.endLog;
+				} else if (policy == dserver_code_signing_policy_warn && !image->error.empty()) {
+					codeSigningLog.warning() << *process << ": the image's signature would not be valid under enforcement: " << image->error << codeSigningLog.endLog;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, flags);
+};
+
+void DarlingServer::Call::CsGetState::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			std::shared_ptr<Process> target;
+
+			if (_body.state_size != sizeof(dserver_cs_state_t)) {
+				code = -EINVAL;
+			} else if ((code = lookUpCodeSigningTarget(process, _body.pid, false, target)) == 0) {
+				auto state = target->codeSigningState();
+				if (!process->writeMemory(_body.state, &state, sizeof(state), &code)) {
+					code = -code;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::CsCopyEntitlements::processCall() {
+	int code = 0;
+	uint64_t length = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			std::shared_ptr<Process> target;
+
+			if ((code = lookUpCodeSigningTarget(process, _body.pid, false, target)) == 0) {
+				if (auto image = target->codeSigningImage()) {
+					const auto& blob = _body.der ? image->derEntitlements : image->entitlements;
+					length = blob.size();
+
+					if (length > _body.buffer_size) {
+						code = -ERANGE;
+					} else if (length > 0 && !process->writeMemory(_body.buffer, blob.data(), blob.size(), &code)) {
+						code = -code;
+					}
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, length);
+};
+
+void DarlingServer::Call::CsUpdateFlags::processCall() {
+	int code = 0;
+	uint32_t flags = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			std::shared_ptr<Process> target;
+
+			if ((_body.set_flags & ~CodeSigning::settableFlags()) != 0 || (_body.clear_flags & ~CodeSigning::clearableFlags()) != 0) {
+				code = -EINVAL;
+			} else if ((code = lookUpCodeSigningTarget(process, _body.pid, true, target)) == 0) {
+				flags = target->updateCodeSigningFlags(_body.set_flags, _body.clear_flags);
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, flags);
+};
+
+void DarlingServer::Call::CsDenyAttach::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			process->denyAttach();
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::CsVerifyImage::processCall() {
+	int code = 0;
+	uint32_t status = dserver_cs_status_invalid;
+	uint32_t flags = 0;
+	uint64_t codeLimit = 0;
+	bool libraryValidationOk = false;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			auto state = process->codeSigningState();
+			bool enforced = state.code_signing_policy == dserver_code_signing_policy_enforce;
+			auto library = CodeSigning::verifyImage(_body.image, _body.image_offset, CodeSigning::checksForPolicy(state.code_signing_policy), {});
+			auto mainImage = process->codeSigningImage();
+			std::string error;
+
+			status = library.state.status;
+			flags = library.state.flags;
+			codeLimit = library.state.code_limit;
+			// library validation only refuses anything under enforcement
+			libraryValidationOk = !enforced || CodeSigning::libraryValidationAllows(state, mainImage ? *mainImage : CodeSigning::Image(), library, error);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, status, flags, codeLimit, libraryValidationOk);
+};

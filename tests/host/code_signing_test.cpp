@@ -1,0 +1,406 @@
+/**
+ * This file is part of Darling.
+ *
+ * Copyright (C) 2026 Lubos Dolezel
+ *
+ * Darling is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Darling is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// darlingserver's image verification (src/code-signing.cpp, compiled unchanged) against the binaries in tests/fixtures/codesign,
+// signed by `codesign` on macOS, and malformed variants of them.
+// Usage: code_signing_test <fixture directory> <work directory>
+#include <darlingserver/code-signing.hpp>
+#include <darlingserver/dc_codesign.h>
+
+#include <kern/cs_blobs.h>
+
+#include <openssl/cms.h>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+using namespace DarlingServer;
+using namespace DarlingServer::CodeSigning;
+
+static int fails;
+#define CHECK(c, what) do { bool ok_ = (c); printf("%s %s\n", ok_ ? "PASS" : "FAIL", std::string(what).c_str()); if (!ok_) fails++; } while (0)
+
+static std::string fixtureDir;
+static std::string workDir;
+
+static std::vector<uint8_t> readFile(const std::string& path) {
+	std::ifstream file(path, std::ios::binary);
+	if (!file) {
+		fprintf(stderr, "cannot open %s\n", path.c_str());
+		exit(2);
+	}
+	return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), {});
+}
+
+static std::string writeWork(const std::string& name, const std::vector<uint8_t>& data) {
+	std::string path = workDir + "/" + name;
+	std::ofstream file(path, std::ios::binary | std::ios::trunc);
+	file.write(reinterpret_cast<const char*>(data.data()), data.size());
+	return path;
+}
+
+static Image verifyPath(const std::string& path, uint64_t offset = 0, const TrustCheck& trusted = {}, Checks checks = Checks::Enforce) {
+	int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "cannot open %s\n", path.c_str());
+		exit(2);
+	}
+	Image image = verifyImage(fd, offset, checks, trusted);
+	close(fd);
+	return image;
+}
+
+static Image verifyFixture(const std::string& name, uint64_t offset = 0, const TrustCheck& trusted = {}) {
+	return verifyPath(fixtureDir + "/" + name, offset, trusted);
+}
+
+static std::string hex(const uint8_t* data, size_t length) {
+	static const char digits[] = "0123456789abcdef";
+	std::string out;
+	for (size_t i = 0; i < length; ++i) {
+		out += digits[data[i] >> 4];
+		out += digits[data[i] & 15];
+	}
+	return out;
+}
+
+static void expectValid(const std::string& name, uint64_t offset, const char* cdhash, uint32_t flags, uint32_t signer, const char* identifier) {
+	Image image = verifyFixture(name, offset);
+	std::string label = name + "@" + std::to_string(offset);
+	CHECK(image.state.status == dserver_cs_status_valid, label + ": valid (" + image.error + ")");
+	CHECK(hex(image.state.cdhash, 20) == cdhash, label + ": CDHash " + hex(image.state.cdhash, 20));
+	char flagText[16];
+	snprintf(flagText, sizeof(flagText), "0x%08x", image.state.flags);
+	CHECK(image.state.flags == flags, label + ": flags " + flagText);
+	CHECK(image.state.signer == signer, label + ": signer");
+	CHECK(strcmp(image.state.identifier, identifier) == 0, label + ": identifier " + image.state.identifier);
+	CHECK(image.state.team_id[0] == '\0', label + ": no team ID");
+	CHECK(image.state.image_offset == offset, label + ": image offset");
+	CHECK(image.state.version == DSERVER_CS_STATE_VERSION && image.state.size == sizeof(dserver_cs_state_t), label + ": version and size");
+}
+
+static void testFixtures() {
+	const uint32_t base = CS_SIGNED | CS_VALID | CS_DYLD_PLATFORM;
+	// hardened runtime (and its implied flags) and get-task-allow; macOS reports 0x22011315 for this
+	const uint32_t runtimeGta = base | CS_RUNTIME | CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV | CS_GET_TASK_ALLOW;
+
+	expectValid("linker-signed", 0, "1e010f88a0f10df1da428fb53fad98a1637453ba", base | CS_LINKER_SIGNED, dserver_cs_signer_adhoc, "linker-signed");
+	expectValid("adhoc", 0, "c3e41403df5753a157520767cbf90e56d9ffa33f", base, dserver_cs_signer_adhoc, "org.darlinghq.test.adhoc");
+	expectValid("adhoc-runtime-ent", 0, "67316e6b715fa9eb830be17fe5e363126d0441db", runtimeGta, dserver_cs_signer_adhoc, "org.darlinghq.test.runtime");
+	expectValid("fat-adhoc", 16384, "1744200c4dabb96a8f18824726f3468dbfb0c16c", base, dserver_cs_signer_adhoc, "org.darlinghq.test.fat");
+	expectValid("fat-adhoc", 32768, "878f5e5d73364fd8b9787492260174038a011f6a", base, dserver_cs_signer_adhoc, "org.darlinghq.test.fat");
+	expectValid("cms-signed", 0, "624f2b1e6c289dd7eae03f89ef5c22b6fa4dd077", base, dserver_cs_signer_certificate, "org.darlinghq.test.cms");
+	expectValid("cms-dual", 0, "ab4845f2918045f80e0cf97f39d8e648536d489b", runtimeGta, dserver_cs_signer_certificate, "org.darlinghq.test.cmsdual");
+
+	Image ent = verifyFixture("adhoc-runtime-ent");
+	CHECK(ent.state.runtime_version != 0 && ent.state.hash_type == CS_HASHTYPE_SHA256, "adhoc-runtime-ent: runtime version and SHA-256 CodeDirectory used");
+	CHECK(ent.entitlements.size() == ent.state.entitlements_length && ent.entitlements.size() > 8, "adhoc-runtime-ent: entitlements kept");
+	CHECK(ent.entitlements.size() > 8 && ent.entitlements[0] == 0xfa && ent.entitlements[1] == 0xde && ent.entitlements[2] == 0x71 && ent.entitlements[3] == 0x71, "adhoc-runtime-ent: entitlements blob with its header");
+	CHECK(ent.derEntitlements.size() == ent.state.der_entitlements_length, "adhoc-runtime-ent: DER entitlements length");
+	CHECK(!ent.disablesLibraryValidation, "adhoc-runtime-ent: disable-library-validation is <false/>");
+
+	Image cms1 = verifyFixture("cms-signed");
+	Image cms2 = verifyFixture("cms-dual");
+	CHECK((cms1.signerKey != std::array<uint8_t, 32>{}) && cms1.signerKey != cms2.signerKey, "cms fixtures: signed with two different keys");
+
+	Image unsignedImage = verifyFixture("unsigned");
+	CHECK(unsignedImage.state.status == dserver_cs_status_unsigned && unsignedImage.state.flags == 0, "unsigned: unsigned, no flags");
+
+	Image fatHeader = verifyFixture("fat-adhoc", 0);
+	CHECK(fatHeader.state.status == dserver_cs_status_invalid, "fat-adhoc@0: not an image (" + fatHeader.error + ")");
+	Image fatMiddle = verifyFixture("fat-adhoc", 20000);
+	CHECK(fatMiddle.state.status == dserver_cs_status_invalid, "fat-adhoc@20000: not a slice (" + fatMiddle.error + ")");
+
+	// trust store hits become platform binaries
+	Image trusted = verifyFixture("adhoc", 0, [](const uint8_t* cdhash) { return hex(cdhash, 20) == "c3e41403df5753a157520767cbf90e56d9ffa33f"; });
+	CHECK((trusted.state.flags & CS_PLATFORM_BINARY) && (trusted.state.darling_flags & DSERVER_CS_TRUST_STORE), "adhoc in the trust store: CS_PLATFORM_BINARY");
+	Image notTrusted = verifyFixture("adhoc", 0, [](const uint8_t*) { return false; });
+	CHECK(!(notTrusted.state.flags & CS_PLATFORM_BINARY) && notTrusted.state.darling_flags == 0, "adhoc not in the trust store: no CS_PLATFORM_BINARY");
+}
+
+static void testQuirks() {
+	// QUIRK: CS_ADHOC is not reported (see statusFlags in src/code-signing.cpp)
+	Image adhoc = verifyFixture("adhoc");
+	CHECK(adhoc.state.status == dserver_cs_status_valid && !(adhoc.state.flags & CS_ADHOC) && adhoc.state.flags == 0x22000001u,
+		"quirk_status_flags_omit_adhoc: ad-hoc status 0x22000001 without CS_ADHOC (macOS 27.0.1)");
+
+	// QUIRK: the hardened runtime adds CS_HARD, CS_KILL, CS_ENFORCEMENT and CS_FORCED_LV
+	Image runtime = verifyFixture("adhoc-runtime-ent");
+	CHECK(runtime.state.flags == 0x22011315u, "quirk_runtime_status_flags: runtime + get-task-allow status 0x22011315 (macOS 27.0.1)");
+}
+
+static size_t offsetIn(const uint8_t* pointer, const uint8_t* base) {
+	return static_cast<size_t>(pointer - base);
+}
+
+static void testTampering() {
+	std::vector<uint8_t> adhoc = readFile(fixtureDir + "/adhoc");
+	char err[256];
+	dc_cs_image image;
+
+	// a byte of code
+	{
+		auto copy = adhoc;
+		copy[0x4000 - 16] ^= 1; // inside the first page, after the load commands
+		Image result = verifyPath(writeWork("code", copy));
+		CHECK(result.state.status == dserver_cs_status_invalid && result.state.flags == 0, "tampered code page: invalid (" + result.error + ")");
+		// without a policy, pages are not hashed: the signature is what csops() reports
+		Image warned = verifyPath(workDir + "/code", 0, {}, Checks::Report);
+		CHECK(warned.state.status == dserver_cs_status_valid && warned.state.flags == 0x22000001u && !warned.error.empty(),
+			"tampered code page, warn: still valid, the problem reported (" + warned.error + ")");
+		Image quick = verifyPath(workDir + "/code", 0, {}, Checks::Signature);
+		CHECK(quick.state.status == dserver_cs_status_valid && hex(quick.state.cdhash, 20) == "c3e41403df5753a157520767cbf90e56d9ffa33f",
+			"tampered code page, integrity not checked: the signature is still reported (" + quick.error + ")");
+	}
+
+	// a byte of the CMS signature
+	{
+		std::vector<uint8_t> cms = readFile(fixtureDir + "/cms-signed");
+		if (dc_cs_parse(cms.data(), cms.size(), &image, err, sizeof(err)) != 0 || !image.cms) {
+			CHECK(false, std::string("cms-signed parses: ") + err);
+		} else {
+			// the signature value ends the DER structure (codesign pads the blob with zeros after it)
+			// structure (in BER, ending with end-of-contents octets)
+			const unsigned char* end = image.cms;
+			CMS_ContentInfo* decoded = d2i_CMS_ContentInfo(nullptr, &end, image.cms_length);
+			size_t derLength = decoded ? static_cast<size_t>(end - image.cms) : 0;
+			CMS_ContentInfo_free(decoded);
+			CHECK(derLength > 64 && derLength <= image.cms_length, "cms-signed: the CMS blob decodes");
+			size_t at = offsetIn(image.cms, cms.data()) + derLength - 40;
+			cms[at] ^= 0x40;
+			Image result = verifyPath(writeWork("cms", cms));
+			CHECK(result.state.status == dserver_cs_status_invalid, "tampered CMS signature: invalid (" + result.error + ")");
+			Image quick = verifyPath(workDir + "/cms", 0, {}, Checks::Signature);
+			CHECK(quick.state.status == dserver_cs_status_valid && quick.state.signer == dserver_cs_signer_certificate && (quick.signerKey == std::array<uint8_t, 32>{}),
+				"tampered CMS signature, integrity not checked: reported as signed, with no signing key (" + quick.error + ")");
+		}
+	}
+
+	// the alternate (SHA-256) CodeDirectory of a dual signature: the CMS signature signs the SHA-1
+	// one, and lists the digest of the other in its signed attributes
+	{
+		std::vector<uint8_t> dual = readFile(fixtureDir + "/cms-dual");
+		if (dc_cs_parse(dual.data(), dual.size(), &image, err, sizeof(err)) != 0 || image.codedirectory->slot == CSSLOT_CODEDIRECTORY) {
+			CHECK(false, std::string("cms-dual parses, with an alternate CodeDirectory in use: ") + err);
+		} else {
+			const uint8_t* cd = image.codedirectory->data;
+			uint32_t identOffset = (cd[offsetof(CS_CodeDirectory, identOffset)] << 24) | (cd[offsetof(CS_CodeDirectory, identOffset) + 1] << 16) |
+				(cd[offsetof(CS_CodeDirectory, identOffset) + 2] << 8) | cd[offsetof(CS_CodeDirectory, identOffset) + 3];
+			size_t at = offsetIn(cd, dual.data()) + identOffset;
+			dual[at] ^= 0x01;
+			Image result = verifyPath(writeWork("dual", dual));
+			CHECK(result.state.status == dserver_cs_status_invalid && result.error.find("CMS") != std::string::npos,
+				"tampered alternate CodeDirectory: not covered by the CMS signature (" + result.error + ")");
+		}
+	}
+
+	// a valid ad-hoc signature does not make a CMS one: drop the CMS blob's contents
+	{
+		std::vector<uint8_t> cms = readFile(fixtureDir + "/cms-signed");
+		if (dc_cs_parse(cms.data(), cms.size(), &image, err, sizeof(err)) == 0 && image.cms) {
+			memset(cms.data() + offsetIn(image.cms, cms.data()), 0, image.cms_length);
+			Image result = verifyPath(writeWork("cms-zero", cms));
+			CHECK(result.state.status == dserver_cs_status_invalid, "zeroed CMS signature: invalid (" + result.error + ")");
+		}
+	}
+
+	// truncated
+	{
+		auto copy = adhoc;
+		copy.resize(copy.size() - 100);
+		Image result = verifyPath(writeWork("short", copy));
+		CHECK(result.state.status == dserver_cs_status_invalid, "truncated file: invalid (" + result.error + ")");
+	}
+
+	// not regular files
+	{
+		Image none = verifyImage(-1, 0, Checks::Enforce, {});
+		CHECK(none.state.status == dserver_cs_status_invalid, "no descriptor: invalid (" + none.error + ")");
+
+		int pipes[2];
+		if (pipe(pipes) == 0) {
+			Image result = verifyImage(pipes[0], 0, Checks::Enforce, {});
+			CHECK(result.state.status == dserver_cs_status_invalid, "a pipe: invalid, without blocking (" + result.error + ")");
+			close(pipes[0]);
+			close(pipes[1]);
+		}
+
+		int dir = open(workDir.c_str(), O_RDONLY | O_DIRECTORY);
+		Image result = verifyImage(dir, 0, Checks::Enforce, {});
+		CHECK(result.state.status == dserver_cs_status_invalid, "a directory: invalid (" + result.error + ")");
+		close(dir);
+
+		Image empty = verifyPath(writeWork("empty", {}));
+		CHECK(empty.state.status == dserver_cs_status_invalid, "an empty file: invalid (" + empty.error + ")");
+	}
+}
+
+static uint32_t readBE32(const uint8_t* p) {
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+static void writeBE32(uint8_t* p, uint32_t value) {
+	p[0] = value >> 24; p[1] = value >> 16; p[2] = value >> 8; p[3] = value;
+}
+
+// a signature that cannot be fully parsed: without enforcement, csops must not report anything
+// worse than for a valid signature (CS_SIGNED | CS_VALID); under enforcement, invalid
+static void expectTolerated(const std::string& label, const std::vector<uint8_t>& file, bool mustFailUnderEnforce) {
+	std::string path = writeWork("tolerated", file);
+	const uint32_t validFlags = CS_SIGNED | CS_VALID | CS_DYLD_PLATFORM;
+
+	Image off = verifyPath(path, 0, {}, Checks::Signature);
+	CHECK(off.state.status == dserver_cs_status_valid && (off.state.flags & validFlags) == validFlags,
+		label + ", policy off: reported as validly signed (" + off.error + ")");
+	Image warned = verifyPath(path, 0, {}, Checks::Report);
+	CHECK(warned.state.status == dserver_cs_status_valid && (warned.state.flags & validFlags) == validFlags,
+		label + ", policy warn: reported as validly signed (" + warned.error + ")");
+	if (mustFailUnderEnforce) {
+		CHECK(!off.error.empty() && !warned.error.empty(), label + ": the problem is reported for logging");
+		Image enforced = verifyPath(path, 0, {}, Checks::Enforce);
+		CHECK(enforced.state.status == dserver_cs_status_invalid && enforced.state.flags == 0,
+			label + ", policy enforce: invalid (" + enforced.error + ")");
+	}
+}
+
+static void testUnparsableSignatures() {
+	std::vector<uint8_t> adhoc = readFile(fixtureDir + "/adhoc");
+	char err[256];
+	dc_cs_image image;
+
+	if (dc_cs_parse(adhoc.data(), adhoc.size(), &image, err, sizeof(err)) != 0) {
+		CHECK(false, std::string("adhoc parses: ") + err);
+		return;
+	}
+	size_t cd = offsetIn(image.codedirectory->data, adhoc.data());
+	size_t superBlob = static_cast<size_t>(image.signature_offset);
+
+	{
+		auto copy = adhoc;
+		writeBE32(copy.data() + cd + offsetof(CS_CodeDirectory, scatterOffset), 0x100);
+		expectTolerated("a scatter list", copy, true);
+	}
+	{
+		auto copy = adhoc;
+		writeBE32(copy.data() + cd + offsetof(CS_CodeDirectory, version), 0x30000);
+		expectTolerated("an unknown CodeDirectory version", copy, true);
+	}
+	{
+		// the blob index entries follow the SuperBlob header (magic, length, count)
+		auto copy = adhoc;
+		uint32_t count = readBE32(copy.data() + superBlob + 8);
+		for (uint32_t i = 0; i < count; ++i) {
+			uint8_t* entry = copy.data() + superBlob + 12 + 8 * i;
+			if (readBE32(entry) == CSSLOT_REQUIREMENTS) {
+				writeBE32(entry, 0x7777);
+			}
+		}
+		expectTolerated("an unknown blob type", copy, false);
+	}
+	{
+		auto copy = adhoc;
+		writeBE32(copy.data() + superBlob, 0x12345678);
+		expectTolerated("a SuperBlob with the wrong magic", copy, true);
+	}
+
+	Image unsignedImage = verifyFixture("unsigned");
+	Image unsignedOff = verifyPath(fixtureDir + "/unsigned", 0, {}, Checks::Signature);
+	CHECK(unsignedImage.state.status == dserver_cs_status_unsigned && unsignedOff.state.status == dserver_cs_status_unsigned && unsignedOff.state.flags == 0,
+		"an unsigned binary stays unsigned under every policy");
+	CHECK(checksForPolicy(dserver_code_signing_policy_off) == Checks::Signature && checksForPolicy(dserver_code_signing_policy_warn) == Checks::Report &&
+		checksForPolicy(dserver_code_signing_policy_enforce) == Checks::Enforce, "the checks follow the policy");
+}
+
+static void testLibraryValidation() {
+	std::string error;
+	Image hardenedMain = verifyFixture("adhoc-runtime-ent"); // CS_FORCED_LV
+	Image plainMain = verifyFixture("adhoc");
+	Image library = verifyFixture("adhoc");
+	Image cmsLibrary = verifyFixture("cms-signed");
+	Image unsignedLibrary = verifyFixture("unsigned");
+	Image trustedLibrary = verifyFixture("adhoc", 0, [](const uint8_t*) { return true; });
+
+	CHECK(libraryValidationAllows(plainMain.state, plainMain, unsignedLibrary, error), "library validation off: anything loads");
+	CHECK(!libraryValidationAllows(hardenedMain.state, hardenedMain, library, error), "library validation: an ad-hoc library is refused (" + error + ")");
+	CHECK(!libraryValidationAllows(hardenedMain.state, hardenedMain, unsignedLibrary, error), "library validation: an unsigned library is refused (" + error + ")");
+	CHECK(libraryValidationAllows(hardenedMain.state, hardenedMain, trustedLibrary, error), "library validation: a platform library loads");
+
+	auto requireLv = plainMain.state;
+	requireLv.flags |= CS_REQUIRE_LV;
+	CHECK(!libraryValidationAllows(requireLv, plainMain, library, error), "library validation: CS_REQUIRE_LV set later applies");
+
+	Image disabling = hardenedMain;
+	disabling.disablesLibraryValidation = true;
+	CHECK(libraryValidationAllows(disabling.state, disabling, library, error), "library validation: disable-library-validation entitlement");
+
+	// the same team: only with the same signing key
+	Image teamMain = verifyFixture("cms-dual");
+	Image teamLibrary = cmsLibrary;
+	strcpy(teamMain.state.team_id, "DTESTTEAM1");
+	strcpy(teamLibrary.state.team_id, "DTESTTEAM1");
+	CHECK(!libraryValidationAllows(teamMain.state, teamMain, teamLibrary, error), "library validation: same team ID, different signing key is refused");
+	teamLibrary.signerKey = teamMain.signerKey;
+	CHECK(libraryValidationAllows(teamMain.state, teamMain, teamLibrary, error), "library validation: same team ID and signing key loads");
+	strcpy(teamLibrary.state.team_id, "OTHERTEAM1");
+	CHECK(!libraryValidationAllows(teamMain.state, teamMain, teamLibrary, error), "library validation: another team is refused");
+	Image adhocTeam = library;
+	strcpy(adhocTeam.state.team_id, "DTESTTEAM1");
+	adhocTeam.signerKey = teamMain.signerKey;
+	CHECK(!libraryValidationAllows(teamMain.state, teamMain, adhocTeam, error), "library validation: an ad-hoc library claiming the team is refused");
+	Image unverifiedMain = teamMain;
+	Image unverifiedLibrary = teamLibrary;
+	strcpy(unverifiedLibrary.state.team_id, "DTESTTEAM1");
+	unverifiedMain.signerKey = {};
+	unverifiedLibrary.signerKey = {};
+	CHECK(!libraryValidationAllows(unverifiedMain.state, unverifiedMain, unverifiedLibrary, error), "library validation: the same team without checked signing keys is refused");
+}
+
+static void testFlagRules() {
+	CHECK((settableFlags() & (CS_VALID | CS_GET_TASK_ALLOW | CS_PLATFORM_BINARY | CS_INSTALLER | CS_DEBUGGED)) == 0, "cs_update_flags: privileges cannot be set");
+	CHECK((clearableFlags() & (CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV | CS_RUNTIME | CS_FORCED_LV)) == 0, "cs_update_flags: restrictions cannot be cleared");
+	CHECK((settableFlags() & CS_HARD) && (settableFlags() & CS_KILL) && (clearableFlags() & CS_VALID), "cs_update_flags: CS_OPS_MARKHARD, MARKKILL and MARKINVALID are possible");
+}
+
+int main(int argc, char** argv) {
+	if (argc < 3) {
+		fprintf(stderr, "usage: %s <fixture directory> <work directory>\n", argv[0]);
+		return 2;
+	}
+	fixtureDir = argv[1];
+	workDir = argv[2];
+
+	testFixtures();
+	testQuirks();
+	testTampering();
+	testUnparsableSignatures();
+	testLibraryValidation();
+	testFlagRules();
+
+	printf("%d failure(s)\n", fails);
+	return fails ? 1 : 0;
+}
