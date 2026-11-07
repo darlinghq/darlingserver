@@ -984,7 +984,13 @@ void DarlingServer::Call::ForkWaitForChild::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			process->waitForChildAfterFork();
+			// the child inherits our task's special ports (e.g. the bootstrap port) when it
+			// checks in, so the parent must not return from fork() before that. if a signal
+			// interrupted the wait, have the caller wait again; the child's check-in will
+			// still raise the semaphore.
+			if (!process->waitForChildAfterFork()) {
+				code = -EINTR;
+			}
 		} else {
 			code = -ESRCH;
 		}

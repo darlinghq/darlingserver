@@ -187,7 +187,11 @@ namespace DarlingServer {
 		void registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan);
 		void unregisterListeningKqchan(uintptr_t kqchanID);
 
-		void waitForChildAfterFork();
+		/**
+		 * Waits until a forked child has checked in.
+		 * Returns `false` if the wait was interrupted (e.g. by a signal) before that.
+		 */
+		bool waitForChildAfterFork();
 
 		bool is64Bit() const;
 		Architecture architecture() const;
