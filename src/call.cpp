@@ -1493,4 +1493,36 @@ void DarlingServer::Call::DebugListMessages::processCall() {
 	_sendReply(code, portCount, pipes[0]);
 };
 
+void DarlingServer::Call::HostPid::processCall() {
+	int code = 0;
+	int32_t hostPID = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			hostPID = process->id();
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, hostPID);
+};
+
+void DarlingServer::Call::PidForHostPid::processCall() {
+	int code = 0;
+	int32_t pid = 0;
+
+	if (_body.host_pid <= 0) {
+		code = -ESRCH;
+	} else if (auto maybeProcess = processRegistry().lookupEntryByID(_body.host_pid)) {
+		pid = (*maybeProcess)->nsid();
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, pid);
+};
+
 DSERVER_CLASS_SOURCE_DEFS;
