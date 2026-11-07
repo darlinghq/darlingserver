@@ -39,6 +39,9 @@
 #include <sys/signal.h>
 #include <filesystem>
 #include <climits>
+#include <string>
+#include <sys/wait.h>
+#include <sysexits.h>
 
 #include <darling-config.h>
 
@@ -327,27 +330,91 @@ static bool isOnWsl1() {
 	return result;
 }
 
-static bool shouldUseOverlayFs() {
-	bool shouldUse = true;
-	bool explicitlySet = false;
+// How the prefix is assembled on top of the read-only system image.
+enum class FsMode {
+	Overlayfs,
+	FuseOverlayfs,
+	Copy,
+};
 
+// The mode chosen for a prefix is recorded in this file at the root of the prefix by the darling client
+// (the plain-text values are "overlayfs", "fuse-overlayfs" and "copy").
+static const char fsModeFileName[] = "/.darling-fsmode";
+
+static bool readRecordedFsMode(const char* prefix, FsMode& mode) {
+	std::string path = std::string(prefix) + fsModeFileName;
+	FILE* file = fopen(path.c_str(), "r");
+	if (!file) {
+		return false;
+	}
+
+	char buffer[32] = {0};
+	bool haveLine = fgets(buffer, sizeof(buffer), file) != NULL;
+	fclose(file);
+	if (!haveLine) {
+		return false;
+	}
+
+	buffer[strcspn(buffer, "\r\n")] = '\0';
+
+	if (strcmp(buffer, "overlayfs") == 0) {
+		mode = FsMode::Overlayfs;
+	} else if (strcmp(buffer, "fuse-overlayfs") == 0) {
+		mode = FsMode::FuseOverlayfs;
+	} else if (strcmp(buffer, "copy") == 0) {
+		mode = FsMode::Copy;
+	} else {
+		fprintf(stderr, "Ignoring unknown filesystem mode \"%s\" recorded in %s\n", buffer, path.c_str());
+		return false;
+	}
+	return true;
+};
+
+static FsMode resolveFsMode(const char* prefix) {
+	// an explicit environment setting wins over everything else
 	if (testEnvVar("DARLING_NOOVERLAYFS")) {
-		shouldUse = false;
-		explicitlySet = true;
+		return FsMode::Copy;
 	} else if (getenv("DARLING_NOOVERLAYFS")) {
-		shouldUse = true;
-		explicitlySet = true;
+		return FsMode::Overlayfs;
+	}
+
+	FsMode recorded;
+	if (readRecordedFsMode(prefix, recorded)) {
+		return recorded;
 	}
 
 	// https://github.com/microsoft/WSL/issues/8748
 	// Microsoft is being dumb with its overlayfs implementation and they don't seem to be willing to be fix WSL1-related bugs.
 	// We therefore have to enable this hack on WSL1.
-	if (!explicitlySet && isOnWsl1()) {
-		shouldUse = false;
+	if (isOnWsl1()) {
+		return FsMode::Copy;
 	}
 
-	return shouldUse;
-}
+	return FsMode::Overlayfs;
+};
+
+// Unlike the kernel's overlayfs, fuse-overlayfs does not place restrictions on the filesystem holding the upper layer.
+static bool mountFuseOverlayfs(const char* prefix) {
+	std::string opts = std::string("lowerdir=") + LIBEXEC_PATH + ",upperdir=" + prefix + ",workdir=" + prefix + ".workdir,allow_other";
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		fprintf(stderr, "Failed to fork to run fuse-overlayfs: %s\n", strerror(errno));
+		return false;
+	} else if (pid == 0) {
+		execlp("fuse-overlayfs", "fuse-overlayfs", "-o", opts.c_str(), prefix, NULL);
+		fprintf(stderr, "Failed to run fuse-overlayfs: %s\n", strerror(errno));
+		_exit(127);
+	}
+
+	int status = 0;
+	if (waitpid(pid, &status, 0) != pid) {
+		fprintf(stderr, "Failed to wait for fuse-overlayfs: %s\n", strerror(errno));
+		return false;
+	}
+
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+};
 
 static int compareTimespec(const timespec& a, const timespec& b) {
 	if (a.tv_sec != b.tv_sec) {
@@ -693,7 +760,9 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
-	if (shouldUseOverlayFs()) {
+	FsMode fsMode = resolveFsMode(prefix);
+
+	if (fsMode != FsMode::Copy) {
 		// Because systemd marks / as MS_SHARED and we would inherit this into the overlay mount,
 		// causing it not to be unmounted once the init process dies.
 		if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
@@ -701,7 +770,10 @@ int main(int argc, char** argv) {
 			fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
 			exit(1);
 		}
+	}
 
+	// Failing to assemble the prefix exits with EX_UNAVAILABLE, which lets the darling client offer a different mode.
+	if (fsMode == FsMode::Overlayfs) {
 		opts = (char*) malloc(strlen(prefix)*2 + sizeof(LIBEXEC_PATH) + 100);
 
 		const char* opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir,index=off";
@@ -719,11 +791,16 @@ int main(int argc, char** argv) {
 				}
 			}
 			fprintf(stderr, "Cannot mount overlay: %s\n", strerror(errno));
-			exit(1);
+			exit(EX_UNAVAILABLE);
 		}
 
 	mount_ok:
 		free(opts);
+	} else if (fsMode == FsMode::FuseOverlayfs) {
+		if (!mountFuseOverlayfs(prefix)) {
+			fprintf(stderr, "Cannot mount fuse-overlayfs onto %s\n", prefix);
+			exit(EX_UNAVAILABLE);
+		}
 	} else {
 		std::string fromPath = LIBEXEC_PATH;
 		std::string toPath = prefix;
