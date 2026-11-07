@@ -350,9 +350,12 @@ void DarlingServer::Thread::pthreadMarkcancel() {
 		address = _cancelMarkedAddress;
 	}
 
-	// let the thread know that it has to ask us at cancellation points
+	// let the thread know that it has to ask us at cancellation points.
+	// the TSD slot is pointer-sized: 4 bytes for i386 processes, 8 bytes otherwise.
+	// the thread zeroes the slot when it registers it, so writing only the low
+	// 4 bytes (little-endian) makes the slot read as 1 in either width.
 	if (address != 0) {
-		uintptr_t marked = 1;
+		uint32_t marked = 1;
 		auto proc = process();
 		if (!proc || !proc->writeMemory(address, &marked, sizeof(marked))) {
 			threadLog.warning() << *this << ": failed to set the cancel flag" << threadLog.endLog;
