@@ -561,7 +561,7 @@ void DarlingServer::Call::SetThreadHandles::processCall() {
 	int code = 0;
 
 	if (auto thread = _thread.lock()) {
-		thread->setThreadHandles(_body.pthread_handle, _body.dispatch_qaddr);
+		thread->setThreadHandles(_body.pthread_handle, _body.dispatch_qaddr, _body.cancel_marked_addr);
 	} else {
 		code = -ESRCH;
 	}
@@ -645,8 +645,25 @@ void DarlingServer::Call::PthreadKill::processCall() {
 void DarlingServer::Call::PthreadCanceled::processCall() {
 	int code = 0;
 
-	callLog.warning() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
-	code = -ENOSYS;
+	if (auto thread = _thread.lock()) {
+		code = thread->pthreadCanceled(_body.action);
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::PthreadTestcancel::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (!thread->pthreadTestcancel()) {
+			code = -EINVAL;
+		}
+	} else {
+		code = -ESRCH;
+	}
 
 	_sendReply(code);
 };
@@ -654,9 +671,12 @@ void DarlingServer::Call::PthreadCanceled::processCall() {
 void DarlingServer::Call::PthreadMarkcancel::processCall() {
 	int code = 0;
 
-	if (auto targetThread = Thread::threadForPort(_body.thread_port)) {
-		callLog.warning() << "TODO: " << __PRETTY_FUNCTION__ << callLog.endLog;
-		code = -ENOSYS;
+	auto thread = _thread.lock();
+	auto targetThread = Thread::threadForPort(_body.thread_port);
+
+	// like xnu, only accept threads of the caller's own task
+	if (thread && targetThread && targetThread->process() && targetThread->process() == thread->process()) {
+		targetThread->pthreadMarkcancel();
 	} else {
 		code = -ESRCH;
 	}

@@ -72,6 +72,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	dtape_condvar_init(&thread->suspension_condvar);
 	memset(&thread->xnu_thread, 0, sizeof(thread->xnu_thread));
 	memset(&thread->kwe, 0, sizeof(thread->kwe));
+	thread->uu_flag = 0;
 
 	memset(&thread->default_state, 0, sizeof(thread->default_state));
 	LIST_INSERT_HEAD(&thread->user_states, &thread->default_state, link);
@@ -654,12 +655,26 @@ kern_return_t thread_go(thread_t thread, wait_result_t wresult, waitq_options_t 
 };
 
 wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interruptible_orig) {
-	dtape_stub_safe();
-	thread->state = TH_WAIT;
-	thread->wait_result = THREAD_WAITING;
-	thread->block_hint = thread->pending_block_hint;
+	// the abort handling is adapted from XNU's thread_mark_wait_locked() in osfmk/kern/sched_prim.c
+	wait_interrupt_t interruptible = interruptible_orig & TH_OPT_INTMASK;
+	boolean_t at_safe_point = (interruptible == THREAD_ABORTSAFE);
+
+	if (interruptible == THREAD_UNINT ||
+	    !(thread->sched_flags & TH_SFLAG_ABORT) ||
+	    (!at_safe_point && (thread->sched_flags & TH_SFLAG_ABORTSAFELY))) {
+		thread->state = TH_WAIT;
+		thread->at_safe_point = at_safe_point;
+		thread->wait_result = THREAD_WAITING;
+		thread->block_hint = thread->pending_block_hint;
+		thread->pending_block_hint = kThreadWaitNone;
+		return THREAD_WAITING;
+	}
+
+	if (thread->sched_flags & TH_SFLAG_ABORTSAFELY) {
+		thread->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
+	}
 	thread->pending_block_hint = kThreadWaitNone;
-	return THREAD_WAITING;
+	return thread->wait_result = THREAD_INTERRUPTED;
 };
 
 kern_return_t thread_terminate(thread_t xthread) {
@@ -1375,13 +1390,37 @@ kern_return_t thread_abort(thread_t thread) {
 };
 
 kern_return_t thread_abort_safely(thread_t thread) {
-	// TODO: actually do something?
-	//       in the LKM, we used to call `kick_process` here
-	//       (which would presumably interrupt any syscalls).
-	//       to replicate that, we'd probably have to use another
-	//       real-time signal with SA_RESTART off.
-	dtape_stub();
+	// this only interrupts waits inside darlingserver;
+	// in the LKM, we used to call `kick_process` here
+	// (which would presumably interrupt any syscalls).
+	// to replicate that, we'd probably have to use another
+	// real-time signal with SA_RESTART off.
+	//
+	// the rest is adapted from XNU's thread_abort_safely() in osfmk/kern/thread_act.c
+	thread_lock(thread);
+	if (!thread->at_safe_point || clear_wait_internal(thread, THREAD_INTERRUPTED) != KERN_SUCCESS) {
+		if (!(thread->sched_flags & TH_SFLAG_ABORT)) {
+			thread->sched_flags |= TH_SFLAG_ABORTED_MASK;
+		}
+	}
+	thread_unlock(thread);
 	return KERN_SUCCESS;
+};
+
+void dtape_thread_returning_to_user(dtape_thread_t* thread) {
+	thread_t xthread = &thread->xnu_thread;
+
+	// in XNU, an abort that did not interrupt a wait only lasts until the thread returns to user space,
+	// where thread_apc_ast() clears it. our threads "return to user space" when a call replies.
+	// (an abort set while the thread was already in user space instead lasts until its next call replies;
+	// that covers the window between libsystem_kernel's TSD check and the call that starts the wait.)
+	if (!(xthread->sched_flags & TH_SFLAG_ABORTED_MASK)) {
+		return;
+	}
+
+	thread_lock(xthread);
+	xthread->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
+	thread_unlock(xthread);
 };
 
 kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {

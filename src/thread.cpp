@@ -324,8 +324,61 @@ void DarlingServer::Thread::setAddress(Address address) {
 	_address = address;
 };
 
-void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress) {
+void DarlingServer::Thread::setThreadHandles(uintptr_t pthreadHandle, uintptr_t dispatchQueueAddress, uintptr_t cancelMarkedAddress) {
 	dtape_thread_set_handles(_dtapeThread, pthreadHandle, dispatchQueueAddress);
+
+	std::unique_lock lock(_rwlock);
+	_cancelMarkedAddress = cancelMarkedAddress;
+};
+
+int DarlingServer::Thread::pthreadCanceled(int action) {
+	return -dtape_thread_pthread_canceled(_dtapeThread, action);
+};
+
+bool DarlingServer::Thread::pthreadTestcancel() {
+	return dtape_thread_pthread_testcancel(_dtapeThread);
+};
+
+void DarlingServer::Thread::pthreadMarkcancel() {
+	dtape_thread_t* dtapeThread = nullptr;
+
+	{
+		std::shared_lock lock(_rwlock);
+		if (_dead || !_dtapeThread) {
+			return;
+		}
+		// the duct-taped thread is released asynchronously once we're dead,
+		// so keep it alive while we use it outside the lock
+		dtapeThread = _dtapeThread;
+		dtape_thread_retain(dtapeThread);
+	}
+
+	bool marked = dtape_thread_pthread_markcancel(dtapeThread);
+	dtape_thread_release(dtapeThread);
+
+	if (!marked) {
+		return;
+	}
+
+	// a thread checks out (which marks it dead) before it unmaps its stack, and with it its TSD.
+	// holding the lock across the write keeps it from dying in between, so we never write into freed memory.
+	std::shared_lock lock(_rwlock);
+	if (_dead) {
+		return;
+	}
+	uintptr_t address = _cancelMarkedAddress;
+
+	// let the thread know that it has to ask us at cancellation points.
+	// the TSD slot is pointer-sized: 4 bytes for i386 processes, 8 bytes otherwise.
+	// the thread zeroes the slot when it registers it, so writing only the low
+	// 4 bytes (little-endian) makes the slot read as 1 in either width.
+	if (address != 0) {
+		uint32_t marked = 1;
+		auto proc = process();
+		if (!proc || !proc->writeMemory(address, &marked, sizeof(marked))) {
+			threadLog.warning() << *this << ": failed to set the cancel flag" << threadLog.endLog;
+		}
+	}
 };
 
 bool DarlingServer::Thread::waitingForReply() const {
@@ -1370,6 +1423,14 @@ void DarlingServer::Thread::logToStream(Log::Stream& stream) const {
 };
 
 void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply) {
+	// the call is done, so the thread is about to return to user space.
+	// this must happen before the reply is sent (or the thread could be marked again in user space before we clear the abort)
+	// and without `_rwlock` held (the thread lock is taken before `_rwlock` elsewhere).
+	// the duct-taped thread cannot be released while the call is still active.
+	if (expectedCall && _dtapeThread) {
+		dtape_thread_returning_to_user(_dtapeThread);
+	}
+
 	std::unique_lock lock(_rwlock);
 
 	if (expectedCall) {
@@ -1469,6 +1530,9 @@ void DarlingServer::Thread::notifyDead() {
 
 		threadLog.info() << *this << ": thread dying" << threadLog.endLog;
 		_dead = true;
+
+		// the thread's TSD may be unmapped from now on
+		_cancelMarkedAddress = 0;
 
 		if (!_activeCall) {
 			// if we have no active call, we won't ever need to run again,
