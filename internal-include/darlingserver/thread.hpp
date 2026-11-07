@@ -207,7 +207,7 @@ namespace DarlingServer {
 
 		int pthreadCanceled(int action);
 		bool pthreadTestcancel();
-		void pthreadMarkcancel();
+		void pthreadMarkcancel(bool interruptUser);
 
 		void startKernelThread(std::function<void()> startupCallback);
 		void setupKernelThread(std::function<void()> startupCallback);

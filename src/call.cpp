@@ -678,7 +678,8 @@ void DarlingServer::Call::PthreadMarkcancel::processCall() {
 
 	// like xnu, only accept threads of the caller's own task
 	if (thread && targetThread && targetThread->process() && targetThread->process() == thread->process()) {
-		targetThread->pthreadMarkcancel();
+		// a thread that cancels itself is not waiting anywhere
+		targetThread->pthreadMarkcancel(targetThread != thread);
 	} else {
 		code = -ESRCH;
 	}
