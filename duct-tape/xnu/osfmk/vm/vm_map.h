@@ -205,6 +205,14 @@ struct vm_named_entry {
 #define NAMED_ENTRY_BT_DEPTH 16
 	void                    *named_entry_bt[NAMED_ENTRY_BT_DEPTH];
 #endif /* VM_NAMED_ENTRY_LIST */
+#ifdef __DARLING__
+	/*
+	 * The memfd-backed object of an entry made by _mach_make_memory_entry()
+	 * (a dtape_map_shared_descriptor_t, see duct-tape/src/memory.c), or NULL.
+	 * `offset` is the byte offset of the entry in it.
+	 */
+	void                    *dtape_descriptor;
+#endif // __DARLING__
 };
 
 /*
