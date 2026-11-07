@@ -1423,6 +1423,14 @@ void DarlingServer::Thread::logToStream(Log::Stream& stream) const {
 };
 
 void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply) {
+	// the call is done, so the thread is about to return to user space.
+	// this must happen before the reply is sent (or the thread could be marked again in user space before we clear the abort)
+	// and without `_rwlock` held (the thread lock is taken before `_rwlock` elsewhere).
+	// the duct-taped thread cannot be released while the call is still active.
+	if (expectedCall && _dtapeThread) {
+		dtape_thread_returning_to_user(_dtapeThread);
+	}
+
 	std::unique_lock lock(_rwlock);
 
 	if (expectedCall) {

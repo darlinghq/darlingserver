@@ -1408,6 +1408,22 @@ kern_return_t thread_abort_safely(thread_t thread) {
 	return KERN_SUCCESS;
 };
 
+void dtape_thread_returning_to_user(dtape_thread_t* thread) {
+	thread_t xthread = &thread->xnu_thread;
+
+	// in XNU, an abort that did not interrupt a wait only lasts until the thread returns to user space,
+	// where thread_apc_ast() clears it. our threads "return to user space" when a call replies.
+	// (an abort set while the thread was already in user space instead lasts until its next call replies;
+	// that covers the window between libsystem_kernel's TSD check and the call that starts the wait.)
+	if (!(xthread->sched_flags & TH_SFLAG_ABORTED_MASK)) {
+		return;
+	}
+
+	thread_lock(xthread);
+	xthread->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
+	thread_unlock(xthread);
+};
+
 kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {
 	dtape_stub_unsafe();
 };
