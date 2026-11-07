@@ -648,7 +648,15 @@ void DarlingServer::Thread::doWork() {
 
 		if (_continuationCallback && _pendingCall) {
 			// we can only have one of the two
-			throw std::runtime_error("Thread has both a pending call and a pending continuation");
+			// happens when an app is SIGKILLed while one of its threads waits with a continuation (the
+			// iPhone Duo's training killed Safari / News / Health: darlingserver aborted and took every process of the
+			// container with it, SIGILL in each). The thread's new call wins; its old suspended call can never resume (its
+			// stack is gone with a continuation) and is dropped instead of aborting the server.
+			if (_pendingCallOverride) {
+				throw std::runtime_error("Thread has both a pending call and a pending continuation");
+			}
+			microthreadLog.error() << _tid << "(" << _nstid << "): pending call " << static_cast<int>(_pendingCall->number()) << " and a pending continuation: continuation dropped" << microthreadLog.endLog;
+			_continuationCallback = nullptr;
 		}
 
 		if (_suspended && (_pendingCallOverride || !_pendingCall)) {
