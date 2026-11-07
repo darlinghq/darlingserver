@@ -670,7 +670,11 @@ void DarlingServer::Call::PthreadTestcancel::processCall() {
 void DarlingServer::Call::PthreadMarkcancel::processCall() {
 	int code = 0;
 
-	if (auto targetThread = Thread::threadForPort(_body.thread_port)) {
+	auto thread = _thread.lock();
+	auto targetThread = Thread::threadForPort(_body.thread_port);
+
+	// like xnu, only accept threads of the caller's own task
+	if (thread && targetThread && targetThread->process() && targetThread->process() == thread->process()) {
 		targetThread->pthreadMarkcancel();
 	} else {
 		code = -ESRCH;
