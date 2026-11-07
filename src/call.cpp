@@ -1873,6 +1873,22 @@ void DarlingServer::Call::CsDenyAttach::processCall() {
 	_sendReply(code);
 };
 
+void DarlingServer::Call::CsMarkSandboxed::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			process->markSandboxed();
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 void DarlingServer::Call::CsVerifyImage::processCall() {
 	int code = 0;
 	uint32_t status = dserver_cs_status_invalid;

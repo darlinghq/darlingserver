@@ -569,3 +569,15 @@ bool DarlingServer::CodeSigning::clearLibraryValidationRule(uint32_t policy, con
 	// macOS asks for an entitlement; nothing is restricted unless the policy says so
 	return policy != dserver_code_signing_policy_enforce || image.mayClearLibraryValidation;
 };
+
+uint32_t DarlingServer::CodeSigning::darlingFlagsKeptAcrossExec(uint32_t darlingFlags) {
+	// a denial of attachment survives exec (XNU keeps it in p_lflag, which exec does not clear),
+	// and so does a sandbox; the trust store bit belongs to the old image
+	return darlingFlags & (DSERVER_CS_DENY_ATTACH | DSERVER_CS_SANDBOXED);
+};
+
+uint32_t DarlingServer::CodeSigning::darlingFlagsInheritedByFork(uint32_t darlingFlags) {
+	// the child runs the same code in the same sandbox, but has not denied attachment itself
+	// (fork does not copy p_lflag)
+	return darlingFlags & ~DSERVER_CS_DENY_ATTACH;
+};

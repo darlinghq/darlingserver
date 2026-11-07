@@ -122,9 +122,10 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 		// inherit groups from parent process
 		_groups = parentProcess->_groups;
 
-		// a forked process runs the same code as its parent, but has not denied attachment itself
+		// a forked process runs the same code as its parent, in the same sandbox,
+		// but has not denied attachment itself
 		_csState = parentProcess->_csState;
-		_csState.darling_flags &= ~DSERVER_CS_DENY_ATTACH;
+		_csState.darling_flags = CodeSigning::darlingFlagsInheritedByFork(_csState.darling_flags);
 		_csImage = parentProcess->_csImage;
 	} else {
 		_resetCodeSigningState();
@@ -413,11 +414,11 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		mainThread->_s2cInterruptExitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 		// the new image has not been verified yet, and it starts under the policy in effect now;
-		// a denial of attachment survives the exec
+		// a denial of attachment and a sandbox survive the exec
 		{
-			auto denied = _csState.darling_flags & DSERVER_CS_DENY_ATTACH;
+			auto kept = CodeSigning::darlingFlagsKeptAcrossExec(_csState.darling_flags);
 			_resetCodeSigningState();
-			_csState.darling_flags |= denied;
+			_csState.darling_flags |= kept;
 			_csMayRegister = true;
 		}
 	} else {
@@ -802,13 +803,13 @@ bool DarlingServer::Process::registerCodeSigningImage(std::shared_ptr<const Code
 	auto policy = _csState.code_signing_policy;
 	auto csr = _csState.csr_active_config;
 	auto generation = _csState.generation;
-	auto denied = _csState.darling_flags & DSERVER_CS_DENY_ATTACH;
+	auto kept = CodeSigning::darlingFlagsKeptAcrossExec(_csState.darling_flags);
 
 	_csState = image->state;
 	_csState.code_signing_policy = policy;
 	_csState.csr_active_config = csr;
 	_csState.generation = generation;
-	_csState.darling_flags = (image->state.darling_flags & DSERVER_CS_TRUST_STORE) | denied;
+	_csState.darling_flags = (image->state.darling_flags & DSERVER_CS_TRUST_STORE) | kept;
 	_csImage = (image->state.status == dserver_cs_status_valid) ? image : nullptr;
 
 	return true;
@@ -828,6 +829,11 @@ uint32_t DarlingServer::Process::updateCodeSigningFlags(uint32_t set, uint32_t c
 void DarlingServer::Process::denyAttach() {
 	std::unique_lock lock(_rwlock);
 	_csState.darling_flags |= DSERVER_CS_DENY_ATTACH;
+};
+
+void DarlingServer::Process::markSandboxed() {
+	std::unique_lock lock(_rwlock);
+	_csState.darling_flags |= DSERVER_CS_SANDBOXED;
 };
 
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Process::_pickS2CThread(void) const {

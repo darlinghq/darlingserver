@@ -809,6 +809,10 @@ calls = [
 		('page_size_log2', 'uint32_t'),
 		('library_validation_ok', 'bool'),
 	]),
+
+	# records that the calling process applied a sandbox profile (`DSERVER_CS_SANDBOXED`);
+	# Darling enforces no sandbox, so this only changes what the process reports
+	('cs_mark_sandboxed', [], []),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

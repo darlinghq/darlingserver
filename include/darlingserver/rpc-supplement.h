@@ -510,6 +510,7 @@ enum dserver_cs_signer {
 // bits in `darling_flags`
 #define DSERVER_CS_DENY_ATTACH  (1u << 0) // the process called ptrace(PT_DENY_ATTACH)
 #define DSERVER_CS_TRUST_STORE  (1u << 1) // the CDHash is in Darling's trust store (hence `CS_PLATFORM_BINARY`)
+#define DSERVER_CS_SANDBOXED    (1u << 2) // the process (or an ancestor) applied a sandbox profile; nothing is enforced
 
 typedef struct dserver_cs_state {
 	/**
