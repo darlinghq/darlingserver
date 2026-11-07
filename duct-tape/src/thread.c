@@ -655,7 +655,6 @@ kern_return_t thread_go(thread_t thread, wait_result_t wresult, waitq_options_t 
 };
 
 wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interruptible_orig) {
-	dtape_stub_safe();
 	// the abort handling is adapted from XNU's thread_mark_wait_locked() in osfmk/kern/sched_prim.c
 	wait_interrupt_t interruptible = interruptible_orig & TH_OPT_INTMASK;
 	boolean_t at_safe_point = (interruptible == THREAD_ABORTSAFE);
