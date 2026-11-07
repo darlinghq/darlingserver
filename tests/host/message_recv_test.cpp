@@ -117,6 +117,21 @@ int main(int, char** argv) {
 		close(sp[0]);
 		close(sp[1]);
 	}
+	{
+		// a batch shorter than the 16 message slots means the socket is drained; a full batch must be followed up
+		MessageQueue q;
+		for (int i = 0; i < 3; ++i) sendWithFds(client, &serverAddr, 8, 0);
+		bool more = q.receiveMany(server);
+		size_t n = drain(q, &descs);
+		CHECK(n == 3 && !more, "[batch] a short batch is fully received and reported as drained");
+		sendWithFds(client, &serverAddr, 8, 0);
+		q.receiveMany(server);
+		CHECK(drain(q, &descs) == 1, "[batch] a datagram sent after a drained round is received by the next round");
+		for (int i = 0; i < 21; ++i) sendWithFds(client, &serverAddr, 8, 0);
+		more = q.receiveMany(server);
+		n = drain(q, &descs);
+		CHECK(n == 21 && !more, "[batch] a full batch is followed up until the socket is empty (16 + 5)");
+	}
 	close(client);
 	close(server);
 	std::printf("%s (%d failures)\n", fails ? "FAILED" : "OK", fails);

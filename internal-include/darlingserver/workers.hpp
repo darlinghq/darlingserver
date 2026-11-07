@@ -43,6 +43,7 @@ namespace DarlingServer {
 		size_t _threadsAvailable = 0;
 		std::condition_variable _cv;
 		bool _dying = false;
+		bool _inlineActive = false;
 
 		static constexpr unsigned int minimumThreads() {
 			return (Config::singleThreadedWorkQueue) ? 1 : 2;
@@ -86,7 +87,8 @@ namespace DarlingServer {
 					}
 
 					// if we have a work item ready, take it and stop waiting
-					if (_workItems.size() > 0) {
+					// (unless the work is currently being run inline; items queued meanwhile wait for it to finish)
+					if (!_inlineActive && _workItems.size() > 0) {
 						workItem = std::move(_workItems.front());
 						_workItems.pop();
 						--_threadsAvailable;
@@ -158,9 +160,58 @@ namespace DarlingServer {
 		WorkQueue(WorkQueue&&) = delete;
 		WorkQueue& operator=(WorkQueue&&) = delete;
 
+		/**
+		 * Runs the work item on the calling thread if a worker is idle and nothing is queued.
+		 *
+		 * Only available for the single-threaded work queue. While the item runs, workers don't take
+		 * new items, so items are still processed one at a time, in order.
+		 *
+		 * @returns `true` if the item was run; `false` if the caller still has to push it.
+		 */
+		bool tryRunInline(WorkItem& workItem) {
+			if (!Config::singleThreadedWorkQueue) {
+				return false;
+			}
+
+			{
+				std::scoped_lock lock(_queueMutex);
+				if (_dying || _inlineActive || !_workItems.empty() || _threadsAvailable < minimumThreads()) {
+					return false;
+				}
+				_inlineActive = true;
+			}
+
+			_workerFunction(std::move(workItem));
+
+			// items queued while we ran (e.g. a thread woken by this call) are run here too,
+			// which spares a cross-thread wakeup on the way to the reply
+			std::unique_lock lock(_queueMutex);
+			while (!_workItems.empty() && !_dying) {
+				WorkItem next = std::move(_workItems.front());
+				_workItems.pop();
+				lock.unlock();
+				_workerFunction(std::move(next));
+				lock.lock();
+			}
+			_inlineActive = false;
+			bool pending = !_workItems.empty();
+			lock.unlock();
+
+			if (pending) {
+				_cv.notify_one();
+			}
+
+			return true;
+		};
+
 		void push(WorkItem workItem) {
 			std::unique_lock lock(_queueMutex);
 			_workItems.push(std::move(workItem));
+
+			// an inline run hands the queue back to the workers when it finishes
+			if (_inlineActive) {
+				return;
+			}
 
 			// if there are no threads available to perform the work AND we have less than the
 			// maximum number of worker threads currently active, spawn a temporary worker thread.

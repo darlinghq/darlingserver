@@ -60,7 +60,9 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			throw std::invalid_argument("Invalid call number");
 	}
 
-	if (requestMessage.uid() != getuid()) {
+	static const uid_t serverUid = getuid();
+
+	if (requestMessage.uid() != serverUid) {
 		throw std::runtime_error("System-reported message UID != darlingserver UID");
 	}
 

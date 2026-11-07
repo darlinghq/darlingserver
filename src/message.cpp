@@ -612,6 +612,9 @@ bool DarlingServer::MessageQueue::receiveMany(int socket) {
 
 		ret = recvmmsg(socket, mmsgs, sizeof(mmsgs) / sizeof(*mmsgs), MSG_CMSG_CLOEXEC | MSG_DONTWAIT, nullptr);
 
+		// a short batch means the socket was drained; the listener is edge-triggered, so anything arriving later wakes us again
+		bool drained = ret >= 0 && (size_t)ret < sizeof(mmsgs) / sizeof(*mmsgs);
+
 		if (ret < 0) {
 			if (errno == EAGAIN) {
 				canReadMore = false;
@@ -633,6 +636,11 @@ bool DarlingServer::MessageQueue::receiveMany(int socket) {
 			messages[i].data().resize(mmsgs[i].msg_len);
 			messages[i].setAddress(Address(*(const struct sockaddr_un*)mmsgs[i].msg_hdr.msg_name, mmsgs[i].msg_hdr.msg_namelen));
 			_messages.push_back(std::move(messages[i]));
+		}
+
+		if (drained) {
+			canReadMore = false;
+			break;
 		}
 	}
 
