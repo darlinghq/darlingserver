@@ -42,6 +42,7 @@ int ftruncate(int fd, off_t length);
 #define MAP_SHARED 0x01
 #define MAP_PRIVATE 0x02
 
+#define PROT_NONE 0x0
 #define PROT_READ 0x1
 #define PROT_WRITE 0x2
 #define PROT_EXEC 0x4
@@ -918,8 +919,151 @@ kern_return_t mach_vm_machine_attribute(vm_map_t map, mach_vm_address_t addr, ma
 	dtape_stub_unsafe();
 };
 
+// maps `page_count` pages in the task: anonymous memory if `descriptor` is NULL, otherwise its memfd (shared) from `page_offset`
+static uintptr_t dtape_task_map_pages(vm_map_t map, dtape_map_shared_descriptor_t* descriptor, uint64_t page_count, int prot, uintptr_t address, uint64_t page_offset, dtape_memory_flags_t flags) {
+	if (descriptor) {
+		return dtape_hooks->task_map_file(map->dtape_task->context, descriptor->memfd, page_count, prot, address, page_offset, flags);
+	} else {
+		return dtape_hooks->task_allocate_pages(map->dtape_task->context, page_count, prot, address, flags);
+	}
+};
+
 kern_return_t mach_vm_map_external(vm_map_t target_map, mach_vm_offset_t* address, mach_vm_size_t initial_size, mach_vm_offset_t mask, int flags, ipc_port_t port, vm_object_offset_t offset, boolean_t copy, vm_prot_t cur_protection, vm_prot_t max_protection, vm_inherit_t inheritance) {
-	dtape_stub_safe();
+	const uint64_t page_size = sysconf(_SC_PAGESIZE);
+	const uint64_t page_mask = page_size - 1;
+	bool mask_cur_protection = (cur_protection & VM_PROT_IS_MASK) != 0;
+	bool mask_max_protection = (max_protection & VM_PROT_IS_MASK) != 0;
+	dtape_map_shared_descriptor_t* descriptor = NULL;
+	uint64_t object_offset = 0;
+	kern_return_t kr = KERN_SUCCESS;
+
+	cur_protection &= ~VM_PROT_IS_MASK;
+	max_protection &= ~VM_PROT_IS_MASK;
+
+	if (target_map == VM_MAP_NULL || address == NULL || (flags & ~VM_FLAGS_USER_MAP) ||
+	    (cur_protection & ~VM_PROT_ALL) || (max_protection & ~VM_PROT_ALL) ||
+	    inheritance > VM_INHERIT_LAST_VALID || initial_size == 0) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (flags & VM_FLAGS_RETURN_4K_DATA_ADDR) {
+		// only meaningful on 16K-page systems
+		return KERN_NOT_SUPPORTED;
+	}
+
+	// The inheritance is not recorded: every mapping is inherited across fork the way Linux does it,
+	// i.e. anonymous memory is copied and named-entry memory is shared.
+	// VM_FLAGS_PURGABLE memory is never purged (nothing here can purge memory).
+
+	if (IP_VALID(port)) {
+		vm_named_entry_t entry;
+
+		if (ip_kotype(port) != IKOT_NAMED_ENTRY) {
+			// memory object (pager) ports are not supported
+			return KERN_INVALID_OBJECT;
+		}
+
+		entry = (vm_named_entry_t)ip_get_kobject(port);
+
+		if (copy) {
+			// mapping a private copy of an entry's object is not supported; refuse instead of sharing
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		named_entry_lock(entry);
+		if (!entry->dtape_descriptor) {
+			kr = KERN_INVALID_OBJECT;
+		} else {
+			if (flags & VM_FLAGS_RETURN_DATA_ADDR) {
+				offset += entry->data_offset;
+			}
+			if (mask_max_protection) {
+				max_protection &= entry->protection;
+			}
+			if (mask_cur_protection) {
+				cur_protection &= entry->protection;
+			}
+			// XNU refuses rights the entry does not grant (e.g. writable mappings of a read-only entry)
+			if ((entry->protection & max_protection) != max_protection ||
+			    (entry->protection & cur_protection) != cur_protection) {
+				kr = KERN_INVALID_RIGHT;
+			} else if (offset + initial_size < offset || entry->size < offset + initial_size) {
+				kr = KERN_INVALID_ARGUMENT;
+			} else {
+				descriptor = entry->dtape_descriptor;
+				dtape_map_shared_descriptor_retain(descriptor);
+				object_offset = entry->offset + offset;
+			}
+		}
+		named_entry_unlock(entry);
+
+		if (kr != KERN_SUCCESS) {
+			return kr;
+		}
+	}
+
+	uint64_t offset_in_page = object_offset & page_mask;
+	uint64_t page_count = (offset_in_page + initial_size + page_mask) / page_size;
+	uint64_t page_offset = object_offset / page_size;
+	int prot = dtape_linux_protection(cur_protection);
+	uintptr_t mapped = 0;
+
+	if (!(flags & VM_FLAGS_ANYWHERE)) {
+		dtape_memory_flags_t memflags = dtape_memory_flag_fixed;
+		if (flags & VM_FLAGS_OVERWRITE) {
+			memflags |= dtape_memory_flag_overwrite;
+		}
+		mapped = dtape_task_map_pages(target_map, descriptor, page_count, prot, *address & ~page_mask, page_offset, memflags);
+		if (!mapped) {
+			kr = KERN_NO_SPACE;
+		}
+	} else if ((mask | page_mask) == page_mask) {
+		// *address is only a hint for where to start looking
+		mapped = dtape_task_map_pages(target_map, descriptor, page_count, prot, *address & ~page_mask, page_offset, dtape_memory_flag_none);
+		if (!mapped) {
+			kr = KERN_NO_SPACE;
+		}
+	} else {
+		// the address must be aligned to (mask + 1): reserve enough space to find an aligned
+		// address in it, map there, and give back the rest of the reservation
+		uint64_t alignment_pages = ((mask | page_mask) + 1) / page_size;
+		uint64_t reserved_pages = page_count + alignment_pages - 1;
+		uintptr_t reserved = dtape_hooks->task_allocate_pages(target_map->dtape_task->context, reserved_pages, PROT_NONE, *address & ~page_mask, dtape_memory_flag_none);
+		if (!reserved) {
+			kr = KERN_NO_SPACE;
+		} else {
+			uintptr_t aligned = (reserved + (mask | page_mask)) & ~(uintptr_t)(mask | page_mask);
+			uintptr_t reserved_end = reserved + reserved_pages * page_size;
+			uintptr_t mapped_end = aligned + page_count * page_size;
+
+			mapped = dtape_task_map_pages(target_map, descriptor, page_count, prot, aligned, page_offset, dtape_memory_flag_fixed | dtape_memory_flag_overwrite);
+			if (!mapped) {
+				kr = KERN_NO_SPACE;
+				dtape_hooks->task_free_pages(target_map->dtape_task->context, reserved, reserved_pages);
+			} else {
+				if (aligned > reserved) {
+					dtape_hooks->task_free_pages(target_map->dtape_task->context, reserved, (aligned - reserved) / page_size);
+				}
+				if (reserved_end > mapped_end) {
+					dtape_hooks->task_free_pages(target_map->dtape_task->context, mapped_end, (reserved_end - mapped_end) / page_size);
+				}
+			}
+		}
+	}
+
+	// the task's mapping keeps the memfd open; the server does not need it any longer
+	if (descriptor) {
+		dtape_map_shared_descriptor_release(descriptor);
+	}
+
+	if (kr != KERN_SUCCESS) {
+		return kr;
+	}
+
+	*address = mapped;
+	if (flags & VM_FLAGS_RETURN_DATA_ADDR) {
+		*address += offset_in_page;
+	}
 	return KERN_SUCCESS;
 };
 
