@@ -119,6 +119,7 @@ add_executable(darlingserver
 	src/async-writer.cpp
 	src/stack-pool.cpp
 	src/system-config.cpp
+	src/platform-identity.cpp
 )
 
 add_dependencies(darlingserver
@@ -126,8 +127,19 @@ add_dependencies(darlingserver
 	rtsig_h
 )
 
+find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+
+# Link the library file rather than OpenSSL::Crypto: the imported target adds
+# its include directory (usually /usr/include) as a system include, which
+# moves it ahead of the C++ standard library's headers and breaks their
+# #include_next. The headers are on the default search path anyway.
+if (NOT OPENSSL_INCLUDE_DIR STREQUAL "/usr/include")
+	target_include_directories(darlingserver PRIVATE ${OPENSSL_INCLUDE_DIR})
+endif()
+
 target_link_libraries(darlingserver PRIVATE
 	darlingserver_duct_tape
+	${OPENSSL_CRYPTO_LIBRARY}
 )
 
 target_compile_options(darlingserver PRIVATE

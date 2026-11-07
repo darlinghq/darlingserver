@@ -29,6 +29,7 @@
 #include <sys/syscall.h>
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/system-config.hpp>
+#include <darlingserver/platform-identity.hpp>
 #include <limits.h>
 #include <list>
 #include <map>
@@ -877,6 +878,73 @@ void DarlingServer::Call::WaitSystemConfig::processCall() {
 					dtape_semaphore_up(latch);
 				} else {
 					code = -EINTR;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::SetPlatformIdentity::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			int uid = -1;
+			dtape_task_uidgid(process->_dtapeTask, -1, -1, &uid, nullptr);
+
+			// the identity comes from the root-owned `/Library/Preferences`, so only root may push it.
+			// this is checked before the caller's memory is looked at.
+			if (uid != 0) {
+				code = -EPERM;
+			} else if (_body.identity_size != sizeof(dserver_platform_identity_t)) {
+				code = -EINVAL;
+			} else {
+				dserver_platform_identity_t identity;
+
+				if (!process->readMemory(_body.identity, &identity, sizeof(identity), &code)) {
+					// readMemory returns a positive error code, but we want a negative one
+					code = -code;
+				} else {
+					code = PlatformIdentity::sharedInstance().apply(identity, [](const dserver_platform_identity_t& applied) {
+						// `host_info()` reports the configured memory size, as `hw.memsize` does
+						dtape_host_set_memory_size(applied.memory_size);
+					});
+				}
+
+				if (code == 0) {
+					systemConfigLog.info() << "Process " << process->id() << " (" << process->nsid() << ") set the platform identity" << systemConfigLog.endLog;
+				} else {
+					systemConfigLog.warning() << "Rejected the platform identity from process " << process->id() << " (" << process->nsid() << "): " << code << systemConfigLog.endLog;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::GetPlatformIdentity::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			if (_body.identity_size != sizeof(dserver_platform_identity_t)) {
+				code = -EINVAL;
+			} else {
+				auto identity = PlatformIdentity::sharedInstance().current();
+				if (!process->writeMemory(_body.identity, &identity, sizeof(identity), &code)) {
+					// writeMemory returns a positive error code, but we want a negative one
+					code = -code;
 				}
 			}
 		} else {

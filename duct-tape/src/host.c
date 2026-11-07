@@ -114,6 +114,13 @@ static void cache_sysinfo(void* context) {
 	}
 };
 
+// the configured memory size (`MemorySize` in the platform identity), or 0 for the host's
+static uint64_t configured_memory_size = 0;
+
+void dtape_host_set_memory_size(uint64_t memory_size) {
+	__atomic_store_n(&configured_memory_size, memory_size, __ATOMIC_RELAXED);
+};
+
 kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t* count) {
 	static libsimple_once_t once_token = LIBSIMPLE_ONCE_INITIALIZER;
 	static struct sysinfo cached_sysinfo;
@@ -135,7 +142,10 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 
 			libsimple_once(&once_token, cache_sysinfo, &cached_sysinfo);
 
-			uint64_t memsize = cached_sysinfo.totalram * cached_sysinfo.mem_unit;
+			uint64_t memsize = __atomic_load_n(&configured_memory_size, __ATOMIC_RELAXED);
+			if (memsize == 0) {
+				memsize = cached_sysinfo.totalram * cached_sysinfo.mem_unit;
+			}
 
 			basic_info->memory_size = memsize;
 #if __x86_64__ || __i386__

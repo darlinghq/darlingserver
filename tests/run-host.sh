@@ -9,6 +9,7 @@
 #              (tests/host/extract-function.py) against stand-in types (tests/host/call_stubs.hpp).
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
+#   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
 # SANITIZE overrides the sanitizer list (ASan needs far more address space than `ulimit -v` allows).
 # <source-root> defaults to this checkout; pass a checkout or `git archive` of another revision to
 # run the same test against it (that is how a test is shown to fail before its fix).
@@ -38,6 +39,9 @@ case $test in
 		xnu="-I$root/include -I$root/duct-tape/include -idirafter $root/duct-tape/xnu/bsd"
 		$cc -g -O0 -fsanitize=${SANITIZE:-address,undefined} $xnu -c -o "$work/csr.o" "$root/duct-tape/src/csr.c"
 		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/system-config.cpp" "$work/csr.o"
+		;;
+	platform_identity)
+		$cxx $flags -I"$root/include" -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/platform-identity.cpp" -lcrypto
 		;;
 	*)
 		echo "unknown test: $test" >&2
