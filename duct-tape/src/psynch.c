@@ -619,6 +619,10 @@ static kern_return_t shim_psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_el
 // </adapted>
 //
 
+//
+// <adapted from="xnu://7195.141.2/bsd/kern/kern_sig.c">
+//
+
 static void shim___pthread_testcancel(int presyscall) {
 	thread_t self = current_thread();
 	dtape_thread_t* uthread = get_bsdthread_info(self);
@@ -640,15 +644,27 @@ static void shim___pthread_testcancel(int presyscall) {
 	}
 };
 
+//
+// </adapted>
+//
+
 static void* shim_uthread_get_uukwe(struct uthread* uthread) {
 	dtape_thread_t* thread = (void*)uthread;
 	return &thread->kwe;
 };
 
+//
+// <adapted from="xnu://7195.141.2/bsd/pthread/pthread_shims.c">
+//
+
 static int shim_uthread_is_cancelled(struct uthread* uthread) {
 	dtape_thread_t* thread = (void*)uthread;
 	return (thread->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL;
 };
+
+//
+// </adapted>
+//
 
 void shim_uthread_set_returnval(struct uthread* uthread, int retval) {
 	dtape_hooks->current_thread_set_bsd_retval(retval);
