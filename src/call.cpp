@@ -31,6 +31,8 @@
 #include <darlingserver/system-config.hpp>
 #include <darlingserver/platform-identity.hpp>
 #include <darlingserver/code-signing.hpp>
+#include <darlingserver/trust-store.hpp>
+#include <darling-config.h>
 #include <kern/cs_blobs.h>
 #include <limits.h>
 #include <list>
@@ -1625,6 +1627,30 @@ DSERVER_CLASS_SOURCE_DEFS;
 
 static DarlingServer::Log codeSigningLog("codesign");
 
+// where the trust store is in the prefix when `TrustStorePath` is not set
+static constexpr const char* defaultTrustStorePath = "/private/var/db/darling/trustcache";
+
+// the key that signs the trust store, in the Darling installation (outside the prefix's writable layer)
+static constexpr const char* trustStorePublicKeyPath = LIBEXEC_PATH "/private/var/db/darling/trustcache.pub";
+
+static bool trustStoreContains(const uint8_t* cdhash) {
+	auto config = DarlingServer::SystemConfig::sharedInstance().current();
+	std::string path = defaultTrustStorePath;
+	std::string error;
+
+	if (config.trust_store_path[0] != '\0') {
+		path.assign(config.trust_store_path, strnlen(config.trust_store_path, sizeof(config.trust_store_path)));
+	}
+
+	bool found = DarlingServer::TrustStore::sharedInstance().contains(DarlingServer::Server::sharedInstance().prefix(), path, trustStorePublicKeyPath, cdhash, error);
+
+	if (!error.empty()) {
+		codeSigningLog.warning() << "Cannot use the trust store " << path << ": " << error << codeSigningLog.endLog;
+	}
+
+	return found;
+};
+
 // looks up the process `pid` (0 for the caller); anyone may read the state of any process,
 // only root may change that of another process
 static int lookUpCodeSigningTarget(const std::shared_ptr<DarlingServer::Process>& caller, int32_t pid, bool modify, std::shared_ptr<DarlingServer::Process>& target) {
@@ -1651,7 +1677,7 @@ void DarlingServer::Call::CsRegisterImage::processCall() {
 			// read before anything is recorded; the descriptor stays ours (and is closed with the call).
 			// pages and the CMS signature are only checked when the process's policy asks for it.
 			auto policy = process->codeSigningState().code_signing_policy;
-			auto image = std::make_shared<CodeSigning::Image>(CodeSigning::verifyImage(_body.image, _body.image_offset, CodeSigning::checksForPolicy(policy), {}));
+			auto image = std::make_shared<CodeSigning::Image>(CodeSigning::verifyImage(_body.image, _body.image_offset, CodeSigning::checksForPolicy(policy), trustStoreContains));
 
 			if (!process->registerCodeSigningImage(image)) {
 				code = -EPERM;
@@ -1778,7 +1804,7 @@ void DarlingServer::Call::CsVerifyImage::processCall() {
 		if (auto process = thread->process()) {
 			auto state = process->codeSigningState();
 			bool enforced = state.code_signing_policy == dserver_code_signing_policy_enforce;
-			auto library = CodeSigning::verifyImage(_body.image, _body.image_offset, CodeSigning::checksForPolicy(state.code_signing_policy), {});
+			auto library = CodeSigning::verifyImage(_body.image, _body.image_offset, CodeSigning::checksForPolicy(state.code_signing_policy), trustStoreContains);
 			auto mainImage = process->codeSigningImage();
 			std::string error;
 

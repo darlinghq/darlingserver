@@ -121,6 +121,7 @@ add_executable(darlingserver
 	src/system-config.cpp
 	src/platform-identity.cpp
 	src/code-signing.cpp
+	src/trust-store.cpp
 )
 
 add_dependencies(darlingserver

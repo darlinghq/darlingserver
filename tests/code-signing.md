@@ -1,14 +1,15 @@
 # Code signing state checks
 
 Host-only tests, no darlingserver build needed (they need the host's OpenSSL 3 libcrypto and
-libxml2 development files). From the repository root:
+libxml2 development files; python3 and the openssl tool for the trust store tool check). From
+the repository root:
 
 ```sh
 tests/run-host.sh code_signing
 ```
 
-`code_signing` compiles the unchanged `src/code-signing.cpp` with the code signature parser. It
-checks:
+`code_signing` compiles the unchanged `src/code-signing.cpp` and `src/trust-store.cpp` with the
+code signature parser. It checks:
 
 - image verification from a file descriptor against `fixtures/codesign` (signed by `codesign` on
   macOS 27): status, signer (ad-hoc or certificate), CDHash, identifier, team ID and the
@@ -27,7 +28,13 @@ checks:
 - library validation: off without `CS_FORCED_LV`/`CS_REQUIRE_LV` or with the
   `disable-library-validation` entitlement; platform libraries load; the same team
   ID only counts with the same signing key; ad-hoc and unsigned libraries are refused;
-- that `cs_update_flags` can only add restrictions and only remove validity or privileges.
+- that `cs_update_flags` can only add restrictions and only remove validity or privileges;
+- the trust store format: a valid and an empty store, another key, an RSA key, changed entries
+  or signature, unsorted or duplicate entries, another issuer, wrong signature length,
+  truncated, trailing data, impossible counts; a store written by `tools/dc-trustcache.py`;
+- that the store path stays inside the prefix (`..`, relative paths, absolute and relative
+  symbolic links, links to host paths) and a missing store is not an error;
+- that a public key darlingserver's own user could change is not used.
 
 What needs a running darlingserver (registration once per exec, fork inheritance) is covered by
 guest tests.

@@ -17,15 +17,19 @@
  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-// darlingserver's image verification (src/code-signing.cpp, compiled unchanged) against the binaries in tests/fixtures/codesign,
+// darlingserver's image verification and trust store (src/code-signing.cpp and
+// src/trust-store.cpp, compiled unchanged) against the binaries in tests/fixtures/codesign,
 // signed by `codesign` on macOS, and malformed variants of them.
-// Usage: code_signing_test <fixture directory> <work directory>
+// Usage: code_signing_test <fixture directory> <work directory> [<tool trust store> <tool public key>]
 #include <darlingserver/code-signing.hpp>
+#include <darlingserver/trust-store.hpp>
 #include <darlingserver/dc_codesign.h>
 
 #include <kern/cs_blobs.h>
 
 #include <openssl/cms.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -336,6 +340,173 @@ static void testUnparsableSignatures() {
 		checksForPolicy(dserver_code_signing_policy_enforce) == Checks::Enforce, "the checks follow the policy");
 }
 
+//
+// trust store
+//
+
+static std::string ed25519PublicPem(EVP_PKEY* key) {
+	BIO* bio = BIO_new(BIO_s_mem());
+	PEM_write_bio_PUBKEY(bio, key);
+	char* data = nullptr;
+	long length = BIO_get_mem_data(bio, &data);
+	std::string pem(data, static_cast<size_t>(length));
+	BIO_free(bio);
+	return pem;
+}
+
+static EVP_PKEY* newKey(int type) {
+	EVP_PKEY* key = nullptr;
+	EVP_PKEY_CTX* context = EVP_PKEY_CTX_new_id(type, nullptr);
+	EVP_PKEY_keygen_init(context);
+	if (type == EVP_PKEY_RSA) {
+		EVP_PKEY_CTX_set_rsa_keygen_bits(context, 2048);
+	}
+	EVP_PKEY_keygen(context, &key);
+	EVP_PKEY_CTX_free(context);
+	return key;
+}
+
+static void putLE(std::vector<uint8_t>& out, uint64_t value, int bytes) {
+	for (int i = 0; i < bytes; ++i) {
+		out.push_back(static_cast<uint8_t>(value >> (8 * i)));
+	}
+}
+
+// writes a store the way tools/dc-trustcache.py does (independently of src/trust-store.cpp)
+static std::vector<uint8_t> makeStore(EVP_PKEY* key, uint64_t generation, const std::vector<std::array<uint8_t, 20>>& cdhashes, const char* issuer = "darling-local", int signatureLength = 64) {
+	std::vector<uint8_t> out;
+	putLE(out, 0x44544331, 4);
+	putLE(out, 1, 4);
+	putLE(out, generation, 8);
+	char issuerField[32] = {};
+	strncpy(issuerField, issuer, sizeof(issuerField));
+	out.insert(out.end(), issuerField, issuerField + 32);
+	putLE(out, cdhashes.size(), 4);
+	for (const auto& cdhash : cdhashes) {
+		out.insert(out.end(), cdhash.begin(), cdhash.end());
+		putLE(out, 1, 4);
+	}
+
+	uint8_t signature[64];
+	size_t length = sizeof(signature);
+	EVP_MD_CTX* context = EVP_MD_CTX_new();
+	EVP_DigestSignInit(context, nullptr, nullptr, nullptr, key);
+	EVP_DigestSign(context, signature, &length, out.data(), out.size());
+	EVP_MD_CTX_free(context);
+
+	putLE(out, static_cast<uint64_t>(signatureLength), 4);
+	out.insert(out.end(), signature, signature + length);
+	return out;
+}
+
+static std::array<uint8_t, 20> cdhashOf(uint8_t first) {
+	std::array<uint8_t, 20> cdhash{};
+	cdhash[0] = first;
+	cdhash[19] = 0x5a;
+	return cdhash;
+}
+
+static bool parses(const std::vector<uint8_t>& store, const std::string& pem, TrustStore::Contents& contents, std::string& error) {
+	return TrustStore::parse(store.data(), store.size(), reinterpret_cast<const uint8_t*>(pem.data()), pem.size(), contents, error);
+}
+
+static void testTrustStore(const char* toolStore, const char* toolPublicKey) {
+	EVP_PKEY* key = newKey(EVP_PKEY_ED25519);
+	EVP_PKEY* otherKey = newKey(EVP_PKEY_ED25519);
+	EVP_PKEY* rsaKey = newKey(EVP_PKEY_RSA);
+	std::string pem = ed25519PublicPem(key);
+	TrustStore::Contents contents;
+	std::string error;
+
+	auto good = makeStore(key, 7, { cdhashOf(1), cdhashOf(2), cdhashOf(9) });
+	CHECK(parses(good, pem, contents, error) && contents.generation == 7 && contents.cdhashes.size() == 3 && contents.cdhashes[2] == cdhashOf(9), "trust store: a valid store parses");
+
+	auto empty = makeStore(key, 1, {});
+	CHECK(parses(empty, pem, contents, error) && contents.cdhashes.empty(), "trust store: an empty store parses");
+
+	CHECK(!parses(good, ed25519PublicPem(otherKey), contents, error) && contents.cdhashes.empty(), "trust store: another key does not verify (" + error + ")");
+	CHECK(!parses(good, ed25519PublicPem(rsaKey), contents, error), "trust store: an RSA key is refused (" + error + ")");
+	CHECK(!parses(good, "not a key", contents, error), "trust store: garbage key is refused (" + error + ")");
+
+	auto flipped = good;
+	flipped[52] ^= 1; // the first CDHash
+	CHECK(!parses(flipped, pem, contents, error), "trust store: a changed entry does not verify (" + error + ")");
+
+	auto badSignature = good;
+	badSignature.back() ^= 1;
+	CHECK(!parses(badSignature, pem, contents, error), "trust store: a changed signature does not verify (" + error + ")");
+
+	CHECK(!parses(makeStore(key, 1, { cdhashOf(2), cdhashOf(1) }), pem, contents, error), "trust store: unsorted entries are refused (" + error + ")");
+	CHECK(!parses(makeStore(key, 1, { cdhashOf(2), cdhashOf(2) }), pem, contents, error), "trust store: duplicate entries are refused (" + error + ")");
+	CHECK(!parses(makeStore(key, 1, { cdhashOf(1) }, "apple"), pem, contents, error), "trust store: another issuer is refused (" + error + ")");
+	CHECK(!parses(makeStore(key, 1, { cdhashOf(1) }, "darling-local", 65), pem, contents, error), "trust store: a wrong signature length is refused (" + error + ")");
+
+	auto truncated = good;
+	truncated.resize(truncated.size() - 1);
+	CHECK(!parses(truncated, pem, contents, error), "trust store: truncated (" + error + ")");
+	auto extended = good;
+	extended.push_back(0);
+	CHECK(!parses(extended, pem, contents, error), "trust store: trailing data (" + error + ")");
+	auto countTooBig = good;
+	countTooBig[48] = 0xff; countTooBig[49] = 0xff; countTooBig[50] = 0xff; countTooBig[51] = 0xff;
+	CHECK(!parses(countTooBig, pem, contents, error), "trust store: an impossible entry count (" + error + ")");
+	CHECK(!parses(std::vector<uint8_t>(10), pem, contents, error), "trust store: a tiny file (" + error + ")");
+
+	// what tools/dc-trustcache.py writes
+	if (toolStore && toolPublicKey) {
+		auto store = readFile(toolStore);
+		auto toolPem = readFile(toolPublicKey);
+		error.clear();
+		bool ok = TrustStore::parse(store.data(), store.size(), toolPem.data(), toolPem.size(), contents, error);
+		CHECK(ok && contents.generation == 2 && contents.cdhashes.size() == 2 &&
+			hex(contents.cdhashes[0].data(), 20) == "1e010f88a0f10df1da428fb53fad98a1637453ba" &&
+			hex(contents.cdhashes[1].data(), 20) == "c3e41403df5753a157520767cbf90e56d9ffa33f",
+			"trust store: tools/dc-trustcache.py's store parses (" + error + ")");
+	} else {
+		printf("SKIP trust store written by tools/dc-trustcache.py (no python3 or openssl)\n");
+	}
+
+	// opening inside the prefix
+	std::string prefix = workDir + "/prefix";
+	mkdir(prefix.c_str(), 0755);
+	mkdir((prefix + "/private").c_str(), 0755);
+	writeWork("outside", good);
+	writeWork("prefix/private/store", good);
+	symlink("/outside", (prefix + "/private/absolute-link").c_str());
+	symlink("../../outside", (prefix + "/private/relative-link").c_str());
+	symlink((workDir + "/outside").c_str(), (prefix + "/private/host-link").c_str());
+
+	int root = open(prefix.c_str(), O_PATH | O_DIRECTORY);
+	int fd = TrustStore::openBeneath(root, "/private/store", error);
+	CHECK(fd >= 0, "trust store path: opens inside the prefix (" + error + ")");
+	if (fd >= 0) close(fd);
+	CHECK(TrustStore::openBeneath(root, "/private/../private/store", error) < 0 && !error.empty(), "trust store path: `..` refused (" + error + ")");
+	CHECK(TrustStore::openBeneath(root, "private/store", error) < 0 && !error.empty(), "trust store path: a relative path refused (" + error + ")");
+	CHECK(TrustStore::openBeneath(root, "/private/absolute-link", error) < 0, "trust store path: an absolute symlink resolves inside the prefix (not found)");
+	CHECK(TrustStore::openBeneath(root, "/private/relative-link", error) < 0, "trust store path: a relative symlink cannot climb out of the prefix");
+	CHECK(TrustStore::openBeneath(root, "/private/host-link", error) < 0, "trust store path: a symlink to the host path stays inside the prefix");
+	CHECK(TrustStore::openBeneath(root, "/private/missing", error) < 0 && error.empty(), "trust store path: a missing store is not an error");
+	close(root);
+
+	// the public key must be out of darlingserver's reach
+	std::string keyPath = workDir + "/key.pem";
+	{
+		std::ofstream file(keyPath);
+		file << pem;
+	}
+	CHECK(!TrustStore::isProtected(keyPath, error), "trust store key: a key darlingserver's user owns is not used (" + error + ")");
+	if (geteuid() != 0) {
+		CHECK(TrustStore::isProtected("/etc/hostname", error) || access("/etc/hostname", F_OK) != 0, "trust store key: a root-owned file in root-owned directories is protected (" + error + ")");
+	}
+	TrustStore store;
+	CHECK(!store.contains(prefix, "/private/store", keyPath, cdhashOf(1).data(), error) && !error.empty(), "trust store: not used with an unprotected key (" + error + ")");
+	CHECK(!store.contains(prefix, "/private/missing", keyPath, cdhashOf(1).data(), error) && error.empty(), "trust store: no store, no error");
+
+	EVP_PKEY_free(key);
+	EVP_PKEY_free(otherKey);
+	EVP_PKEY_free(rsaKey);
+}
+
 static void testLibraryValidation() {
 	std::string error;
 	Image hardenedMain = verifyFixture("adhoc-runtime-ent"); // CS_FORCED_LV
@@ -388,7 +559,7 @@ static void testFlagRules() {
 
 int main(int argc, char** argv) {
 	if (argc < 3) {
-		fprintf(stderr, "usage: %s <fixture directory> <work directory>\n", argv[0]);
+		fprintf(stderr, "usage: %s <fixture directory> <work directory> [<tool store> <tool public key>]\n", argv[0]);
 		return 2;
 	}
 	fixtureDir = argv[1];
@@ -398,6 +569,7 @@ int main(int argc, char** argv) {
 	testQuirks();
 	testTampering();
 	testUnparsableSignatures();
+	testTrustStore(argc > 4 ? argv[3] : nullptr, argc > 4 ? argv[4] : nullptr);
 	testLibraryValidation();
 	testFlagRules();
 
