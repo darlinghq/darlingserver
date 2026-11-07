@@ -27,6 +27,7 @@
 #include <condition_variable>
 #include <stack>
 #include <queue>
+#include <atomic>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -83,7 +84,8 @@ namespace DarlingServer {
 		bool _suspended = false;
 		ucontext_t _resumeContext;
 		dtape_thread_t* _dtapeThread;
-		uintptr_t _cancelMarkedAddress = 0;
+		// atomic so that exec can reset it while holding only the process lock
+		std::atomic<uintptr_t> _cancelMarkedAddress = 0;
 		std::function<void()> _continuationCallback = nullptr;
 		bool _running = false;
 		bool _terminating = false;

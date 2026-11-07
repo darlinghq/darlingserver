@@ -365,6 +365,10 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		auto newThread = dtape_thread_create(_dtapeTask, mainThread->_nstid, mainThread.get());
 		mainThread->_dtapeThread = newThread;
 
+		// the cancel flag's TSD slot belonged to the old image;
+		// the new image registers its own when its libpthread initializes
+		mainThread->_cancelMarkedAddress = 0;
+
 		// destroy the main thread's old S2C semaphores
 		dtape_semaphore_destroy(mainThread->_s2cPerformSempahore);
 		mainThread->_s2cPerformSempahore = nullptr;
