@@ -136,6 +136,7 @@ calls = [
 		('tracer', 'int32_t'),
 	]),
 
+	# uids and gids travel as their 32-bit patterns; -1 as `new_uid` or `new_gid` means "unchanged"
 	('uidgid', [
 		('new_uid', 'int32_t'),
 		('new_gid', 'int32_t'),

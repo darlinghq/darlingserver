@@ -174,10 +174,11 @@ void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_ui
 	if (old_gid) {
 		*old_gid = task->xnu_task.audit_token.val[2];
 	}
-	if (new_uid >= 0) {
+	// -1 leaves an id unchanged. other negative values are real ids (e.g. -2 is `nobody`), since uid_t and gid_t are unsigned.
+	if (new_uid != -1) {
 		task->xnu_task.audit_token.val[1] = new_uid;
 	}
-	if (new_gid >= 0) {
+	if (new_gid != -1) {
 		task->xnu_task.audit_token.val[2] = new_gid;
 	}
 	task_unlock(&task->xnu_task);
