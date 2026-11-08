@@ -39,9 +39,12 @@
 #include <sys/wait.h>
 
 #include <darlingserver/logging.hpp>
+#include <darlingserver/code-signing.hpp>
+#include <darlingserver/system-config.hpp>
 
 static DarlingServer::Server* sharedInstancePointer = nullptr;
 static DarlingServer::Log serverLog("server");
+static DarlingServer::Log codeSigningLog("codesign");
 
 struct DTapeHooks {
 	static void dtape_hook_thread_suspend(void* thread_context, dtape_thread_continuation_callback_f continuationCallback, void* continuationContext, libsimple_lock_t* unlockMe) {
@@ -390,6 +393,42 @@ struct DTapeHooks {
 		return static_cast<DarlingServer::Process*>(task_context)->eternalID();
 	};
 
+	static bool dtape_hook_task_port_allowed(void* caller_task_context, void* target_task_context, dtape_task_port_flavor_t flavor) {
+		using namespace DarlingServer::CodeSigning;
+
+		auto caller = static_cast<DarlingServer::Process*>(caller_task_context);
+		auto target = static_cast<DarlingServer::Process*>(target_task_context);
+
+		if (!caller || !target) {
+			return true;
+		}
+
+		PortFlavor portFlavor = PortFlavor::Control;
+		switch (flavor) {
+			case dtape_task_port_flavor_name:    portFlavor = PortFlavor::Name; break;
+			case dtape_task_port_flavor_inspect: portFlavor = PortFlavor::Inspect; break;
+			case dtape_task_port_flavor_read:    portFlavor = PortFlavor::Read; break;
+			case dtape_task_port_flavor_control: portFlavor = PortFlavor::Control; break;
+		}
+
+		auto state = target->codeSigningState();
+		if (state.code_signing_policy == dserver_code_signing_policy_off) {
+			return true;
+		}
+
+		bool isSelf = (caller == target);
+		auto csr = DarlingServer::SystemConfig::sharedInstance().current().csr_active_config;
+		auto verdict = applyPolicy(state.code_signing_policy, taskPortRule(isSelf, isSelf ? 0 : caller->guestUID(), isSelf ? 0 : target->guestUID(), state, portFlavor, csr));
+
+		if (verdict == Verdict::Denied) {
+			codeSigningLog.warning() << "task_for_pid (flavor " << static_cast<int>(flavor) << ") by " << *caller << " for " << *target << " denied" << codeSigningLog.endLog;
+		} else if (verdict == Verdict::WouldDeny) {
+			codeSigningLog.info() << "task_for_pid (flavor " << static_cast<int>(flavor) << ") by " << *caller << " for " << *target << " would be denied under enforcement" << codeSigningLog.endLog;
+		}
+
+		return verdict != Verdict::Denied;
+	};
+
 #if DSERVER_EXTENDED_DEBUG
 	static void dtape_hook_task_register_name(void* task_context, uint32_t name, uintptr_t pointer) {
 		static_cast<DarlingServer::Process*>(task_context)->_registerName(name, pointer);
@@ -455,6 +494,7 @@ struct DTapeHooks {
 		.task_sync_memory = dtape_hook_task_sync_memory,
 		.task_context_dispose = dtape_hook_task_context_dispose,
 		.task_eternal_id = dtape_hook_task_eternal_id,
+		.task_port_allowed = dtape_hook_task_port_allowed,
 
 #if DSERVER_EXTENDED_DEBUG
 		.task_register_name = dtape_hook_task_register_name,

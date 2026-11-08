@@ -65,6 +65,19 @@ typedef bool (*dtape_hook_task_sync_memory_f)(void* task_context, uintptr_t addr
 typedef void (*dtape_hook_task_context_dispose_f)(void* task_context);
 typedef dtape_eternal_id_t (*dtape_hook_task_eternal_id_f)(void* thread_context);
 
+typedef enum dtape_task_port_flavor {
+	dtape_task_port_flavor_control,
+	dtape_task_port_flavor_read,
+	dtape_task_port_flavor_inspect,
+	dtape_task_port_flavor_name,
+} dtape_task_port_flavor_t;
+
+/**
+ * Decides whether the task with @p caller_task_context may obtain a task port of the given flavor
+ * for the task with @p target_task_context through task_for_pid() or one of its variants.
+ */
+typedef bool (*dtape_hook_task_port_allowed_f)(void* caller_task_context, void* target_task_context, dtape_task_port_flavor_t flavor);
+
 #if DSERVER_EXTENDED_DEBUG
 	typedef void (*dtape_hook_task_register_name_f)(void* task_context, uint32_t name, uintptr_t pointer);
 	typedef void (*dtape_hook_task_unregister_name_f)(void* task_context, uint32_t name);
@@ -116,6 +129,7 @@ typedef struct dtape_hooks {
 	dtape_hook_task_sync_memory_f task_sync_memory;
 	dtape_hook_task_context_dispose_f task_context_dispose;
 	dtape_hook_task_eternal_id_f task_eternal_id;
+	dtape_hook_task_port_allowed_f task_port_allowed;
 
 #if DSERVER_EXTENDED_DEBUG
 	dtape_hook_task_register_name_f task_register_name;

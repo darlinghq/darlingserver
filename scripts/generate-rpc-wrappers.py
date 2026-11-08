@@ -746,6 +746,69 @@ calls = [
 		('identity', 'void*', 'uint64_t'),
 		('identity_size', 'uint64_t'),
 	], []),
+
+	#
+	# code signing
+	#
+	# See `dserver_cs_state_t` in rpc-supplement.h. `pid` 0 means the calling process.
+	#
+
+	# registers the image the calling process starts from (mldr calls this once per exec);
+	# darlingserver reads it itself. `image` may be -1 when it could not be opened.
+	# under the enforce policy, fails with EPERM when the process may not register (again).
+	('cs_register_image', [
+		('image', '@fd'),
+		('image_offset', 'uint64_t'),
+	], [
+		('flags', 'uint32_t'),
+	]),
+
+	# `state` points to a `dserver_cs_state_t` and `state_size` must be its size
+	('cs_get_state', [
+		('pid', 'int32_t'),
+		('state', 'void*', 'uint64_t'),
+		('state_size', 'uint64_t'),
+	], []),
+
+	# copies the (DER, if `der` is set) entitlements blob of a process, header included;
+	# `length` is its full length (0 if there is none). fails with ERANGE, after copying
+	# nothing, when the buffer is too small.
+	('cs_copy_entitlements', [
+		('pid', 'int32_t'),
+		('der', 'bool'),
+		('buffer', 'void*', 'uint64_t'),
+		('buffer_size', 'uint64_t'),
+	], [
+		('length', 'uint64_t'),
+	]),
+
+	# the `csops` operations that change flags; only some flags may be set, and fewer cleared.
+	# allowed for the process itself and for root; library validation (CS_REQUIRE_LV and
+	# CS_FORCED_LV) only for the process itself. returns the new flags.
+	('cs_update_flags', [
+		('pid', 'int32_t'),
+		('set_flags', 'uint32_t'),
+		('clear_flags', 'uint32_t'),
+	], [
+		('flags', 'uint32_t'),
+	]),
+
+	# records that the calling process called ptrace(PT_DENY_ATTACH)
+	('cs_deny_attach', [], []),
+
+	# verifies an image (a library dyld is about to map) without registering it; also says
+	# whether the calling process's library validation policy would accept it. `page_size_log2`
+	# is the CodeDirectory's hash page size (0 when there is none).
+	('cs_verify_image', [
+		('image', '@fd'),
+		('image_offset', 'uint64_t'),
+	], [
+		('status', 'uint32_t'),
+		('flags', 'uint32_t'),
+		('code_limit', 'uint64_t'),
+		('page_size_log2', 'uint32_t'),
+		('library_validation_ok', 'bool'),
+	]),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

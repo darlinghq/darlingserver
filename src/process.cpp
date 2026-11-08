@@ -23,6 +23,9 @@
 #include <unistd.h>
 #include <sys/uio.h>
 #include <darlingserver/logging.hpp>
+#include <darlingserver/code-signing.hpp>
+#include <darlingserver/system-config.hpp>
+#include <kern/cs_blobs.h>
 
 #include <fstream>
 #include <cstdio>
@@ -118,6 +121,16 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 
 		// inherit groups from parent process
 		_groups = parentProcess->_groups;
+
+		// a forked process runs the same code as its parent, but has not denied attachment itself
+		_csState = parentProcess->_csState;
+		_csState.darling_flags &= ~DSERVER_CS_DENY_ATTACH;
+		_csImage = parentProcess->_csImage;
+	} else {
+		_resetCodeSigningState();
+
+		// the first process has no parent to inherit from, so it may register once
+		_csMayRegister = (_nspid == 1);
 	}
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
@@ -142,6 +155,7 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 #else
 	#error Unknown architecture
 #endif
+	_resetCodeSigningState();
 	_dtapeTask = dtape_task_create(nullptr, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
 };
 
@@ -397,6 +411,15 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		mainThread->_s2cReplySempahore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptEnterSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptExitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
+
+		// the new image has not been verified yet, and it starts under the policy in effect now;
+		// a denial of attachment survives the exec
+		{
+			auto denied = _csState.darling_flags & DSERVER_CS_DENY_ATTACH;
+			_resetCodeSigningState();
+			_csState.darling_flags |= denied;
+			_csMayRegister = true;
+		}
 	} else if (isFork) {
 		// fork case
 
@@ -736,6 +759,78 @@ bool DarlingServer::Process::setTracerProcess(std::shared_ptr<Process> tracerPro
 	}
 	_tracerProcess = tracerProcess;
 	return true;
+};
+
+void DarlingServer::Process::_resetCodeSigningState() {
+	static std::atomic<uint64_t> nextGeneration{1};
+	auto config = SystemConfig::sharedInstance().current();
+
+	memset(&_csState, 0, sizeof(_csState));
+	_csState.version = DSERVER_CS_STATE_VERSION;
+	_csState.size = sizeof(_csState);
+	_csState.status = dserver_cs_status_unregistered;
+	_csState.code_signing_policy = config.code_signing_policy;
+	_csState.csr_active_config = config.csr_active_config;
+	_csState.generation = nextGeneration++;
+	_csImage = nullptr;
+	_csMayRegister = false;
+};
+
+uint32_t DarlingServer::Process::guestUID() const {
+	int uid = -1;
+	std::shared_lock lock(_rwlock);
+	dtape_task_uidgid(_dtapeTask, -1, -1, &uid, nullptr);
+	return static_cast<uint32_t>(uid);
+};
+
+dserver_cs_state_t DarlingServer::Process::codeSigningState() const {
+	std::shared_lock lock(_rwlock);
+	return _csState;
+};
+
+std::shared_ptr<const DarlingServer::CodeSigning::Image> DarlingServer::Process::codeSigningImage() const {
+	std::shared_lock lock(_rwlock);
+	return _csImage;
+};
+
+bool DarlingServer::Process::registerCodeSigningImage(std::shared_ptr<const CodeSigning::Image> image) {
+	std::unique_lock lock(_rwlock);
+
+	// registering once per exec only matters when a code signing policy is in effect
+	if (!image || (!_csMayRegister && _csState.code_signing_policy == dserver_code_signing_policy_enforce)) {
+		return false;
+	}
+	_csMayRegister = false;
+
+	auto policy = _csState.code_signing_policy;
+	auto csr = _csState.csr_active_config;
+	auto generation = _csState.generation;
+	auto denied = _csState.darling_flags & DSERVER_CS_DENY_ATTACH;
+
+	_csState = image->state;
+	_csState.code_signing_policy = policy;
+	_csState.csr_active_config = csr;
+	_csState.generation = generation;
+	_csState.darling_flags = (image->state.darling_flags & DSERVER_CS_TRUST_STORE) | denied;
+	_csImage = (image->state.status == dserver_cs_status_valid) ? image : nullptr;
+
+	return true;
+};
+
+uint32_t DarlingServer::Process::updateCodeSigningFlags(uint32_t set, uint32_t clear) {
+	std::unique_lock lock(_rwlock);
+
+	// only a validly signed process has flags to change; clearing CS_VALID is permanent
+	if (_csState.status == dserver_cs_status_valid) {
+		_csState.flags = (_csState.flags | set) & ~clear;
+	}
+
+	return _csState.flags;
+};
+
+void DarlingServer::Process::denyAttach() {
+	std::unique_lock lock(_rwlock);
+	_csState.darling_flags |= DSERVER_CS_DENY_ATTACH;
 };
 
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Process::_pickS2CThread(void) const {

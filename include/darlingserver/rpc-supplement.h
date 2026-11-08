@@ -456,6 +456,135 @@ typedef struct dserver_platform_identity {
 	char cpu_brand_string[DSERVER_PLATFORM_IDENTITY_STRING_MAX];  // `CPUBrandString`
 } dserver_platform_identity_t;
 
+//
+// code signing state
+//
+
+/**
+ * What darlingserver records about the code signature of a process.
+ *
+ * mldr registers the image a process starts from with `cs_register_image`, once per exec.
+ * darlingserver reads the signature itself, from the descriptor it is given; nothing the process
+ * says about its own signature is taken on trust. When the process's code signing policy is not
+ * `off`, every code page and the CMS signature (if any) are checked too. Only under `enforce`
+ * does a problem with a signature (one that cannot be fully parsed, a changed page, a CMS
+ * signature that does not verify) make the status invalid; otherwise signed code is reported as
+ * validly signed, and under `warn` the problem is logged. A forked process
+ * inherits the state of its parent. Under `enforce`, only a process that has just exec'd (or the
+ * very first process) may register, once.
+ *
+ * Anyone may read the state of any process.
+ *
+ * The state also records the code signing policy and `csr-active-config` that were in effect
+ * when the process started (see `dserver_system_config_t`). The policy of the *target* process
+ * decides whether darlingserver mediates access to it (task ports, ptrace attach); with the
+ * default policy (`off`) nothing is restricted.
+ */
+
+#define DSERVER_CS_STATE_VERSION 1
+
+// sizes of the fixed fields, terminating NUL included where it applies
+#define DSERVER_CS_CDHASH_LEN 20
+#define DSERVER_CS_TEAM_ID_MAX 64
+#define DSERVER_CS_IDENTIFIER_MAX 512
+
+enum dserver_cs_status {
+	// no image has been registered for the process (yet)
+	dserver_cs_status_unregistered = 0,
+	// the image has no code signature
+	dserver_cs_status_unsigned = 1,
+	// the image has a code signature that did not verify, or could not be read
+	dserver_cs_status_invalid = 2,
+	// the signature and every code page verified
+	dserver_cs_status_valid = 3,
+};
+
+enum dserver_cs_signer {
+	dserver_cs_signer_none = 0,
+	// an ad-hoc signature (no CMS signature)
+	dserver_cs_signer_adhoc = 1,
+	// a CMS signature that signs the CodeDirectory; its certificate chain is not evaluated
+	dserver_cs_signer_certificate = 2,
+};
+
+// bits in `darling_flags`
+#define DSERVER_CS_DENY_ATTACH  (1u << 0) // the process called ptrace(PT_DENY_ATTACH)
+#define DSERVER_CS_TRUST_STORE  (1u << 1) // the CDHash is in Darling's trust store (hence `CS_PLATFORM_BINARY`)
+
+typedef struct dserver_cs_state {
+	/**
+	 * `DSERVER_CS_STATE_VERSION` and `sizeof(dserver_cs_state_t)`.
+	 */
+	uint32_t version;
+	uint32_t size;
+
+	/**
+	 * One of `dserver_cs_status` and `dserver_cs_signer`.
+	 */
+	uint32_t status;
+	uint32_t signer;
+
+	/**
+	 * `CS_*` flags from `<kern/cs_blobs.h>`, as `csops(CS_OPS_STATUS)` reports them. Zero unless
+	 * the status is valid; `CS_VALID` may have been cleared since.
+	 */
+	uint32_t flags;
+
+	/**
+	 * `DSERVER_CS_*` bits.
+	 */
+	uint32_t darling_flags;
+
+	/**
+	 * The `dserver_code_signing_policy` and `csr-active-config` in effect when the process
+	 * started (its last exec, or its first ancestor's).
+	 */
+	uint32_t code_signing_policy;
+	uint32_t csr_active_config;
+
+	/**
+	 * From the CodeDirectory that is used: `CS_HASHTYPE_*`, the platform field and the hardened
+	 * runtime version (0 when absent).
+	 */
+	uint32_t hash_type;
+	uint32_t platform;
+	uint32_t runtime_version;
+
+	/**
+	 * Lengths of the entitlements and DER entitlements blobs, headers included (what
+	 * `cs_copy_entitlements` returns); 0 when there are none.
+	 */
+	uint32_t entitlements_length;
+	uint32_t der_entitlements_length;
+
+	uint32_t reserved;
+
+	/**
+	 * darlingserver's ID for the process; a different value means a different process (or a
+	 * different exec of it), even if the PID is the same.
+	 */
+	uint64_t generation DSERVER_RPC_ALIGN64;
+
+	/**
+	 * Where the image starts in its file (non-zero for a slice of a universal binary), and
+	 * the signed range and executable segment that the CodeDirectory describes.
+	 */
+	uint64_t image_offset DSERVER_RPC_ALIGN64;
+	uint64_t code_limit DSERVER_RPC_ALIGN64;
+	uint64_t exec_seg_base DSERVER_RPC_ALIGN64;
+	uint64_t exec_seg_limit DSERVER_RPC_ALIGN64;
+	uint64_t exec_seg_flags DSERVER_RPC_ALIGN64;
+
+	uint8_t cdhash[DSERVER_CS_CDHASH_LEN];
+	uint8_t reserved2[4];
+
+	/**
+	 * NUL-terminated; empty when there is none.
+	 */
+	char team_id[DSERVER_CS_TEAM_ID_MAX];
+	char identifier[DSERVER_CS_IDENTIFIER_MAX];
+} dserver_cs_state_t;
+
 #if __cplusplus
 };
 #endif

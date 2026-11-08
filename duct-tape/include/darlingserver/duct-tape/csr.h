@@ -37,6 +37,12 @@ bool dtape_csr_config_is_valid(uint32_t config);
  */
 uint32_t dtape_csr_default_config(void);
 
+/**
+ * Whether @p config lets task_for_pid() reach processes that System Integrity Protection would
+ * otherwise protect (`CSR_ALLOW_TASK_FOR_PID`).
+ */
+bool dtape_csr_allows_task_for_pid(uint32_t config);
+
 #ifdef __cplusplus
 };
 #endif
