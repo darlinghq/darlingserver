@@ -120,6 +120,8 @@ add_executable(darlingserver
 	src/stack-pool.cpp
 	src/system-config.cpp
 	src/platform-identity.cpp
+	src/code-signing.cpp
+	src/trust-store.cpp
 )
 
 add_dependencies(darlingserver
@@ -139,6 +141,7 @@ endif()
 
 target_link_libraries(darlingserver PRIVATE
 	darlingserver_duct_tape
+	darlingserver_dc_codesign
 	${OPENSSL_CRYPTO_LIBRARY}
 )
 

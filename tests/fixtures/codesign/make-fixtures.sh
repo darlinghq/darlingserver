@@ -17,6 +17,8 @@ codesign -s - -f -o runtime --entitlements ent.plist --digest-algorithm=sha1,sha
 	--identifier org.darlinghq.test.runtime adhoc-runtime-ent
 xcrun clang -arch x86_64 -arch arm64 -O1 -o fat-adhoc hello.c
 codesign -s - -f --identifier org.darlinghq.test.fat fat-adhoc
+xcrun clang -arch x86_64 -arch arm64 -O1 -o fat-runtime hello.c
+codesign -s - -f -o runtime --identifier org.darlinghq.test.fatruntime fat-runtime
 cp linker-signed unsigned
 codesign --remove-signature unsigned
 
@@ -53,11 +55,11 @@ codesign -s "Darling Test Signer" --keychain "$KC" -f --timestamp=none -o runtim
 security delete-keychain "$KC"
 rm -f key.pem id.p12
 
-for f in linker-signed adhoc adhoc-runtime-ent fat-adhoc cms-signed cms-dual unsigned; do
+for f in linker-signed adhoc adhoc-runtime-ent fat-adhoc fat-runtime cms-signed cms-dual unsigned; do
 	echo "=== $f"
 	codesign -dvvv "$f" 2>&1 | sed -e 's/^Executable=.*/Executable=<path>/' -e '/^Signed Time=/d'
 	codesign -d --entitlements - --xml "$f" 2>/dev/null; echo
-	if [ "$f" = fat-adhoc ]; then
+	if [ "$f" = fat-adhoc ] || [ "$f" = fat-runtime ]; then
 		for a in x86_64 arm64; do
 			echo "--- arch $a"
 			codesign -dvvv --arch $a "$f" 2>&1 | sed -e 's/^Executable=.*/Executable=<path>/'

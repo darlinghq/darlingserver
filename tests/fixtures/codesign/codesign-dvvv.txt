@@ -130,6 +130,70 @@ Chosen signature=1
 --- verify
 fat-adhoc: valid on disk
 fat-adhoc: satisfies its Designated Requirement
+=== fat-runtime
+Executable=<path>
+Identifier=org.darlinghq.test.fatruntime
+Format=Mach-O universal (x86_64 arm64)
+CodeDirectory v=20500 size=254 flags=0x10002(adhoc,runtime) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=a173f15e757b54e501e5f43f3a32b096ce909054
+CandidateCDHashFull sha256=a173f15e757b54e501e5f43f3a32b096ce909054eb7b4bc4f473fca5ad847861
+Hash choices=sha256
+CMSDigest=a173f15e757b54e501e5f43f3a32b096ce909054eb7b4bc4f473fca5ad847861
+CMSDigestType=2
+CDHash=a173f15e757b54e501e5f43f3a32b096ce909054
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=27.0.0
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+
+--- arch x86_64
+Executable=<path>
+Identifier=org.darlinghq.test.fatruntime
+Format=Mach-O thin (x86_64)
+CodeDirectory v=20500 size=254 flags=0x10002(adhoc,runtime) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=fe3ecc9f343cd0205656c6d21c82b4ab3b1f33c3
+CandidateCDHashFull sha256=fe3ecc9f343cd0205656c6d21c82b4ab3b1f33c3796115ab0789037739e8116a
+Hash choices=sha256
+CMSDigest=fe3ecc9f343cd0205656c6d21c82b4ab3b1f33c3796115ab0789037739e8116a
+CMSDigestType=2
+CDHash=fe3ecc9f343cd0205656c6d21c82b4ab3b1f33c3
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=27.0.0
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+--- arch arm64
+Executable=<path>
+Identifier=org.darlinghq.test.fatruntime
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=254 flags=0x10002(adhoc,runtime) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=a173f15e757b54e501e5f43f3a32b096ce909054
+CandidateCDHashFull sha256=a173f15e757b54e501e5f43f3a32b096ce909054eb7b4bc4f473fca5ad847861
+Hash choices=sha256
+CMSDigest=a173f15e757b54e501e5f43f3a32b096ce909054eb7b4bc4f473fca5ad847861
+CMSDigestType=2
+CDHash=a173f15e757b54e501e5f43f3a32b096ce909054
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=27.0.0
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+--- verify
+fat-runtime: valid on disk
+fat-runtime: satisfies its Designated Requirement
 === cms-signed
 Executable=<path>
 Identifier=org.darlinghq.test.cms
