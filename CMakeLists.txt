@@ -142,6 +142,30 @@ target_link_libraries(darlingserver PRIVATE
 	${OPENSSL_CRYPTO_LIBRARY}
 )
 
+find_package(LibXml2 REQUIRED)
+
+# The code signature parser (include/darlingserver/dc_codesign.h and dc_entitlements.h).
+# Host code, shared with mldr, so it is built position-independent.
+add_library(darlingserver_dc_codesign STATIC
+	src/codesign/dc_codesign.c
+	src/codesign/dc_entitlements.c
+)
+set_target_properties(darlingserver_dc_codesign PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# <kern/cs_blobs.h> is copied into an include directory of its own, so that host code using it
+# does not also see the rest of the imported XNU headers (which clash with the host's)
+configure_file(duct-tape/xnu/osfmk/kern/cs_blobs.h ${CMAKE_CURRENT_BINARY_DIR}/codesign-include/kern/cs_blobs.h COPYONLY)
+target_include_directories(darlingserver_dc_codesign PUBLIC
+	include
+	${CMAKE_CURRENT_BINARY_DIR}/codesign-include
+)
+if (NOT OPENSSL_INCLUDE_DIR STREQUAL "/usr/include")
+	target_include_directories(darlingserver_dc_codesign PRIVATE ${OPENSSL_INCLUDE_DIR})
+endif()
+target_link_libraries(darlingserver_dc_codesign PUBLIC
+	${OPENSSL_CRYPTO_LIBRARY}
+	LibXml2::LibXml2
+)
+
 target_compile_options(darlingserver PRIVATE
 	-pthread
 	-std=c++17

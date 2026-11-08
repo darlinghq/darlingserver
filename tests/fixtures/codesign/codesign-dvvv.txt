@@ -1,0 +1,188 @@
+=== linker-signed
+Executable=<path>
+Identifier=linker-signed
+Format=Mach-O thin (arm64)
+CodeDirectory v=20400 size=262 flags=0x20002(adhoc,linker-signed) hashes=5+0 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=1e010f88a0f10df1da428fb53fad98a1637453ba
+CandidateCDHashFull sha256=1e010f88a0f10df1da428fb53fad98a1637453bae7f70012493c6daef4f93bc8
+Hash choices=sha256
+CMSDigest=1e010f88a0f10df1da428fb53fad98a1637453bae7f70012493c6daef4f93bc8
+CMSDigestType=2
+CDHash=1e010f88a0f10df1da428fb53fad98a1637453ba
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements=none
+
+--- verify
+linker-signed: valid on disk
+linker-signed: satisfies its Designated Requirement
+=== adhoc
+Executable=<path>
+Identifier=org.darlinghq.test.adhoc
+Format=Mach-O thin (arm64)
+CodeDirectory v=20400 size=241 flags=0x2(adhoc) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=c3e41403df5753a157520767cbf90e56d9ffa33f
+CandidateCDHashFull sha256=c3e41403df5753a157520767cbf90e56d9ffa33f5971ec94f4e8b3b8097723d7
+Hash choices=sha256
+CMSDigest=c3e41403df5753a157520767cbf90e56d9ffa33f5971ec94f4e8b3b8097723d7
+CMSDigestType=2
+CDHash=c3e41403df5753a157520767cbf90e56d9ffa33f
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+
+--- verify
+adhoc: valid on disk
+adhoc: satisfies its Designated Requirement
+=== adhoc-runtime-ent
+Executable=<path>
+Identifier=org.darlinghq.test.runtime
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=411 flags=0x10002(adhoc,runtime) hashes=2+7 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha1=49c5d77b0fe0fa19ada939afcae5877e5251cfe6
+CandidateCDHashFull sha1=49c5d77b0fe0fa19ada939afcae5877e5251cfe6
+CandidateCDHash sha256=67316e6b715fa9eb830be17fe5e363126d0441db
+CandidateCDHashFull sha256=67316e6b715fa9eb830be17fe5e363126d0441dbcb965cd7a16fe81ed14eb547
+Hash choices=sha1,sha256
+CMSDigest=4cc9c61353110b1094017b9828288214d3bdbedb637b5b656ebaa5846fd311c1
+CMSDigestType=2
+CDHash=67316e6b715fa9eb830be17fe5e363126d0441db
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=27.0.0
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.cs.disable-library-validation</key><false/><key>com.apple.security.get-task-allow</key><true/><key>org.darlinghq.test.string</key><string>value</string></dict></plist>
+
+--- verify
+adhoc-runtime-ent: valid on disk
+adhoc-runtime-ent: satisfies its Designated Requirement
+=== fat-adhoc
+Executable=<path>
+Identifier=org.darlinghq.test.fat
+Format=Mach-O universal (x86_64 arm64)
+CodeDirectory v=20400 size=239 flags=0x2(adhoc) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=878f5e5d73364fd8b9787492260174038a011f6a
+CandidateCDHashFull sha256=878f5e5d73364fd8b9787492260174038a011f6a2ab5a4c1bee671ab9ddbf52e
+Hash choices=sha256
+CMSDigest=878f5e5d73364fd8b9787492260174038a011f6a2ab5a4c1bee671ab9ddbf52e
+CMSDigestType=2
+CDHash=878f5e5d73364fd8b9787492260174038a011f6a
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+
+--- arch x86_64
+Executable=<path>
+Identifier=org.darlinghq.test.fat
+Format=Mach-O thin (x86_64)
+CodeDirectory v=20400 size=239 flags=0x2(adhoc) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=1744200c4dabb96a8f18824726f3468dbfb0c16c
+CandidateCDHashFull sha256=1744200c4dabb96a8f18824726f3468dbfb0c16cb0c6b0b367982a4ecb5050d8
+Hash choices=sha256
+CMSDigest=1744200c4dabb96a8f18824726f3468dbfb0c16cb0c6b0b367982a4ecb5050d8
+CMSDigestType=2
+CDHash=1744200c4dabb96a8f18824726f3468dbfb0c16c
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+--- arch arm64
+Executable=<path>
+Identifier=org.darlinghq.test.fat
+Format=Mach-O thin (arm64)
+CodeDirectory v=20400 size=239 flags=0x2(adhoc) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=878f5e5d73364fd8b9787492260174038a011f6a
+CandidateCDHashFull sha256=878f5e5d73364fd8b9787492260174038a011f6a2ab5a4c1bee671ab9ddbf52e
+Hash choices=sha256
+CMSDigest=878f5e5d73364fd8b9787492260174038a011f6a2ab5a4c1bee671ab9ddbf52e
+CMSDigestType=2
+CDHash=878f5e5d73364fd8b9787492260174038a011f6a
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+--- verify
+fat-adhoc: valid on disk
+fat-adhoc: satisfies its Designated Requirement
+=== cms-signed
+Executable=<path>
+Identifier=org.darlinghq.test.cms
+Format=Mach-O thin (arm64)
+CodeDirectory v=20400 size=239 flags=0x0(none) hashes=2+2 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=624f2b1e6c289dd7eae03f89ef5c22b6fa4dd077
+CandidateCDHashFull sha256=624f2b1e6c289dd7eae03f89ef5c22b6fa4dd077d9a6b2c2b6e89934756a5940
+Hash choices=sha256
+CMSDigest=624f2b1e6c289dd7eae03f89ef5c22b6fa4dd077d9a6b2c2b6e89934756a5940
+CMSDigestType=2
+CDHash=624f2b1e6c289dd7eae03f89ef5c22b6fa4dd077
+Signature size=1706
+Authority=Darling Test Signer
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements count=1 size=100
+Total signatures=1
+Chosen signature=1
+
+--- verify
+cms-signed: valid on disk
+cms-signed: satisfies its Designated Requirement
+=== unsigned
+unsigned: code object is not signed at all
+
+--- verify
+unsigned: code object is not signed at all
+In architecture: arm64
+=== cms-dual
+Executable=<path>
+Identifier=org.darlinghq.test.cmsdual
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=411 flags=0x10000(runtime) hashes=2+7 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha1=8e01a025317c5995b766c17889bd0e6199607ce5
+CandidateCDHashFull sha1=8e01a025317c5995b766c17889bd0e6199607ce5
+CandidateCDHash sha256=ab4845f2918045f80e0cf97f39d8e648536d489b
+CandidateCDHashFull sha256=ab4845f2918045f80e0cf97f39d8e648536d489b56328096a30bb5989cc89fa4
+Hash choices=sha1,sha256
+CMSDigest=0f65f376dd0f6c682f360ec60d87064a87725be46359b16db1a2980ce7fc4c8d
+CMSDigestType=2
+CDHash=ab4845f2918045f80e0cf97f39d8e648536d489b
+Signature size=1787
+Authority=Darling Test Signer
+Info.plist=not bound
+TeamIdentifier=not set
+Runtime Version=27.0.0
+Sealed Resources=none
+Internal requirements count=1 size=104
+Total signatures=1
+Chosen signature=1
+--- verify
+cms-dual: valid on disk
+cms-dual: satisfies its Designated Requirement

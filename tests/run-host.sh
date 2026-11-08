@@ -12,6 +12,8 @@
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
+#   codesign   links <source-root>/src/codesign (the code signature parser), compiled unchanged, the host's
+#              libcrypto and libxml2, and runs against tests/fixtures/codesign of this checkout.
 # SANITIZE overrides the sanitizer list (ASan needs far more address space than `ulimit -v` allows).
 # <source-root> defaults to this checkout; pass a checkout or `git archive` of another revision to
 # run the same test against it (that is how a test is shown to fail before its fix).
@@ -22,6 +24,7 @@ root=$(cd "${2:-$here/..}" && pwd)
 cxx=${CXX:-c++}
 cc=${CC:-cc}
 work=$(mktemp -d)
+arg=$work
 trap 'rm -rf "$work"' EXIT
 
 flags="-std=c++17 -g -O0 -fsanitize=${SANITIZE:-address,undefined} -fno-sanitize-recover=undefined -I$root/internal-include"
@@ -49,9 +52,17 @@ case $test in
 	platform_identity)
 		$cxx $flags -I"$root/include" -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/platform-identity.cpp" -lcrypto
 		;;
+	codesign)
+		# -idirafter: only <kern/cs_blobs.h> comes from XNU
+		$cc -std=gnu11 -g -O0 -fsanitize=${SANITIZE:-address,undefined} -fno-sanitize-recover=undefined \
+			-I"$root/include" -idirafter "$root/duct-tape/xnu/osfmk" $(pkg-config --cflags libxml-2.0) -o "$work/t" \
+			"$here/host/${test}_test.c" "$root/src/codesign/dc_codesign.c" "$root/src/codesign/dc_entitlements.c" \
+			-lcrypto $(pkg-config --libs libxml-2.0)
+		arg=$here/fixtures/codesign
+		;;
 	*)
 		echo "unknown test: $test" >&2
 		exit 2
 		;;
 esac
-"$work/t" "$work"
+"$work/t" "$arg"
