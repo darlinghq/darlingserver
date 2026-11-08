@@ -15,6 +15,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "procmap-query.h"
 #include PROCESS_MAPS_INC
 
 static int fails;
