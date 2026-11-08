@@ -164,9 +164,12 @@ target_include_directories(darlingserver_dc_codesign PUBLIC
 if (NOT OPENSSL_INCLUDE_DIR STREQUAL "/usr/include")
 	target_include_directories(darlingserver_dc_codesign PRIVATE ${OPENSSL_INCLUDE_DIR})
 endif()
+# Like OpenSSL above: LibXml2::LibXml2 can carry /usr/include (from pkg-config) as a
+# system include directory, which breaks libstdc++'s #include_next <stdlib.h>.
+target_include_directories(darlingserver_dc_codesign PUBLIC ${LIBXML2_INCLUDE_DIR})
 target_link_libraries(darlingserver_dc_codesign PUBLIC
 	${OPENSSL_CRYPTO_LIBRARY}
-	LibXml2::LibXml2
+	${LIBXML2_LIBRARY}
 )
 
 target_compile_options(darlingserver PRIVATE
