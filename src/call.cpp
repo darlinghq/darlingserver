@@ -320,7 +320,7 @@ void DarlingServer::Call::Checkin::processCall() {
 		if (auto process = thread->process()) {
 			// the process needs to know when the checkin occurs, in case it has a pending replacement
 			// and also to notify its parent about when the fork is complete
-			process->notifyCheckin(static_cast<Process::Architecture>(_header.architecture));
+			process->notifyCheckin(static_cast<Process::Architecture>(_header.architecture), _body.is_fork);
 		} else {
 			code = -ESRCH;
 		}
@@ -989,7 +989,13 @@ void DarlingServer::Call::ForkWaitForChild::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			process->waitForChildAfterFork();
+			// the child inherits our task's special ports (e.g. the bootstrap port) when it
+			// checks in, so the parent must not return from fork() before that. if a signal
+			// interrupted the wait, have the caller wait again; the child's check-in will
+			// still raise the semaphore.
+			if (!process->waitForChildAfterFork()) {
+				code = -EINTR;
+			}
 		} else {
 			code = -ESRCH;
 		}
