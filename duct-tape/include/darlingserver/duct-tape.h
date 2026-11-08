@@ -104,6 +104,10 @@ bool dtape_thread_pthread_testcancel(dtape_thread_t* thread);
 bool dtape_thread_pthread_markcancel(dtape_thread_t* thread, bool* interrupt);
 void dtape_thread_returning_to_user(dtape_thread_t* thread);
 
+/**
+ * Reads and optionally changes the task's uid and gid. Passing -1 as `new_uid` or `new_gid` leaves that id unchanged;
+ * any other value, including other negative ones such as -2 (`nobody`), is stored as the new id.
+ */
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 void dtape_task_retain(dtape_task_t* task);
 void dtape_task_release(dtape_task_t* task);
