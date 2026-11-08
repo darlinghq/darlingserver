@@ -110,6 +110,20 @@ namespace DarlingServer {
 		Image verifyImage(int fd, uint64_t imageOffset, Checks checks, const TrustCheck& trusted);
 
 		/**
+		 * Like verifyImage, but the flags are exactly what macOS reports, whatever @p checks is.
+		 * verifyImage applies `reportedFlags` to this.
+		 */
+		Image readImage(int fd, uint64_t imageOffset, Checks checks, const TrustCheck& trusted);
+
+		/**
+		 * The flags reported for an image with @p status and the macOS @p flags, under the policy
+		 * that asks for @p checks. Under `enforce` they are macOS's. Without enforcement, an image
+		 * that is not validly signed reports `CS_VALID` (as a process did before images were
+		 * recorded), and `CS_ENFORCEMENT` and `CS_KILL` are not reported.
+		 */
+		uint32_t reportedFlags(uint32_t status, uint32_t flags, Checks checks);
+
+		/**
 		 * Checks the CMS signature of a parsed image: a detached signature by one signer over the
 		 * primary CodeDirectory, whose signed attributes (when another CodeDirectory is the one
 		 * used) also carry that CodeDirectory's digest. The certificate chain is not evaluated.

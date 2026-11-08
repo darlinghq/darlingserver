@@ -290,7 +290,34 @@ DarlingServer::CodeSigning::Checks DarlingServer::CodeSigning::checksForPolicy(u
 	}
 };
 
+uint32_t DarlingServer::CodeSigning::reportedFlags(uint32_t status, uint32_t flags, Checks checks) {
+	if (checks == Checks::Enforce) {
+		return flags;
+	}
+
+	// Deliberate Darling difference (not a QUIRK): without enforcement, recording an image must
+	// not make a process report less than it did before images were recorded, and must not make
+	// code refuse what it would otherwise do.
+	// - An unsigned (or unreadable) image still reports CS_VALID, the status every process had
+	//   before. It has no CDHash or identity, which csops reports as "unsigned".
+	// - CS_ENFORCEMENT and CS_KILL (on macOS from the hardened runtime or `-o kill`) are not
+	//   reported: code reading them refuses things (e.g. dyld's
+	//   NSCreateObjectFileImageFromMemory). Every other flag is reported as macOS does.
+	// Under `enforce`, the flags are exactly macOS's.
+	// Test: testReportedFlags in tests/host/code_signing_test.cpp.
+	if (status != dserver_cs_status_valid) {
+		return CS_VALID;
+	}
+	return flags & ~static_cast<uint32_t>(CS_ENFORCEMENT | CS_KILL);
+};
+
 DarlingServer::CodeSigning::Image DarlingServer::CodeSigning::verifyImage(int fd, uint64_t imageOffset, Checks checks, const TrustCheck& trusted) {
+	Image result = readImage(fd, imageOffset, checks, trusted);
+	result.state.flags = reportedFlags(result.state.status, result.state.flags, checks);
+	return result;
+};
+
+DarlingServer::CodeSigning::Image DarlingServer::CodeSigning::readImage(int fd, uint64_t imageOffset, Checks checks, const TrustCheck& trusted) {
 	Image result;
 	struct stat st;
 	char err[256] = "";

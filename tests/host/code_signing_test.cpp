@@ -162,6 +162,44 @@ static void testQuirks() {
 	CHECK(runtime.state.flags == 0x22011315u, "quirk_runtime_status_flags: runtime + get-task-allow status 0x22011315 (macOS 27.0.1)");
 }
 
+// Without enforcement, nothing reports less than before images were recorded, and CS_ENFORCEMENT
+// and CS_KILL are not reported (a deliberate Darling difference, see reportedFlags)
+static void testReportedFlags() {
+	const uint32_t refusing = CS_ENFORCEMENT | CS_KILL;
+	const Checks all[] = { Checks::Signature, Checks::Report, Checks::Enforce };
+	const char* names[] = { "off", "warn", "enforce" };
+	std::vector<uint8_t> garbage(4096, 0x5a);
+	std::string garbagePath = writeWork("not-macho", garbage);
+
+	for (int i = 0; i < 3; ++i) {
+		bool enforce = all[i] == Checks::Enforce;
+		std::string policy = std::string(", policy ") + names[i];
+
+		Image unsignedImage = verifyPath(fixtureDir + "/unsigned", 0, {}, all[i]);
+		CHECK(unsignedImage.state.status == dserver_cs_status_unsigned && unsignedImage.state.flags == (enforce ? 0u : uint32_t(CS_VALID)),
+			"unsigned" + policy + (enforce ? ": no flags" : ": CS_VALID, as before images were recorded"));
+
+		Image invalid = verifyPath(garbagePath, 0, {}, all[i]);
+		CHECK(invalid.state.status == dserver_cs_status_invalid && invalid.state.flags == (enforce ? 0u : uint32_t(CS_VALID)),
+			"not a Mach-O file" + policy + (enforce ? ": no flags" : ": CS_VALID"));
+
+		// macOS 27.0.1: 0x22011315 for runtime + get-task-allow
+		Image runtime = verifyPath(fixtureDir + "/adhoc-runtime-ent", 0, {}, all[i]);
+		CHECK(runtime.state.flags == (enforce ? 0x22011315u : (0x22011315u & ~refusing)),
+			"hardened runtime" + policy + (enforce ? ": exactly macOS's flags" : ": macOS's flags without CS_ENFORCEMENT and CS_KILL"));
+		const uint32_t kept = CS_HARD | CS_RUNTIME | CS_FORCED_LV | CS_GET_TASK_ALLOW | CS_VALID | CS_SIGNED | CS_DYLD_PLATFORM;
+		CHECK((runtime.state.flags & kept) == kept, "hardened runtime" + policy + ": the other flags are reported");
+
+		Image adhoc = verifyPath(fixtureDir + "/adhoc", 0, {}, all[i]);
+		CHECK(adhoc.state.flags == 0x22000001u, "ad-hoc" + policy + ": 0x22000001");
+	}
+
+	CHECK(reportedFlags(dserver_cs_status_valid, CS_VALID | CS_KILL | CS_ENFORCEMENT | CS_HARD, Checks::Signature) == (CS_VALID | CS_HARD) &&
+		reportedFlags(dserver_cs_status_valid, CS_VALID | CS_KILL | CS_ENFORCEMENT | CS_HARD, Checks::Report) == (CS_VALID | CS_HARD) &&
+		reportedFlags(dserver_cs_status_valid, CS_VALID | CS_KILL | CS_ENFORCEMENT | CS_HARD, Checks::Enforce) == (CS_VALID | CS_KILL | CS_ENFORCEMENT | CS_HARD),
+		"reportedFlags: CS_ENFORCEMENT and CS_KILL only under enforce");
+}
+
 static size_t offsetIn(const uint8_t* pointer, const uint8_t* base) {
 	return static_cast<size_t>(pointer - base);
 }
@@ -338,7 +376,7 @@ static void testUnparsableSignatures() {
 
 	Image unsignedImage = verifyFixture("unsigned");
 	Image unsignedOff = verifyPath(fixtureDir + "/unsigned", 0, {}, Checks::Signature);
-	CHECK(unsignedImage.state.status == dserver_cs_status_unsigned && unsignedOff.state.status == dserver_cs_status_unsigned && unsignedOff.state.flags == 0,
+	CHECK(unsignedImage.state.status == dserver_cs_status_unsigned && unsignedOff.state.status == dserver_cs_status_unsigned,
 		"an unsigned binary stays unsigned under every policy");
 	CHECK(checksForPolicy(dserver_code_signing_policy_off) == Checks::Signature && checksForPolicy(dserver_code_signing_policy_warn) == Checks::Report &&
 		checksForPolicy(dserver_code_signing_policy_enforce) == Checks::Enforce, "the checks follow the policy");
@@ -670,6 +708,7 @@ int main(int argc, char** argv) {
 
 	testFixtures();
 	testQuirks();
+	testReportedFlags();
 	testTampering();
 	testUnparsableSignatures();
 	testTrustStore(argc > 4 ? argv[3] : nullptr, argc > 4 ? argv[4] : nullptr);

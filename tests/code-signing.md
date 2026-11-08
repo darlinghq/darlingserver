@@ -25,6 +25,9 @@ code signature parser and `duct-tape/src/csr.c`. It checks:
   unknown blob type, a bad SuperBlob) is reported as validly signed under `off` and `warn`
   (with the problem reported for logging) and as invalid only under `enforce`, while unsigned
   binaries stay unsigned;
+- the flags reported under each policy: under `off` and `warn`, unsigned and unreadable images
+  report `CS_VALID` (as before images were recorded) and `CS_ENFORCEMENT`/`CS_KILL` are left
+  out (a deliberate Darling difference); under `enforce`, exactly macOS's flags;
 - library validation: off without `CS_FORCED_LV`/`CS_REQUIRE_LV` or with the
   `disable-library-validation` entitlement; platform libraries load; the same team
   ID only counts with the same signing key; ad-hoc and unsigned libraries are refused;
