@@ -716,8 +716,11 @@ void dtape_psynch_thread_destroy(dtape_thread_t* thread) {
 //
 
 // uu_flag is updated both by the thread itself and by markcancel on the canceller's thread,
-// so all of these hold the thread lock while they update it
-bool dtape_thread_pthread_markcancel(dtape_thread_t* uth) {
+// so all of these hold the thread lock while they update it.
+// `interrupt` is set if the thread is to be interrupted at a cancellation point (xnu's thread_abort_safely()).
+// thread_abort_safely() here only reaches waits inside darlingserver; the caller has to reach a wait
+// in the thread itself (e.g. a ulock wait).
+bool dtape_thread_pthread_markcancel(dtape_thread_t* uth, bool* interrupt) {
 	bool abort = false;
 	bool marked;
 
@@ -739,6 +742,7 @@ bool dtape_thread_pthread_markcancel(dtape_thread_t* uth) {
 		thread_abort_safely(&uth->xnu_thread);
 	}
 
+	*interrupt = abort;
 	return marked;
 };
 

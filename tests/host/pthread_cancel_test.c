@@ -98,9 +98,11 @@ static void block_abortsafe(dtape_thread_t* t) {
 
 static void test_running_target(void) {
 	dtape_thread_t t;
+	bool interrupt = false;
 	reset(&t);
 
-	CHECK(dtape_thread_pthread_markcancel(&t), "running: markcancel reports the thread as marked");
+	CHECK(dtape_thread_pthread_markcancel(&t, &interrupt), "running: markcancel reports the thread as marked");
+	CHECK(interrupt, "running: markcancel asks for the thread to be interrupted");
 	CHECK((t.uu_flag & (UT_CANCEL | UT_CANCELED)) == UT_CANCEL, "running: UT_CANCEL set, UT_CANCELED clear");
 	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == TH_SFLAG_ABORTED_MASK, "running: a safe abort is left pending");
 
@@ -124,24 +126,29 @@ static void test_running_target(void) {
 
 static void test_blocked_target(void) {
 	dtape_thread_t t;
+	bool interrupt = false;
 	reset(&t);
 	block_abortsafe(&t);
 
-	CHECK(dtape_thread_pthread_markcancel(&t), "blocked: markcancel reports the thread as marked");
+	CHECK(dtape_thread_pthread_markcancel(&t, &interrupt), "blocked: markcancel reports the thread as marked");
+	CHECK(interrupt, "blocked: markcancel asks for the thread to be interrupted");
 	CHECK(clear_wait_calls == 1 && t.xnu_thread.wait_result == THREAD_INTERRUPTED, "blocked: the abort-safe wait is interrupted");
 	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == 0, "blocked: no abort is left pending");
 
-	CHECK(dtape_thread_pthread_markcancel(&t), "blocked: a second markcancel still reports the thread as marked");
+	CHECK(dtape_thread_pthread_markcancel(&t, &interrupt), "blocked: a second markcancel still reports the thread as marked");
+	CHECK(!interrupt, "blocked: a second markcancel does not ask for another interruption");
 	CHECK(clear_wait_calls == 1 && (t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == 0, "blocked: a second markcancel does not abort again");
 }
 
 static void test_disabled(void) {
 	dtape_thread_t t;
+	bool interrupt = false;
 	reset(&t);
 
 	CHECK(dtape_thread_pthread_canceled(&t, 2) == 0, "disabled: canceled(2) returns 0");
 	block_abortsafe(&t);
-	CHECK(dtape_thread_pthread_markcancel(&t), "disabled: markcancel still marks the thread");
+	CHECK(dtape_thread_pthread_markcancel(&t, &interrupt), "disabled: markcancel still marks the thread");
+	CHECK(!interrupt, "disabled: markcancel does not ask for the thread to be interrupted");
 	CHECK(clear_wait_calls == 0 && (t.xnu_thread.state & TH_WAIT), "disabled: the wait is not interrupted");
 	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == 0, "disabled: no abort is left pending");
 	CHECK(!dtape_thread_pthread_testcancel(&t), "disabled: testcancel is false");
@@ -155,11 +162,13 @@ static void test_disabled(void) {
 
 static void test_testcancel(void) {
 	dtape_thread_t t;
+	bool interrupt = false;
 	reset(&t);
 
 	CHECK(!dtape_thread_pthread_testcancel(&t), "testcancel: false for an unmarked thread");
 	t.uu_flag |= UT_NOTCANCELPT;
-	CHECK(dtape_thread_pthread_markcancel(&t), "notcancelpt: markcancel marks the thread");
+	CHECK(dtape_thread_pthread_markcancel(&t, &interrupt), "notcancelpt: markcancel marks the thread");
+	CHECK(!interrupt, "notcancelpt: markcancel does not ask for the thread to be interrupted");
 	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == 0, "notcancelpt: no abort inside a non-cancellation point");
 
 	CHECK(dtape_thread_pthread_testcancel(&t), "testcancel: true for a marked, enabled thread");
@@ -170,10 +179,11 @@ static void test_testcancel(void) {
 
 static void test_return_to_user(void) {
 	dtape_thread_t t;
+	bool interrupt = false;
 	reset(&t);
 
 	// cancel arrives while the thread runs user code, then it disables cancellation before sleeping
-	CHECK(dtape_thread_pthread_markcancel(&t), "return: markcancel marks the running thread");
+	CHECK(dtape_thread_pthread_markcancel(&t, &interrupt), "return: markcancel marks the running thread");
 	CHECK(dtape_thread_pthread_canceled(&t, 2) == 0, "return: canceled(2) returns 0");
 	dtape_thread_returning_to_user(&t);
 	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == 0, "return: the pending safe abort is cleared when the call replies");

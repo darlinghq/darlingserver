@@ -101,7 +101,7 @@ void dtape_thread_sigexc_enter2(dtape_thread_t* thread);
 void dtape_thread_dying(dtape_thread_t* thread);
 int dtape_thread_pthread_canceled(dtape_thread_t* thread, int action);
 bool dtape_thread_pthread_testcancel(dtape_thread_t* thread);
-bool dtape_thread_pthread_markcancel(dtape_thread_t* thread);
+bool dtape_thread_pthread_markcancel(dtape_thread_t* thread, bool* interrupt);
 void dtape_thread_returning_to_user(dtape_thread_t* thread);
 
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);

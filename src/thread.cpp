@@ -339,8 +339,9 @@ bool DarlingServer::Thread::pthreadTestcancel() {
 	return dtape_thread_pthread_testcancel(_dtapeThread);
 };
 
-void DarlingServer::Thread::pthreadMarkcancel() {
+void DarlingServer::Thread::pthreadMarkcancel(bool interruptUser) {
 	dtape_thread_t* dtapeThread = nullptr;
+	bool interrupt = false;
 
 	{
 		std::shared_lock lock(_rwlock);
@@ -353,30 +354,56 @@ void DarlingServer::Thread::pthreadMarkcancel() {
 		dtape_thread_retain(dtapeThread);
 	}
 
-	bool marked = dtape_thread_pthread_markcancel(dtapeThread);
+	bool marked = dtape_thread_pthread_markcancel(dtapeThread, &interrupt);
 	dtape_thread_release(dtapeThread);
 
 	if (!marked) {
 		return;
 	}
 
-	// a thread checks out (which marks it dead) before it unmaps its stack, and with it its TSD.
-	// holding the lock across the write keeps it from dying in between, so we never write into freed memory.
-	std::shared_lock lock(_rwlock);
-	if (_dead) {
-		return;
-	}
-	uintptr_t address = _cancelMarkedAddress;
+	bool waiting = false;
 
-	// let the thread know that it has to ask us at cancellation points.
-	// the TSD slot is pointer-sized: 4 bytes for i386 processes, 8 bytes otherwise.
-	// the thread zeroes the slot when it registers it, so writing only the low
-	// 4 bytes (little-endian) makes the slot read as 1 in either width.
-	if (address != 0) {
-		uint32_t marked = 1;
+	{
+		// a thread checks out (which marks it dead) before it unmaps its stack, and with it its TSD.
+		// holding the lock across the accesses keeps it from dying in between, so we never touch freed memory.
+		std::shared_lock lock(_rwlock);
+		if (_dead) {
+			return;
+		}
+		uintptr_t address = _cancelMarkedAddress;
 		auto proc = process();
-		if (!proc || !proc->writeMemory(address, &marked, sizeof(marked))) {
-			threadLog.warning() << *this << ": failed to set the cancel flag" << threadLog.endLog;
+
+		// the TSD slot is pointer-sized (4 bytes for i386 processes, 8 bytes otherwise), and the thread zeroes it
+		// when it registers it. its first byte is ours: setting it to 1 lets the thread know that it has to ask us
+		// at cancellation points (the slot then reads as nonzero in either width). its second byte belongs to
+		// the thread, which sets it while it waits at a cancellation point in user space (e.g. in a ulock wait).
+		if (address != 0) {
+			uint8_t flag = 1;
+			if (!proc || !proc->writeMemory(address, &flag, sizeof(flag))) {
+				threadLog.warning() << *this << ": failed to set the cancel flag" << threadLog.endLog;
+			} else if (interrupt && interruptUser) {
+				// the thread sets its byte before it checks ours, and we check its byte after we set ours,
+				// so either it sees our flag before it waits, or we see that it waits (or both)
+				std::atomic_thread_fence(std::memory_order_seq_cst);
+
+				uint8_t threadWaiting = 0;
+				if (proc->readMemory(address + 1, &threadWaiting, sizeof(threadWaiting))) {
+					waiting = threadWaiting != 0;
+				}
+			}
+		}
+	}
+
+	// in xnu, a ulock wait is an abort-safe kernel wait that thread_abort_safely() ends with EINTR.
+	// here, it is a futex wait in the thread itself, out of reach of the duct-taped thread_abort_safely().
+	// interrupt it with the signal that thread_hold() uses: with no suspension pending, its handler only tells us
+	// about the interruption, and libsystem_kernel makes the cancelable wait return EINTR.
+	if (waiting) {
+		try {
+			sendSignal(LINUX_SIGRTMIN);
+		} catch (const std::system_error& e) {
+			// the thread has exited in the meantime
+			threadLog.debug() << *this << ": failed to interrupt the thread for cancellation: " << e.code() << threadLog.endLog;
 		}
 	}
 };
