@@ -115,13 +115,17 @@ static void expectValid(const std::string& name, uint64_t offset, const char* cd
 static void testFixtures() {
 	const uint32_t base = CS_SIGNED | CS_VALID | CS_DYLD_PLATFORM;
 	// hardened runtime (and its implied flags) and get-task-allow; macOS reports 0x22011315 for this
-	const uint32_t runtimeGta = base | CS_RUNTIME | CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV | CS_GET_TASK_ALLOW;
+	const uint32_t runtime = base | CS_RUNTIME | CS_HARD | CS_KILL | CS_ENFORCEMENT | CS_FORCED_LV;
+	const uint32_t runtimeGta = runtime | CS_GET_TASK_ALLOW;
 
 	expectValid("linker-signed", 0, "1e010f88a0f10df1da428fb53fad98a1637453ba", base | CS_LINKER_SIGNED, dserver_cs_signer_adhoc, "linker-signed");
 	expectValid("adhoc", 0, "c3e41403df5753a157520767cbf90e56d9ffa33f", base, dserver_cs_signer_adhoc, "org.darlinghq.test.adhoc");
 	expectValid("adhoc-runtime-ent", 0, "67316e6b715fa9eb830be17fe5e363126d0441db", runtimeGta, dserver_cs_signer_adhoc, "org.darlinghq.test.runtime");
 	expectValid("fat-adhoc", 16384, "1744200c4dabb96a8f18824726f3468dbfb0c16c", base, dserver_cs_signer_adhoc, "org.darlinghq.test.fat");
 	expectValid("fat-adhoc", 32768, "878f5e5d73364fd8b9787492260174038a011f6a", base, dserver_cs_signer_adhoc, "org.darlinghq.test.fat");
+	// macOS reports 0x22011311 for an ad-hoc `-o runtime` signature
+	expectValid("fat-runtime", 16384, "fe3ecc9f343cd0205656c6d21c82b4ab3b1f33c3", runtime, dserver_cs_signer_adhoc, "org.darlinghq.test.fatruntime");
+	expectValid("fat-runtime", 32768, "a173f15e757b54e501e5f43f3a32b096ce909054", runtime, dserver_cs_signer_adhoc, "org.darlinghq.test.fatruntime");
 	expectValid("cms-signed", 0, "624f2b1e6c289dd7eae03f89ef5c22b6fa4dd077", base, dserver_cs_signer_certificate, "org.darlinghq.test.cms");
 	expectValid("cms-dual", 0, "ab4845f2918045f80e0cf97f39d8e648536d489b", runtimeGta, dserver_cs_signer_certificate, "org.darlinghq.test.cmsdual");
 
@@ -189,6 +193,11 @@ static void testReportedFlags() {
 			"hardened runtime" + policy + (enforce ? ": exactly macOS's flags" : ": macOS's flags without CS_ENFORCEMENT and CS_KILL"));
 		const uint32_t kept = CS_HARD | CS_RUNTIME | CS_FORCED_LV | CS_GET_TASK_ALLOW | CS_VALID | CS_SIGNED | CS_DYLD_PLATFORM;
 		CHECK((runtime.state.flags & kept) == kept, "hardened runtime" + policy + ": the other flags are reported");
+
+		// the x86_64 slice of a universal hardened-runtime program (macOS: 0x22011311)
+		Image fatRuntime = verifyPath(fixtureDir + "/fat-runtime", 16384, {}, all[i]);
+		CHECK(fatRuntime.state.flags == (enforce ? 0x22011311u : (0x22011311u & ~refusing)),
+			"fat-runtime x86_64" + policy + (enforce ? ": exactly macOS's flags" : ": without CS_ENFORCEMENT and CS_KILL"));
 
 		Image adhoc = verifyPath(fixtureDir + "/adhoc", 0, {}, all[i]);
 		CHECK(adhoc.state.flags == 0x22000001u, "ad-hoc" + policy + ": 0x22000001");
