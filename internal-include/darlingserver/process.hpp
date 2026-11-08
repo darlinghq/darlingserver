@@ -252,6 +252,12 @@ namespace DarlingServer {
 		 */
 		void denyAttach();
 
+		/**
+		 * Records that the process applied a sandbox profile. This cannot be undone; the
+		 * process's forked children and the images it execs stay marked.
+		 */
+		void markSandboxed();
+
 		std::string executablePath() const;
 		void setExecutablePath(std::string path);
 

@@ -707,6 +707,16 @@ static void testPageSize() {
 	CHECK(verifyFixture("unsigned").pageSizeLog2 == 0, "unsigned: no hash page size");
 }
 
+static void testDarlingFlagLifetime() {
+	const uint32_t all = DSERVER_CS_DENY_ATTACH | DSERVER_CS_TRUST_STORE | DSERVER_CS_SANDBOXED;
+	CHECK(darlingFlagsKeptAcrossExec(all) == (DSERVER_CS_DENY_ATTACH | DSERVER_CS_SANDBOXED), "exec: deny-attach and the sandbox are kept, the old image's trust store bit is not");
+	CHECK(darlingFlagsKeptAcrossExec(DSERVER_CS_SANDBOXED) == DSERVER_CS_SANDBOXED, "exec: a sandboxed process stays sandboxed");
+	CHECK(darlingFlagsKeptAcrossExec(0) == 0, "exec: nothing is added");
+	CHECK(darlingFlagsInheritedByFork(all) == (DSERVER_CS_TRUST_STORE | DSERVER_CS_SANDBOXED), "fork: the child keeps its parent's sandbox and image, not its deny-attach");
+	CHECK(darlingFlagsInheritedByFork(DSERVER_CS_SANDBOXED) == DSERVER_CS_SANDBOXED, "fork: the child of a sandboxed process is sandboxed");
+	CHECK(darlingFlagsInheritedByFork(0) == 0, "fork: nothing is added");
+}
+
 int main(int argc, char** argv) {
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <fixture directory> <work directory> [<tool store> <tool public key>]\n", argv[0]);
@@ -725,6 +735,7 @@ int main(int argc, char** argv) {
 	testLibraryValidation();
 	testFlagRules();
 	testPageSize();
+	testDarlingFlagLifetime();
 
 	printf("%d failure(s)\n", fails);
 	return fails ? 1 : 0;

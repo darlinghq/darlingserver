@@ -199,6 +199,13 @@ namespace DarlingServer {
 		 * `enforce` and its image lacks the entitlement for it.
 		 */
 		bool clearLibraryValidationRule(uint32_t policy, const Image& image);
+
+		/**
+		 * The `DSERVER_CS_*` bits that a process keeps when it execs (and when it then registers
+		 * its new image), and those a forked child takes from its parent.
+		 */
+		uint32_t darlingFlagsKeptAcrossExec(uint32_t darlingFlags);
+		uint32_t darlingFlagsInheritedByFork(uint32_t darlingFlags);
 	};
 };
 

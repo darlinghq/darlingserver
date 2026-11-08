@@ -35,6 +35,8 @@ code signature parser and `duct-tape/src/csr.c`. It checks:
   privileges or library validation; that `CS_OPS_CLEAR_LV` needs the clear-library-validation
   entitlement only under `enforce`;
 - the hash page size `cs_verify_image` reports (4 KiB and 16 KiB fixtures, none when unsigned);
+- which Darling bits survive exec (deny-attach, the sandbox mark of `cs_mark_sandboxed`) and
+  which a forked child inherits (everything but deny-attach);
 - the trust store format: a valid and an empty store, another key, an RSA key, changed entries
   or signature, unsorted or duplicate entries, another issuer, wrong signature length,
   truncated, trailing data, impossible counts; a store written by `tools/dc-trustcache.py`;
