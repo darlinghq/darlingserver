@@ -28,6 +28,7 @@
 #include <mutex>
 #include <optional>
 #include <functional>
+#include <array>
 
 namespace DarlingServer {
 	class Address {
@@ -171,13 +172,29 @@ namespace DarlingServer {
 	class MessageQueue {
 	private:
 		std::deque<Message> _messages;
+		// receiveMany()'s receive buffers; a slot is refilled only after its message was taken,
+		// so a round that receives little does not allocate a whole new set of buffers
+		std::array<std::optional<Message>, 16> _receiveSlots;
 		mutable std::mutex _lock;
 		std::function<void()> _messageArrivalNotificationCallback = nullptr;
+
+		void _notifyIfNotEmpty();
 
 	public:
 		void setMessageArrivalNotificationCallback(std::function<void()> messageArrivalNotificationCallback);
 
 		void push(Message&& message);
+
+		/**
+		 * Queues the message and sends as much of the queue as the socket takes right away, on the calling thread.
+		 *
+		 * Sending always starts at the head of the queue (as in sendMany()), so the message never overtakes messages
+		 * queued before it. The message-arrival notification callback is only called when messages are left in the queue,
+		 * i.e. when the socket could not take them all or sending failed; whoever handles it retries with sendMany().
+		 * Errors are thrown as in sendMany(), after that notification; the messages stay queued.
+		 */
+		void pushAndSend(Message&& message, int socket);
+
 		std::optional<Message> pop();
 
 		bool sendMany(int socket);

@@ -917,5 +917,12 @@ std::shared_ptr<DarlingServer::FD> DarlingServer::Monitor::fd() const {
 };
 
 void DarlingServer::Server::sendMessage(Message&& message) {
-	_outbox.push(std::move(message));
+	// send it from this thread instead of waking the main loop for it; the main loop is only woken (through the
+	// outbox's notification callback) when the socket is full, and then sends the rest once it is writable again
+	try {
+		_outbox.pushAndSend(std::move(message), _listenerSocket);
+	} catch (const std::system_error&) {
+		// the messages stay in the outbox and the main loop has been notified: its sendMany() reports the error,
+		// as it did before replies were sent from here
+	}
 };
