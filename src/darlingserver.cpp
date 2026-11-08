@@ -325,6 +325,8 @@ static bool isOnWsl1() {
 	if (!initialized) {
 		initialized = true;
 		// WSL1 kernels report a release such as "4.4.0-19041-Microsoft"; WSL2 uses "-microsoft-standard".
+		// The match is case-sensitive on purpose: a case-insensitive one would also match WSL2,
+		// which does not need the WSL1 workarounds.
 		struct utsname name;
 		result = uname(&name) == 0 && strstr(name.release, "Microsoft") != NULL;
 	}
