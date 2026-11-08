@@ -105,6 +105,7 @@ dserver_host_test(arg_parse SOURCES ${host}/arg_parse_test.cpp ${gen}/arg_parse.
 target_compile_definitions(dserver_arg_parse_test PRIVATE ARG_PARSE_INC="${gen}/arg_parse.inc")
 
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
+target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)
 target_compile_definitions(dserver_process_maps_test PRIVATE PROCESS_MAPS_INC="${gen}/process_maps.inc")
 
 dserver_host_test(pthread_cancel SOURCES ${host}/pthread_cancel_test.c ${gen}/pthread_cancel_defs.inc ${gen}/pthread_cancel_fns.inc)

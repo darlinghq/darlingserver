@@ -37,38 +37,7 @@
 #include <linux/fs.h>
 #include <atomic>
 
-// PROCMAP_QUERY (Linux 6.11) looks up a single VMA of another process through its `/proc/<pid>/maps`
-// descriptor. Older userspace headers lack it; its ABI is fixed, so define it here. On an older running
-// kernel the ioctl fails with ENOTTY and the text of `/proc/<pid>/maps` is parsed instead.
-#ifndef PROCMAP_QUERY
-#include <linux/types.h>
-enum procmap_query_flags {
-	PROCMAP_QUERY_VMA_READABLE = 0x01,
-	PROCMAP_QUERY_VMA_WRITABLE = 0x02,
-	PROCMAP_QUERY_VMA_EXECUTABLE = 0x04,
-	PROCMAP_QUERY_VMA_SHARED = 0x08,
-	PROCMAP_QUERY_COVERING_OR_NEXT_VMA = 0x10,
-	PROCMAP_QUERY_FILE_BACKED_VMA = 0x20,
-};
-struct procmap_query {
-	__u64 size;
-	__u64 query_flags;
-	__u64 query_addr;
-	__u64 vma_start;
-	__u64 vma_end;
-	__u64 vma_flags;
-	__u64 vma_page_size;
-	__u64 vma_offset;
-	__u64 inode;
-	__u32 dev_major;
-	__u32 dev_minor;
-	__u32 vma_name_size;
-	__u32 build_id_size;
-	__u64 vma_name_addr;
-	__u64 build_id_addr;
-};
-#define PROCMAP_QUERY _IOWR('f', 17, struct procmap_query)
-#endif
+#include "procmap-query.h"
 
 static DarlingServer::Log processLog("process");
 
