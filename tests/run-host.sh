@@ -13,6 +13,8 @@
 #              <sys/csr.h> comes from the imported XNU headers.
 #   process_state  includes closeInheritedFds() and sanitizeProcessState() cut out of
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
+#   prefix_preinit  includes wipeDir() and darlingPreInit() cut out of <source-root>/src/darlingserver.cpp
+#              (tests/host/extract-static.sh) and runs them on prefixes in a private directory.
 #   prefix_setup  links <source-root>/src/prefix-setup.cpp, compiled unchanged, and runs it as the
 #              current (unprivileged) user in a private directory.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
@@ -58,6 +60,10 @@ case $test in
 	process_state)
 		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" closeInheritedFds sanitizeProcessState > "$work/process_state.inc"
 		$cxx $flags -DPROCESS_STATE_INC="\"$work/process_state.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
+		;;
+	prefix_preinit)
+		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" wipeDir darlingPreInit > "$work/prefix_preinit.inc"
+		$cxx $flags -DPREFIX_PREINIT_INC="\"$work/prefix_preinit.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
 		;;
 	prefix_setup)
 		$cxx $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/prefix-setup.cpp"

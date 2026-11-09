@@ -73,6 +73,14 @@ add_custom_command(
 	VERBATIM
 )
 add_custom_command(
+	OUTPUT ${gen}/prefix_preinit.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/prefix_preinit.inc
+		${host}/extract-static.sh ${root}/src/darlingserver.cpp wipeDir darlingPreInit
+	DEPENDS ${host}/extract-static.sh ${root}/src/darlingserver.cpp
+	VERBATIM
+)
+add_custom_command(
 	OUTPUT ${gen}/process_maps.inc
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/process_maps.inc
@@ -117,6 +125,9 @@ target_compile_definitions(dserver_arg_parse_test PRIVATE ARG_PARSE_INC="${gen}/
 
 dserver_host_test(process_state TEMP_DIR SOURCES ${host}/process_state_test.cpp ${gen}/process_state.inc)
 target_compile_definitions(dserver_process_state_test PRIVATE PROCESS_STATE_INC="${gen}/process_state.inc")
+
+dserver_host_test(prefix_preinit TEMP_DIR SOURCES ${host}/prefix_preinit_test.cpp ${gen}/prefix_preinit.inc)
+target_compile_definitions(dserver_prefix_preinit_test PRIVATE PREFIX_PREINIT_INC="${gen}/prefix_preinit.inc")
 
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
 target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)
