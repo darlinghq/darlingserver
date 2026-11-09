@@ -1536,63 +1536,105 @@ kern_return_t thread_policy(thread_t thread, policy_t policy, policy_base_t base
 	return KERN_SUCCESS;
 };
 
+// Darling keeps no per-thread scheduling policy (thread_policy_set accepts and ignores it), so every
+// thread reports what a thread with nothing set reports on macOS. Each flavor fills in only its own
+// count of integers; `get_default` is left as the caller passed it unless noted.
 kern_return_t thread_policy_get(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
 	if (!thread || !policy_info || !count || !get_default) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mach_msg_type_number_t required;
 	switch (flavor) {
-		case THREAD_EXTENDED_POLICY:
-			required = THREAD_EXTENDED_POLICY_COUNT;
-			break;
-		case THREAD_TIME_CONSTRAINT_POLICY:
-			required = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
-			break;
+		case THREAD_EXTENDED_POLICY: {
+			// QUIRK: a count smaller than THREAD_EXTENDED_POLICY_COUNT is not an error for this flavor:
+			// the call succeeds and returns nothing, with the count unchanged (0 stays 0).
+			// Not documented. Evidence: black-box observation on macOS 27, arm64 and x86_64 under
+			// Rosetta (tier 2).
+			// Test: tests/src/thread_policy_get.c (main tree), "EXTENDED with count 0".
+			if (*count < THREAD_EXTENDED_POLICY_COUNT) {
+				return KERN_SUCCESS;
+			}
+			((thread_extended_policy_t)policy_info)->timeshare = TRUE;
+			*count = THREAD_EXTENDED_POLICY_COUNT;
+			return KERN_SUCCESS;
+		}
+
+		case THREAD_TIME_CONSTRAINT_POLICY: {
+			if (*count < THREAD_TIME_CONSTRAINT_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			// QUIRK: a thread that is not real-time reports period 0, computation 5 ms, constraint
+			// 10 ms (both in absolute time units) and preemptible TRUE, and get_default is set to TRUE.
+			// Not documented. Evidence: black-box observation on macOS 27, arm64 and x86_64 under
+			// Rosetta (tier 2).
+			// Test: tests/src/thread_policy_get.c (main tree), "TIME_CONSTRAINT".
+			thread_time_constraint_policy_t info = (thread_time_constraint_policy_t)policy_info;
+			uint64_t computation, constraint;
+			nanoseconds_to_absolutetime(5 * NSEC_PER_MSEC, &computation);
+			nanoseconds_to_absolutetime(10 * NSEC_PER_MSEC, &constraint);
+			info->period = 0;
+			info->computation = (uint32_t)computation;
+			info->constraint = (uint32_t)constraint;
+			info->preemptible = TRUE;
+			*count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+			*get_default = TRUE;
+			return KERN_SUCCESS;
+		}
+
 		case THREAD_PRECEDENCE_POLICY:
-			required = THREAD_PRECEDENCE_POLICY_COUNT;
-			break;
-		case THREAD_AFFINITY_POLICY:
-			required = THREAD_AFFINITY_POLICY_COUNT;
-			break;
-		case THREAD_BACKGROUND_POLICY:
-			required = THREAD_BACKGROUND_POLICY_COUNT;
-			break;
-		case THREAD_POLICY_STATE:
-			required = THREAD_POLICY_STATE_COUNT;
-			break;
+			if (*count < THREAD_PRECEDENCE_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			((thread_precedence_policy_t)policy_info)->importance = 0;
+			*count = THREAD_PRECEDENCE_POLICY_COUNT;
+			return KERN_SUCCESS;
+
 		case THREAD_LATENCY_QOS_POLICY:
-			required = THREAD_LATENCY_QOS_POLICY_COUNT;
-			break;
+			if (*count < THREAD_LATENCY_QOS_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			((thread_latency_qos_policy_t)policy_info)->thread_latency_qos_tier = LATENCY_QOS_TIER_UNSPECIFIED;
+			*count = THREAD_LATENCY_QOS_POLICY_COUNT;
+			return KERN_SUCCESS;
+
 		case THREAD_THROUGHPUT_QOS_POLICY:
-			required = THREAD_THROUGHPUT_QOS_POLICY_COUNT;
-			break;
-		case THREAD_QOS_POLICY:
-		case THREAD_QOS_POLICY_OVERRIDE:
-			required = THREAD_QOS_POLICY_COUNT;
-			break;
+			if (*count < THREAD_THROUGHPUT_QOS_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			((thread_throughput_qos_policy_t)policy_info)->thread_throughput_qos_tier = THROUGHPUT_QOS_TIER_UNSPECIFIED;
+			*count = THREAD_THROUGHPUT_QOS_POLICY_COUNT;
+			return KERN_SUCCESS;
+
+		case THREAD_QOS_POLICY: {
+			if (*count < THREAD_QOS_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			// QUIRK: a thread with no QoS set reports THREAD_QOS_LEGACY with relative priority 0, but
+			// the default asked for with get_default TRUE is THREAD_QOS_UNSPECIFIED.
+			// Not documented. Evidence: black-box observation on macOS 27, arm64 and x86_64 under
+			// Rosetta (tier 2).
+			// Test: tests/src/thread_policy_get.c (main tree), "QOS".
+			thread_qos_policy_t info = (thread_qos_policy_t)policy_info;
+			info->qos_tier = *get_default ? THREAD_QOS_UNSPECIFIED : THREAD_QOS_LEGACY;
+			info->tier_importance = 0;
+			*count = THREAD_QOS_POLICY_COUNT;
+			return KERN_SUCCESS;
+		}
+
+		// QUIRK: affinity sets are not supported (KERN_NOT_SUPPORTED), and the private
+		// THREAD_POLICY_STATE flavor is refused with KERN_PROTECTION_FAILURE for an ordinary caller.
+		// Not documented. Evidence: black-box observation on macOS 27, arm64 and x86_64 under
+		// Rosetta (tier 2).
+		// Test: tests/src/thread_policy_get.c (main tree), "AFFINITY" and "POLICY_STATE".
+		case THREAD_AFFINITY_POLICY:
+			return KERN_NOT_SUPPORTED;
+		case THREAD_POLICY_STATE:
+			return KERN_PROTECTION_FAILURE;
+
+		// THREAD_BACKGROUND_POLICY and THREAD_QOS_POLICY_OVERRIDE can be set but not read
 		default:
 			return KERN_INVALID_ARGUMENT;
 	}
-
-	if (*count < required) {
-		return KERN_INVALID_ARGUMENT;
-	}
-	memset(policy_info, 0, required * sizeof(integer_t));
-	*count = required;
-	*get_default = TRUE;
-
-	if (flavor == THREAD_EXTENDED_POLICY) {
-		((thread_extended_policy_t)policy_info)->timeshare = TRUE;
-	} else if (flavor == THREAD_QOS_POLICY || flavor == THREAD_QOS_POLICY_OVERRIDE) {
-		((thread_qos_policy_t)policy_info)->qos_tier = THREAD_QOS_LEGACY;
-	} else if (flavor == THREAD_POLICY_STATE) {
-		thread_policy_state_t state = (thread_policy_state_t)policy_info;
-		state->requested = THREAD_QOS_LEGACY;
-		state->effective = THREAD_QOS_LEGACY;
-	}
-
-	return KERN_SUCCESS;
 };
 
 kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t policy_info, mach_msg_type_number_t count) {
