@@ -20,7 +20,10 @@
 #ifndef _DARLINGSERVER_PREFIX_SETUP_HPP_
 #define _DARLINGSERVER_PREFIX_SETUP_HPP_
 
+#include <string>
 #include <string_view>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // Helpers for the part of darlingserver's startup that runs as root and assembles the user's prefix.
 // They hold no state, so that they can be tested on the host as an ordinary user.
@@ -31,6 +34,44 @@ namespace DarlingServer::PrefixSetup {
 	// refused rather than escaped. Control characters are refused too, and so is anything but an
 	// absolute path.
 	bool isPlainOptionPath(std::string_view path);
+
+	// Splits an absolute path into the directory holding it and its last component, ignoring
+	// trailing slashes ("/a/b/" gives "/a" and "b"). Fails for a relative path, for "/" and for a
+	// last component of "." or "..".
+	bool splitPath(std::string_view path, std::string& parent, std::string& name);
+
+	// Whether a directory, as opened by the user, may be used as that user's prefix: it must be the
+	// user's, and nobody else may be able to change its entries. A group-writable prefix is accepted
+	// only with the user's own primary group; the launcher checks further that this group has no
+	// other members.
+	bool prefixDirAcceptable(const struct stat& st, uid_t uid, gid_t gid);
+
+	// Whether the work directory next to the prefix may be used: it must be the user's, or root's
+	// (older launchers created it as root) and then writable by nobody else.
+	bool workDirAcceptable(const struct stat& st, uid_t uid);
+
+	// Whether a directory is root's and closed to everybody else.
+	bool privateRootDirAcceptable(const struct stat& st);
+
+	// Creates in the directory upperFd every directory of the tree below lowerFd that it lacks, with
+	// the permission bits of the lower directory. Existing entries are left as they are, and nothing
+	// in the upper tree is followed if it is not a real directory. Run as the user, this makes the
+	// directories of the assembled prefix the user's, without root changing any owner. Problems are
+	// reported and skipped.
+	void mirrorDirectories(int lowerFd, int upperFd);
+
+	// Copies the tree below lowerFd into upperFd (the copy mode). A file or symbolic link replaces an
+	// older one of the same kind, gets the attributes of the lower one when both have the same
+	// modification time, and is left alone when it is newer or of a different kind. A new directory
+	// gets the lower directory's owner, mode and times.
+	//
+	// The upper tree may be changed by its owner while this runs as root, so every step works on a
+	// single name relative to a directory descriptor and never follows a symbolic link; new files are
+	// created exclusively, and the attributes of an existing file are changed through a descriptor of
+	// that file, never by name. The set-user-ID and set-group-ID bits are only given to a file this
+	// call created and filled itself. An entry that changes kind while this runs is skipped.
+	// Returns false, after a message, on any other error.
+	bool copyTree(int lowerFd, int upperFd);
 };
 
 #endif // _DARLINGSERVER_PREFIX_SETUP_HPP_
