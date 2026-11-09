@@ -56,41 +56,48 @@
 	#define DARLINGSERVER_INIT_PROCESS "/sbin/launchd"
 #endif
 
-#ifndef DARLINGSERVER_XDG_USER_DIR_CMD
-	#define DARLINGSERVER_XDG_USER_DIR_CMD "xdg-user-dir"
-#endif
-
 #if DSERVER_ASAN
 	#include <sanitizer/lsan_interface.h>
 #endif
 
 // TODO: most of the code here was ported over from startup/darling.c; we should C++-ify it.
 
-const char* xdgDirectory(const char* name)
+// The user's directory of this kind (an xdg-user-dirs name such as "DOWNLOAD"), exactly as
+// xdg-user-dir prints it, including its fallback to $HOME (or $HOME/Desktop) when the file or the
+// entry is missing. The configuration file is read and parsed here rather than by running
+// xdg-user-dir, a shell script that sources it: this runs with the user's ids only, and nothing the
+// user configures gets to run. An empty result (xdg-user-dir printing an empty line) means no link.
+static bool xdgDirectory(const std::string& config, const char* name, const char* home, std::string& dir)
 {
-	static char dir[4096];
-	char* cmd = (char*) malloc(sizeof(DARLINGSERVER_XDG_USER_DIR_CMD) + 1 + strlen(name));
+	dir = DarlingServer::PrefixSetup::userDirOrDefault(config, name, home);
+	return !dir.empty();
+}
 
-	sprintf(cmd, DARLINGSERVER_XDG_USER_DIR_CMD " %s", name);
+// Reads the user's user-dirs.dirs, from $XDG_CONFIG_HOME or else ~/.config. Without one, contents
+// stays empty and every directory gets xdg-user-dir's fallback.
+static bool readUserDirsConfig(const char* home, std::string& contents)
+{
+	const char* configHome = getenv("XDG_CONFIG_HOME");
+	std::string path = (configHome && configHome[0] == '/') ? std::string(configHome) : std::string(home) + "/.config";
+	path += "/user-dirs.dirs";
 
-	FILE* proc = popen(cmd, "r");
+	int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0)
+		return false;
 
-	free(cmd);
+	struct stat st;
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
+	{
+		close(fd);
+		return false;
+	}
 
-	if (!proc)
-		return NULL;
-
-	fgets(dir, sizeof(dir)-1, proc);
-
-	pclose(proc);
-
-	size_t len = strlen(dir);
-	if (len <= 1)
-		return NULL;
-
-	if (dir[len-1] == '\n')
-		dir[len-1] = '\0';
-	return dir;
+	char buffer[4096];
+	ssize_t got;
+	while (contents.size() < 65536 && (got = read(fd, buffer, sizeof(buffer))) > 0)
+		contents.append(buffer, got);
+	close(fd);
+	return true;
 }
 
 void setupUserHome(const char* prefix, uid_t originalUID)
@@ -144,6 +151,9 @@ void setupUserHome(const char* prefix, uid_t originalUID)
 	// symlink /Users/$LOGIN/LinuxHome -> $HOME
 	symlink(buf2, buf);
 
+	std::string userDirsConfig;
+	readUserDirsConfig(home, userDirsConfig);
+
 	static const char* xdgmap[][2] = {
 		{ "DESKTOP", "Desktop" },
 		{ "DOWNLOAD", "Downloads" },
@@ -156,11 +166,11 @@ void setupUserHome(const char* prefix, uid_t originalUID)
 
 	for (int i = 0; i < sizeof(xdgmap) / sizeof(xdgmap[0]); i++)
 	{
-		const char* dir = xdgDirectory(xdgmap[i][0]);
-		if (!dir)
+		std::string dir;
+		if (!xdgDirectory(userDirsConfig, xdgmap[i][0], home, dir))
 			continue;
 
-		snprintf(buf2, sizeof(buf2), "/Volumes/SystemRoot%s", dir);
+		snprintf(buf2, sizeof(buf2), "/Volumes/SystemRoot%s", dir.c_str());
 		snprintf(buf, sizeof(buf), "%s/Users/%s/%s", prefix, login, xdgmap[i][1]);
 
 		unlink(buf);
@@ -796,11 +806,12 @@ int main(int argc, char** argv) {
 	}
 	userGroups.resize(groupCount);
 
-	// temporarily drop privileges to perform some prefix work
-	temp_drop_privileges(originalUID, originalGID);
-	setupUserHome(prefix, originalUID);
+	// Set up /Users in the prefix. It needs no privileges and reads the user's own configuration, so
+	// it runs in a child that has dropped root for good.
+	if (!runAsUser(originalUID, originalGID, [prefix, originalUID]() { setupUserHome(prefix, originalUID); return true; })) {
+		exit(1);
+	}
 	//setupCoredumpPattern();
-	regain_privileges();
 
 	// read the default rlimit so we can restore it for our children
 	if (getrlimit(RLIMIT_NOFILE, &default_limit) != 0) {

@@ -71,7 +71,6 @@ endif()
 add_subdirectory(duct-tape)
 
 set(DARLINGSERVER_INIT_PROCESS "/sbin/launchd" CACHE STRING "The init process darlingserver should execute (default is \"/sbin/launchd\")")
-set(DARLINGSERVER_XDG_USER_DIR_CMD "xdg-user-dir" CACHE STRING "The xdg-user-dir binary darlingserver should execute (default is \"xdg-user-dir\")")
 
 include_directories(
 	include
@@ -210,12 +209,6 @@ install(TARGETS darlingserver DESTINATION bin)
 if (NOT "${DARLINGSERVER_INIT_PROCESS}" STREQUAL "")
 	target_compile_definitions(darlingserver PRIVATE
 		DARLINGSERVER_INIT_PROCESS="${DARLINGSERVER_INIT_PROCESS}"
-	)
-endif()
-
-if (NOT "${DARLINGSERVER_XDG_USER_DIR_CMD}" STREQUAL "")
-	target_compile_definitions(darlingserver PRIVATE
-		DARLINGSERVER_XDG_USER_DIR_CMD="${DARLINGSERVER_XDG_USER_DIR_CMD}"
 	)
 endif()
 

@@ -72,6 +72,18 @@ namespace DarlingServer::PrefixSetup {
 	// call created and filled itself. An entry that changes kind while this runs is skipped.
 	// Returns false, after a message, on any other error.
 	bool copyTree(int lowerFd, int upperFd);
+
+	// Looks up one of the user's directories (name is "DOWNLOAD", "MUSIC" and so on) in the contents
+	// of an xdg-user-dirs configuration file, user-dirs.dirs. Its lines have the form
+	// XDG_<NAME>_DIR="$HOME/<path>" or XDG_<NAME>_DIR="/<path>", with backslash escapes inside the
+	// quotes; lines starting with '#' are comments, and the last valid line for a name wins.
+	// Returns false if no valid line sets the name.
+	bool findUserDir(std::string_view contents, std::string_view name, std::string_view home, std::string& dir);
+
+	// What xdg-user-dir prints for a name: the directory the configuration contents set (empty when
+	// there is no configuration file), or else its fallback, home with "/Desktop" for "DESKTOP" and
+	// home itself for any other name. The caller treats an empty result as no directory.
+	std::string userDirOrDefault(std::string_view contents, std::string_view name, std::string_view home);
 };
 
 #endif // _DARLINGSERVER_PREFIX_SETUP_HPP_

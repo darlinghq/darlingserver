@@ -266,6 +266,50 @@ static void testCopy() {
 	outsideUntouched("c/outside", "copying does not follow links or hard links in the user's tree");
 }
 
+static void testUserDirs() {
+	const char* config =
+		"# This file is written by xdg-user-dirs-update\n"
+		"XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n"
+		"XDG_DOWNLOAD_DIR=\"$HOME/Stažené\"\n"
+		"  XDG_MUSIC_DIR=\"/data/music\"  \n"
+		"XDG_PICTURES_DIR=\"$HOME\"\n"
+		"XDG_VIDEOS_DIR=\"$HOME/a \\\"b\\\" \\$c \\\\d\"\n"
+		"XDG_DOCUMENTS_DIR=\"$HOMEWORK/x\"\n"
+		"XDG_PUBLICSHARE_DIR=\"relative/path\"\n"
+		"XDG_TEMPLATES_DIR=\"$HOME/one\"\n"
+		"XDG_TEMPLATES_DIR=\"$HOME/two\"\n"
+		"XDG_TEMPLATES_DIR=$(touch /tmp/x)\n"
+		"#XDG_CACHE_DIR=\"/commented\"\n"
+		"XDG_UNCLOSED_DIR=\"$HOME/x\n"
+		"XDG_TRAILING_DIR=\"$HOME/x\"; touch /tmp/x\n";
+	std::string dir;
+
+	CHECK(findUserDir(config, "DESKTOP", "/home/u", dir) && dir == "/home/u/Desktop", "$HOME is expanded");
+	CHECK(findUserDir(config, "DOWNLOAD", "/home/u", dir) && dir == "/home/u/Stažené", "non-ASCII names are kept");
+	CHECK(findUserDir(config, "MUSIC", "/home/u", dir) && dir == "/data/music", "an absolute path and surrounding blanks are accepted");
+	CHECK(findUserDir(config, "PICTURES", "/home/u", dir) && dir == "/home/u", "$HOME alone is the home directory");
+	CHECK(findUserDir(config, "VIDEOS", "/home/u", dir) && dir == "/home/u/a \"b\" $c \\d", "escapes inside the quotes are undone");
+	CHECK(!findUserDir(config, "DOCUMENTS", "/home/u", dir), "$HOMEWORK is not $HOME");
+	CHECK(!findUserDir(config, "PUBLICSHARE", "/home/u", dir), "a relative path is ignored");
+	CHECK(findUserDir(config, "TEMPLATES", "/home/u", dir) && dir == "/home/u/two", "the last valid line wins; an unquoted value is ignored");
+	CHECK(!findUserDir(config, "CACHE", "/home/u", dir), "comments are ignored");
+	CHECK(!findUserDir(config, "UNCLOSED", "/home/u", dir), "an unclosed quote is ignored");
+	CHECK(!findUserDir(config, "TRAILING", "/home/u", dir), "anything after the closing quote makes the line invalid");
+	CHECK(!findUserDir(config, "DESK", "/home/u", dir), "a name must match in full");
+	CHECK(!findUserDir("", "DESKTOP", "/home/u", dir), "an empty file sets nothing");
+	CHECK(findUserDir("XDG_DESKTOP_DIR=\"/d\"", "DESKTOP", "/home/u", dir) && dir == "/d", "a last line without a newline counts");
+
+	// what xdg-user-dir prints, and so what gets linked
+	CHECK(userDirOrDefault("", "DOWNLOAD", "/home/u") == "/home/u", "no file: a directory falls back to $HOME");
+	CHECK(userDirOrDefault("", "DESKTOP", "/home/u") == "/home/u/Desktop", "no file: the desktop falls back to $HOME/Desktop");
+	CHECK(userDirOrDefault(config, "DOCUMENTS", "/home/u") == "/home/u", "an invalid entry falls back to $HOME");
+	CHECK(userDirOrDefault("XDG_MUSIC_DIR=\"/m\"\n", "VIDEOS", "/home/u") == "/home/u", "a missing entry falls back to $HOME");
+	CHECK(userDirOrDefault("XDG_MUSIC_DIR=\"/m\"\n", "DESKTOP", "/home/u") == "/home/u/Desktop", "a missing desktop entry falls back to $HOME/Desktop");
+	CHECK(userDirOrDefault(config, "MUSIC", "/home/u") == "/data/music", "a set entry is used");
+	CHECK(userDirOrDefault(config, "PICTURES", "/home/u") == "/home/u", "an entry equal to $HOME is still linked to $HOME");
+	CHECK(userDirOrDefault("", "MUSIC", "") == "", "with an empty HOME nothing is printed, so nothing is linked");
+}
+
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		std::fprintf(stderr, "usage: %s <private directory>\n", argv[0]);
@@ -280,6 +324,7 @@ int main(int argc, char** argv) {
 	testDirChecks();
 	testMirror();
 	testCopy();
+	testUserDirs();
 
 	std::printf("%s\n", fails ? "FAILED" : "all passed");
 	return fails ? 1 : 0;

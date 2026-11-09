@@ -20,6 +20,10 @@ temporary directory. It checks:
   symbolic links and a hard link planted in the upper tree that lead out of it. Nothing outside
   the upper tree may change, a file with another hard link is not changed, and a set-group-ID bit is
   kept only on a file the copy created itself, never on existing contents with a matching time.
+- reading the user's directories from an xdg-user-dirs `user-dirs.dirs` file: `$HOME` expansion,
+  absolute paths, escapes, comments, the last line winning, and lines that are not a plain quoted
+  value being ignored; and xdg-user-dir's fallback when the file or the entry is missing
+  (`$HOME`, `$HOME/Desktop` for the desktop).
 
 The copy and mirror cases fail against the old path-based copy (`copyAndSetAttributes`): it gave
 the set-group-ID bit to the user's own file and changed the mode of the hard-linked file outside.

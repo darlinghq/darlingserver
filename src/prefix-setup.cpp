@@ -486,4 +486,77 @@ bool copyTree(int lowerFd, int upperFd) {
 	return copyBelow(lowerFd, upperFd, "");
 }
 
+bool findUserDir(std::string_view contents, std::string_view name, std::string_view home, std::string& dir) {
+	std::string key = "XDG_" + std::string(name) + "_DIR=";
+	bool found = false;
+
+	while (!contents.empty()) {
+		size_t eol = contents.find('\n');
+		std::string_view line = contents.substr(0, eol);
+		contents = (eol == std::string_view::npos) ? std::string_view() : contents.substr(eol + 1);
+
+		size_t start = line.find_first_not_of(" \t");
+		if (start == std::string_view::npos || line[start] == '#') {
+			continue;
+		}
+		line = line.substr(start);
+		if (line.substr(0, key.size()) != key) {
+			continue;
+		}
+		line = line.substr(key.size());
+
+		// a double-quoted value, then nothing but blanks
+		if (line.empty() || line[0] != '"') {
+			continue;
+		}
+		std::string value;
+		size_t i = 1;
+		bool closed = false;
+		for (; i < line.size(); i++) {
+			char c = line[i];
+			if (c == '"') {
+				closed = true;
+				break;
+			}
+			if (c == '\\' && i + 1 < line.size()) {
+				char next = line[i + 1];
+				if (next == '"' || next == '\\' || next == '$' || next == '`') {
+					value.push_back(next);
+					i++;
+					continue;
+				}
+			}
+			value.push_back(c);
+		}
+		if (!closed || line.find_first_not_of(" \t\r", i + 1) != std::string_view::npos) {
+			continue;
+		}
+
+		static const std::string_view homeVar = "$HOME";
+		std::string_view v = value;
+		if (v.substr(0, homeVar.size()) == homeVar && (v.size() == homeVar.size() || v[homeVar.size()] == '/')) {
+			dir = std::string(home) + std::string(v.substr(homeVar.size()));
+		} else if (!v.empty() && v[0] == '/') {
+			dir = value;
+		} else {
+			continue;
+		}
+		found = true;
+	}
+
+	return found;
+}
+
+std::string userDirOrDefault(std::string_view contents, std::string_view name, std::string_view home) {
+	std::string dir;
+	if (findUserDir(contents, name, home, dir)) {
+		return dir;
+	}
+	dir = std::string(home);
+	if (name == "DESKTOP") {
+		dir += "/Desktop";
+	}
+	return dir;
+}
+
 };
