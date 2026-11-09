@@ -25,6 +25,7 @@ static dserver_system_config_t fullPush(uint32_t csr) {
 	config.code_signing_policy = dserver_code_signing_policy_enforce;
 	config.csr_active_config = csr;
 	config.seal_images = 1;
+	config.disable_pointer_authentication = 1;
 	std::strcpy(config.trust_store_path, "/var/db/trust");
 	return config;
 }
@@ -60,6 +61,7 @@ int main() {
 		CHECK(current.code_signing_policy == dserver_code_signing_policy_off && current.seal_images == 0, "defaults: no enforcement, no sealing");
 		CHECK(current.csr_active_config == CSR_DISABLE_FLAGS, "defaults: csr-active-config is what `csrutil disable` sets");
 		CHECK(current.trust_store_path[0] == '\0', "defaults: no trust store path");
+		CHECK(current.disable_pointer_authentication == 0, "defaults: pointer authentication left on");
 	}
 
 	// a complete push
@@ -72,6 +74,7 @@ int main() {
 		CHECK(current.generation == 1 && current.present == DSERVER_SYSTEM_CONFIG_HAS_ALL, "full push: generation 1, everything present");
 		CHECK(current.code_signing_policy == dserver_code_signing_policy_enforce && current.csr_active_config == 0 && current.seal_images == 1, "full push: values in effect");
 		CHECK(std::strcmp(current.trust_store_path, "/var/db/trust") == 0, "full push: trust store path in effect");
+		CHECK(current.disable_pointer_authentication == 1, "full push: pointer authentication disable in effect");
 	}
 
 	// an empty push makes the defaults explicit and still counts as the first push
@@ -123,6 +126,18 @@ int main() {
 		p = emptyPush();
 		p.seal_images = 1;
 		checkRejected(nullptr, p, -EINVAL, "rejected: seal_images without its present bit");
+
+		p = fullPush(0);
+		p.disable_pointer_authentication = 2;
+		checkRejected(nullptr, p, -EINVAL, "rejected: disable_pointer_authentication not 0 or 1");
+
+		p = emptyPush();
+		p.disable_pointer_authentication = 1;
+		checkRejected(nullptr, p, -EINVAL, "rejected: disable_pointer_authentication without its present bit");
+
+		p = fullPush(0);
+		p.reserved = 1;
+		checkRejected(nullptr, p, -EINVAL, "rejected: nonzero reserved field");
 
 		p = emptyPush();
 		p.trust_store_path[sizeof(p.trust_store_path) - 1] = 'x';
