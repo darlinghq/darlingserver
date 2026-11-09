@@ -44,6 +44,9 @@ if (NOT OPENSSL_INCLUDE_DIR STREQUAL "/usr/include")
 endif()
 target_link_libraries(dserver_platform_identity_test PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
 
+# root-mode prefix setup helpers; run as an ordinary user in a private directory
+dserver_host_test(prefix_setup TEMP_DIR SOURCES ${host}/prefix_setup_test.cpp ${root}/src/prefix-setup.cpp)
+
 # tests that compile real functions cut out of a source file
 
 add_custom_command(
@@ -58,6 +61,14 @@ add_custom_command(
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/arg_parse.inc
 		${host}/extract-static.sh ${root}/src/darlingserver.cpp parseNumericArgument parseIdArgument dropIdsMatch dropTookEffect
+	DEPENDS ${host}/extract-static.sh ${root}/src/darlingserver.cpp
+	VERBATIM
+)
+add_custom_command(
+	OUTPUT ${gen}/process_state.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/process_state.inc
+		${host}/extract-static.sh ${root}/src/darlingserver.cpp closeInheritedFds sanitizeProcessState
 	DEPENDS ${host}/extract-static.sh ${root}/src/darlingserver.cpp
 	VERBATIM
 )
@@ -103,6 +114,9 @@ endforeach()
 
 dserver_host_test(arg_parse SOURCES ${host}/arg_parse_test.cpp ${gen}/arg_parse.inc)
 target_compile_definitions(dserver_arg_parse_test PRIVATE ARG_PARSE_INC="${gen}/arg_parse.inc")
+
+dserver_host_test(process_state TEMP_DIR SOURCES ${host}/process_state_test.cpp ${gen}/process_state.inc)
+target_compile_definitions(dserver_process_state_test PRIVATE PROCESS_STATE_INC="${gen}/process_state.inc")
 
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
 target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)
