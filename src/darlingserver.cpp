@@ -38,6 +38,7 @@
 #include <linux/sched.h>
 #include <sys/syscall.h>
 #include <sys/signal.h>
+#include <sys/socket.h>
 #include <filesystem>
 #include <climits>
 #include <string>
@@ -364,6 +365,25 @@ static bool dropTookEffect(uid_t uid, gid_t gid) {
 	gid_t rgid, egid, sgid;
 	return getresuid(&ruid, &euid, &suid) == 0 && getresgid(&rgid, &egid, &sgid) == 0 &&
 	       dropIdsMatch(uid, gid, ruid, euid, suid, rgid, egid, sgid);
+};
+
+// one byte over the socket pair between the server and launchd's process says "ready"
+static bool sendReadyByte(int fd) {
+	ssize_t ret;
+	do {
+		ret = write(fd, ".", 1);
+	} while (ret < 0 && errno == EINTR);
+	return ret == 1;
+};
+
+// false when the other side exited (or closed its end) without saying it is ready
+static bool readReadyByte(int fd) {
+	char byte;
+	ssize_t ret;
+	do {
+		ret = read(fd, &byte, 1);
+	} while (ret < 0 && errno == EINTR);
+	return ret == 1;
 };
 
 static void perma_drop_privileges(uid_t uid, gid_t gid) {
@@ -1023,8 +1043,10 @@ int main(int argc, char** argv) {
 
 	setsid();
 
-	if (pipe(childWaitFDs) != 0) {
-		std::cerr << "Failed to create child waiting pipe: " << strerror(errno) << std::endl;
+	// launchd's process reports through [0] that its setup is done; the server gives it the green light through [1].
+	// Either side sees end-of-file instead if the other one exits first.
+	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, childWaitFDs) != 0) {
+		std::cerr << "Failed to create the socket pair for launchd's process: " << strerror(errno) << std::endl;
 		exit(1);
 	}
 
@@ -1037,8 +1059,6 @@ int main(int argc, char** argv) {
 		exit(1);
 	} else if (launchdGlobalPID == 0) {
 		// this is the child
-		char buf[1];
-
 		close(childWaitFDs[1]);
 
 		// Detach launchd into its own session + process group, so that any
@@ -1076,8 +1096,16 @@ int main(int argc, char** argv) {
 			//exit(1);
 		}
 
-		// wait for the parent to give us the green light
-		read(childWaitFDs[0], buf, 1);
+		// tell the parent that our namespace is set up
+		if (!sendReadyByte(childWaitFDs[0])) {
+			exit(1);
+		}
+
+		// wait for the parent to give us the green light; without it, the server is not there
+		if (!readReadyByte(childWaitFDs[0])) {
+			fprintf(stderr, "darlingserver did not start; not starting launchd\n");
+			exit(1);
+		}
 		close(childWaitFDs[0]);
 
 		spawnLaunchd(prefix);
@@ -1088,6 +1116,12 @@ int main(int argc, char** argv) {
 	close(childWaitFDs[0]);
 	close(mergedFd);
 	close(prefixFd);
+
+	// without launchd there is nothing to serve: every launcher call would wait for it in vain
+	if (!readReadyByte(childWaitFDs[1])) {
+		fprintf(stderr, "launchd's process failed to set up its namespace\n");
+		exit(1);
+	}
 
 	// drop our privileges
 	perma_drop_privileges(originalUID, originalGID);
@@ -1121,7 +1155,7 @@ int main(int argc, char** argv) {
 	detachStdio();
 
 	// tell the child to go ahead; the socket has been created
-	write(childWaitFDs[1], ".", 1);
+	sendReadyByte(childWaitFDs[1]);
 	close(childWaitFDs[1]);
 
 	// start the main loop
