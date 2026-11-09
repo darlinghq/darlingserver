@@ -86,9 +86,17 @@ DarlingServer::StackPool DarlingServer::Thread::stackPool(IDLE_THREAD_STACK_COUN
 // Finds which of the given threads (all in the same process) owns the stack containing `stackHint`:
 // the one whose stack pointer is nearest below it. Each thread is briefly ptrace-attached to read
 // its registers and is always detached again. Returns -1 if no thread matches.
-static pid_t findThreadByStackHint(const std::vector<pid_t>& ids, void* stackHint) {
+//
+// If no readable thread matches but exactly one thread's registers could not be read, that thread
+// is returned and `guessed` is set: it is the only thread that can still be the one we want.
+// With two or more unreadable threads there is no way to tell them apart, so none is chosen.
+static pid_t findThreadByStackHint(const std::vector<pid_t>& ids, void* stackHint, bool& guessed) {
 	pid_t chosenId = -1;
 	intptr_t nearest = std::numeric_limits<intptr_t>::max();
+	pid_t unreadableId = -1;
+	size_t unreadableCount = 0;
+
+	guessed = false;
 
 	for (auto id : ids) {
 		if (ptrace(PTRACE_ATTACH, id, 0, 0) == -1) {
@@ -102,6 +110,11 @@ static pid_t findThreadByStackHint(const std::vector<pid_t>& ids, void* stackHin
 		} while (waitStatus == -1 && errno == EINTR);
 
 		if (waitStatus < 0) {
+			continue;
+		}
+
+		// the thread exited before it stopped; it is gone and no longer traced
+		if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			continue;
 		}
 
@@ -131,23 +144,21 @@ static pid_t findThreadByStackHint(const std::vector<pid_t>& ids, void* stackHin
 				nearest = stackDiff;
 			}
 		}
-		else if (chosenId == -1) {
-			// PTRACE_GETREGSET can fail for a thread we are tracing, e.g. one
-			// that has not reached its first ptrace stop yet. Before this
-			// loop learned to tolerate that, a failure skipped the thread
-			// with `continue`, so discovery simply moved on. Falling through
-			// to the detach below turns the same failure into a thrown
-			// system_error, which aborts discovery entirely and leaves
-			// chosenId at -1. Keeping the first unattached thread as a
-			// candidate preserves the old tolerance: if no thread's stack
-			// matches the hint, something is still better than ESRCH.
-			chosenId = id;
+		else {
+			// e.g. a thread that has not reached its ptrace stop yet; it is still detached below
+			unreadableId = id;
+			++unreadableCount;
 		}
 
 		// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
 		if (ptrace(PTRACE_DETACH, id, 0, 0) == -1) {
 			throw std::system_error(errno, std::generic_category(), "Failed to detach from process.");
 		}
+	}
+
+	if (chosenId == -1 && unreadableCount == 1) {
+		chosenId = unreadableId;
+		guessed = true;
 	}
 
 	return chosenId;
@@ -204,7 +215,11 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 		if (ids.size() == 1) {
 			_tid = ids[0];
 		} else if (stackHint != nullptr) {
-			_tid = findThreadByStackHint(ids, stackHint);
+			bool guessed;
+			_tid = findThreadByStackHint(ids, stackHint, guessed);
+			if (guessed) {
+				threadLog.debug() << "Stack hint matched no readable thread; using thread " << _tid << ", the only one whose registers could not be read" << threadLog.endLog;
+			}
 		}
 	}
 
