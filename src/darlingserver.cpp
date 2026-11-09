@@ -401,6 +401,84 @@ static void regain_privileges() {
 	}
 };
 
+// Closes every descriptor from 3 up, except keep.
+static void closeInheritedFds(int keep) {
+#ifdef SYS_close_range
+	bool closed = true;
+	if (keep > 3) {
+		closed = syscall(SYS_close_range, 3, keep - 1, 0) == 0;
+	}
+	if (closed && syscall(SYS_close_range, (keep >= 3) ? keep + 1 : 3, ~0U, 0) == 0) {
+		return;
+	}
+#endif
+	// kernels before 5.9
+	std::vector<int> fds;
+	DIR* dir = opendir("/proc/self/fd");
+	if (!dir) {
+		fprintf(stderr, "Cannot list the inherited file descriptors: %s\n", strerror(errno));
+		exit(1);
+	}
+	while (struct dirent* ent = readdir(dir)) {
+		char* end;
+		long fd = strtol(ent->d_name, &end, 10);
+		if (*end == '\0' && end != ent->d_name && fd > STDERR_FILENO && fd != keep && fd != dirfd(dir)) {
+			fds.push_back(fd);
+		}
+	}
+	closedir(dir);
+	for (int fd: fds) {
+		close(fd);
+	}
+};
+
+// The umask the user started darling with; the user's own processes get it back.
+static mode_t userUmask = 022;
+
+// The launcher starts us as root, but with the process state the user started the launcher with.
+// Reset what could make the root part of the start-up act differently or stop half-way, or leave a
+// core file of a root process somewhere the user chose.
+static void sanitizeProcessState(int pipefd) {
+	// Missing standard descriptors would be taken by the files and directories opened as root below.
+	for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; fd++) {
+		if (fcntl(fd, F_GETFD) < 0 && errno == EBADF) {
+			int null = open("/dev/null", O_RDWR);
+			if (null != fd) {
+				exit(1);
+			}
+		}
+	}
+
+	// The pipe to the launcher is the only other descriptor meant for us.
+	closeInheritedFds(pipefd);
+
+	// Ignored and blocked signals survive exec. An ignored SIGCHLD would make the waits for our own
+	// helper processes fail; others would change how a failure ends.
+	for (int sig = 1; sig < NSIG; sig++) {
+		if (sig != SIGKILL && sig != SIGSTOP) {
+			signal(sig, SIG_DFL);
+		}
+	}
+	sigset_t none;
+	sigemptyset(&none);
+	sigprocmask(SIG_SETMASK, &none, NULL);
+
+	// No core file while we are root; the user's limit is restored (and raised) after the drop.
+	prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+	struct rlimit core;
+	if (getrlimit(RLIMIT_CORE, &core) == 0) {
+		core.rlim_cur = 0;
+		setrlimit(RLIMIT_CORE, &core);
+	}
+
+	// Files root makes get the modes it asks for, and no relative path means the user's directory.
+	userUmask = umask(022);
+	if (chdir("/") != 0) {
+		fprintf(stderr, "Cannot change to /: %s\n", strerror(errno));
+		exit(1);
+	}
+};
+
 // The invoking user's supplementary groups, as the launcher passed them on.
 static std::vector<gid_t> userGroups;
 
@@ -422,6 +500,7 @@ static bool runAsUser(uid_t uid, gid_t gid, Fn&& fn) {
 			fprintf(stderr, "Cannot switch to your user and group ids\n");
 			_exit(1);
 		}
+		umask(userUmask);
 		_exit(fn() ? 0 : 1);
 	}
 
@@ -696,6 +775,9 @@ static int mountFuseOverlayfs(int prefixFd, int workFd) {
 		fprintf(stderr, "Failed to fork to run fuse-overlayfs: %s\n", strerror(errno));
 		return -1;
 	} else if (pid == 0) {
+		// It runs as root: only a PATH of root's directories, as the launcher gives us.
+		static char* env[] = { (char*) "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", NULL };
+		environ = env;
 		execlp("fuse-overlayfs", "fuse-overlayfs", "-o", opts.c_str(), merged.c_str(), NULL);
 		fprintf(stderr, "Failed to run fuse-overlayfs: %s\n", strerror(errno));
 		_exit(127);
@@ -794,6 +876,8 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
+	sanitizeProcessState(pipefd);
+
 	// the launcher starts us with the user's supplementary groups
 	int groupCount = getgroups(0, NULL);
 	if (groupCount >= 0) {
@@ -854,15 +938,12 @@ int main(int argc, char** argv) {
 #endif
 	}
 
+	// the core limit is raised to the maximum once we are no longer root
 	if (getrlimit(RLIMIT_CORE, &core_limit) != 0) {
 		fprintf(stderr, "Failed to read default core rlimit: %s\n", strerror(errno));
+		core_limit.rlim_cur = core_limit.rlim_max = 0;
 	} else {
-		// increase the core limit to the maximum
 		core_limit.rlim_cur = core_limit.rlim_max;
-
-		if (setrlimit(RLIMIT_CORE, &core_limit) != 0) {
-			fprintf(stderr, "Warning: failed to increase core limit: %s\n", strerror(errno));
-		}
 	}
 
 	// Since overlay cannot be mounted inside user namespaces, we have to setup a new mount namespace
@@ -984,6 +1065,10 @@ int main(int argc, char** argv) {
 		// drop our privileges now
 		perma_drop_privileges(originalUID, originalGID);
 		prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+		umask(userUmask);
+		if (setrlimit(RLIMIT_CORE, &core_limit) != 0) {
+			fprintf(stderr, "Warning: failed to increase core limit for launchd: %s\n", strerror(errno));
+		}
 
 		// decrease the FD limit back to the default
 		if (setrlimit(RLIMIT_NOFILE, &default_limit) != 0) {
@@ -1007,6 +1092,10 @@ int main(int argc, char** argv) {
 	// drop our privileges
 	perma_drop_privileges(originalUID, originalGID);
 	prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+	umask(userUmask);
+	if (setrlimit(RLIMIT_CORE, &core_limit) != 0) {
+		fprintf(stderr, "Warning: failed to increase core limit: %s\n", strerror(errno));
+	}
 
 	// a client can exit while we are writing to one of its pipes or sockets;
 	// that must fail with EPIPE instead of killing the server.

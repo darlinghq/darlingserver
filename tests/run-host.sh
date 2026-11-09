@@ -11,6 +11,8 @@
 #              (tests/host/extract-function.py) against stand-in types (tests/host/call_stubs.hpp).
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
+#   process_state  includes closeInheritedFds() and sanitizeProcessState() cut out of
+#              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
 #   prefix_setup  links <source-root>/src/prefix-setup.cpp, compiled unchanged, and runs it as the
 #              current (unprivileged) user in a private directory.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
@@ -52,6 +54,10 @@ case $test in
 		xnu="-I$root/include -I$root/duct-tape/include -idirafter $root/duct-tape/xnu/bsd"
 		$cc -g -O0 -fsanitize=${SANITIZE:-address,undefined} $xnu -c -o "$work/csr.o" "$root/duct-tape/src/csr.c"
 		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/system-config.cpp" "$work/csr.o"
+		;;
+	process_state)
+		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" closeInheritedFds sanitizeProcessState > "$work/process_state.inc"
+		$cxx $flags -DPROCESS_STATE_INC="\"$work/process_state.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
 		;;
 	prefix_setup)
 		$cxx $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/prefix-setup.cpp"
