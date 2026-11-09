@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <sys/prctl.h>
+#include <sys/utsname.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <pwd.h>
@@ -323,8 +324,11 @@ static bool isOnWsl1() {
 	static bool result = false;
 	if (!initialized) {
 		initialized = true;
-		// All WSL systems have WSLENV set by default, while WSL_INTEROP is WSL2-specific.
-		result = getenv("WSLENV") && !getenv("WSL_INTEROP");
+		// WSL1 kernels report a release such as "4.4.0-19041-Microsoft"; WSL2 uses "-microsoft-standard".
+		// The match is case-sensitive on purpose: a case-insensitive one would also match WSL2,
+		// which does not need the WSL1 workarounds.
+		struct utsname name;
+		result = uname(&name) == 0 && strstr(name.release, "Microsoft") != NULL;
 	}
 
 	return result;
@@ -746,6 +750,14 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
+	// systemd marks / as MS_SHARED and the new namespace inherits that, so without this the
+	// /dev/shm tmpfs and overlay mounts below would propagate back into the host's namespace.
+	if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
+	{
+		fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
+		exit(1);
+	}
+
 	int shmMountFlags = MS_NOSUID | MS_NODEV;
 	// Workaround for dumb Microsoft bug: https://github.com/microsoft/WSL/issues/8777
 	if (!isOnWsl1())
@@ -761,16 +773,6 @@ int main(int argc, char** argv) {
 	}
 
 	FsMode fsMode = resolveFsMode(prefix);
-
-	if (fsMode != FsMode::Copy) {
-		// Because systemd marks / as MS_SHARED and we would inherit this into the overlay mount,
-		// causing it not to be unmounted once the init process dies.
-		if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0)
-		{
-			fprintf(stderr, "Cannot remount / as slave: %s\n", strerror(errno));
-			exit(1);
-		}
-	}
 
 	// Failing to assemble the prefix exits with EX_UNAVAILABLE, which lets the darling client offer a different mode.
 	if (fsMode == FsMode::Overlayfs) {
