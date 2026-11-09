@@ -44,6 +44,9 @@ if (NOT OPENSSL_INCLUDE_DIR STREQUAL "/usr/include")
 endif()
 target_link_libraries(dserver_platform_identity_test PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
 
+# root-mode prefix setup helpers; run as an ordinary user in a private directory
+dserver_host_test(prefix_setup TEMP_DIR SOURCES ${host}/prefix_setup_test.cpp ${root}/src/prefix-setup.cpp)
+
 # tests that compile real functions cut out of a source file
 
 add_custom_command(

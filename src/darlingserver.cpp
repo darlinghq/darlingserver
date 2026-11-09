@@ -48,6 +48,7 @@
 
 #include <darlingserver/server.hpp>
 #include <darlingserver/config.hpp>
+#include <darlingserver/prefix-setup.hpp>
 
 #ifndef DARLINGSERVER_INIT_PROCESS
 	#define DARLINGSERVER_INIT_PROCESS "/sbin/launchd"
@@ -397,8 +398,23 @@ static FsMode resolveFsMode(const char* prefix) {
 	return FsMode::Overlayfs;
 };
 
+// The prefix, its work directory and the lower directory all go into the mount option string, which
+// must keep the layout darlingserver asks for, whatever the user named the prefix.
+static bool overlayPathsArePlain(const char* prefix) {
+	using DarlingServer::PrefixSetup::isPlainOptionPath;
+	if (!isPlainOptionPath(prefix) || !isPlainOptionPath(LIBEXEC_PATH)) {
+		fprintf(stderr, "Cannot use an overlay for %s: overlay mount options cannot carry a path with ',', ':', '\\' or control characters\n", prefix);
+		return false;
+	}
+	return true;
+};
+
 // Unlike the kernel's overlayfs, fuse-overlayfs does not place restrictions on the filesystem holding the upper layer.
 static bool mountFuseOverlayfs(const char* prefix) {
+	if (!overlayPathsArePlain(prefix)) {
+		return false;
+	}
+
 	std::string opts = std::string("lowerdir=") + LIBEXEC_PATH + ",upperdir=" + prefix + ",workdir=" + prefix + ".workdir,allow_other";
 
 	pid_t pid = fork();
@@ -776,6 +792,10 @@ int main(int argc, char** argv) {
 
 	// Failing to assemble the prefix exits with EX_UNAVAILABLE, which lets the darling client offer a different mode.
 	if (fsMode == FsMode::Overlayfs) {
+		if (!overlayPathsArePlain(prefix)) {
+			exit(EX_UNAVAILABLE);
+		}
+
 		opts = (char*) malloc(strlen(prefix)*2 + sizeof(LIBEXEC_PATH) + 100);
 
 		const char* opts_fmt = "lowerdir=%s,upperdir=%s,workdir=%s.workdir,index=off";

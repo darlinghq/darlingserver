@@ -11,6 +11,8 @@
 #              (tests/host/extract-function.py) against stand-in types (tests/host/call_stubs.hpp).
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
+#   prefix_setup  links <source-root>/src/prefix-setup.cpp, compiled unchanged, and runs it as the
+#              current (unprivileged) user in a private directory.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
 #   code_signing  links <source-root>/src/code-signing.cpp and trust-store.cpp with the parser and runs
 #              against tests/fixtures/codesign; also checks what tools/dc-trustcache.py writes.
@@ -50,6 +52,9 @@ case $test in
 		xnu="-I$root/include -I$root/duct-tape/include -idirafter $root/duct-tape/xnu/bsd"
 		$cc -g -O0 -fsanitize=${SANITIZE:-address,undefined} $xnu -c -o "$work/csr.o" "$root/duct-tape/src/csr.c"
 		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/system-config.cpp" "$work/csr.o"
+		;;
+	prefix_setup)
+		$cxx $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/prefix-setup.cpp"
 		;;
 	platform_identity)
 		$cxx $flags -I"$root/include" -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/platform-identity.cpp" -lcrypto
