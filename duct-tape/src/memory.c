@@ -10,6 +10,7 @@
 #include <vm/vm_kern.h>
 
 #include <stdlib.h>
+#include <sys/errno.h>
 
 #include <mach_debug/mach_debug.h>
 
@@ -358,12 +359,12 @@ kern_return_t copyinmap(vm_map_t map, vm_map_offset_t fromaddr, void* todata, vm
 };
 
 int (copyin)(const user_addr_t user_addr, void* kernel_addr, vm_size_t nbytes) {
-	return (copyinmap(current_map(), user_addr, kernel_addr, nbytes) == KERN_SUCCESS) ? 0 : 1;
+	return (copyinmap(current_map(), user_addr, kernel_addr, nbytes) == KERN_SUCCESS) ? 0 : EFAULT;
 };
 
 int (copyout)(const void* kernel_addr, user_addr_t user_addr, vm_size_t nbytes) {
 	// it doesn't actually modify kernel_addr
-	return (copyoutmap(current_map(), (void*)kernel_addr, user_addr, nbytes) == KERN_SUCCESS) ? 0 : 1;
+	return (copyoutmap(current_map(), (void*)kernel_addr, user_addr, nbytes) == KERN_SUCCESS) ? 0 : EFAULT;
 };
 
 #ifndef copyinmsg
