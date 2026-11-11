@@ -13,6 +13,8 @@
 #              <sys/csr.h> comes from the imported XNU headers.
 #   process_state  includes closeInheritedFds() and sanitizeProcessState() cut out of
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
+#   prefix_preinit  includes wipeDir() and darlingPreInit() cut out of <source-root>/src/darlingserver.cpp
+#              (tests/host/extract-static.sh) and runs them on prefixes in a private directory.
 #   launchd_handshake  includes sendReadyByte() and readReadyByte() cut out of
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
 #   prefix_setup  links <source-root>/src/prefix-setup.cpp, compiled unchanged, and runs it as the
@@ -63,6 +65,10 @@ case $test in
 		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" closeInheritedFds sanitizeProcessState > "$work/process_state.inc"
 		$cxx $flags -DPROCESS_STATE_INC="\"$work/process_state.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
 		;;
+	prefix_preinit)
+		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" wipeDir darlingPreInit > "$work/prefix_preinit.inc"
+		$cxx $flags -DPREFIX_PREINIT_INC="\"$work/prefix_preinit.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
+    ;;
 	launchd_handshake)
 		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" sendReadyByte readReadyByte > "$work/launchd_handshake.inc"
 		$cxx $flags -DLAUNCHD_HANDSHAKE_INC="\"$work/launchd_handshake.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"

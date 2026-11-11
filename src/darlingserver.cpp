@@ -218,11 +218,12 @@ static void wipeDir(const char* dirpath)
 	closedir(dir);
 }
 
-void darlingPreInit(const char* prefix)
+static void darlingPreInit(const char* prefix)
 {
 	// TODO: Run /usr/libexec/makewhatis
+	// Clear runtime state, not /var/tmp files that applications may need
+	// across separate server invocations using the same prefix.
 	const char* dirs[] = {
-		"/var/tmp",
 		"/var/run"
 	};
 
