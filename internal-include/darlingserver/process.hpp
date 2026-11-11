@@ -20,6 +20,7 @@
 #ifndef _DARLINGSERVER_PROCESS_HPP_
 #define _DARLINGSERVER_PROCESS_HPP_
 
+#include <atomic>
 #include <sys/types.h>
 #include <memory>
 #include <vector>
@@ -78,6 +79,21 @@ namespace DarlingServer {
 			uint64_t residentSize;
 			uint64_t pageSize;
 			uint64_t regionCount;
+
+			// highest resident size the process has reached (VmHWM, kept monotonic)
+			uint64_t residentSizePeak;
+
+			// Linux's closest analogues of the Mach task_vm_info breakdown, from the
+			// Rss*/VmSwap lines of /proc/<pid>/status (see Process::memoryInfo())
+			uint64_t internalSize; // anonymous and shmem pages (RssAnon + RssShmem)
+			uint64_t externalSize; // file-backed pages (RssFile)
+			uint64_t swappedSize; // pages that are only in swap (VmSwap)
+
+			// internalSize + swappedSize: what the process costs the system
+			uint64_t physFootprint;
+
+			// highest physFootprint seen by any query of this process (sampled)
+			uint64_t physFootprintPeak;
 		};
 
 		struct MemoryRegionInfo {
@@ -98,6 +114,10 @@ namespace DarlingServer {
 		std::string _cachedVchrootPath;
 		std::shared_ptr<FD> _vchrootDescriptor;
 		dtape_task_t* _dtapeTask;
+
+		// highest values returned by memoryInfo() so far, so that the peaks never decrease
+		mutable std::atomic<uint64_t> _residentSizePeak{0};
+		mutable std::atomic<uint64_t> _physFootprintPeak{0};
 
 		// `/proc/<pid>/maps`, kept open for PROCMAP_QUERY region lookups; guarded by its own mutex
 		// so a lookup never issues the ioctl on a descriptor that another thread closed.

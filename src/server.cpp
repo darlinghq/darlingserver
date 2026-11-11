@@ -305,6 +305,12 @@ struct DTapeHooks {
 		memory_info->resident_size = info.residentSize;
 		memory_info->page_size = info.pageSize;
 		memory_info->region_count = info.regionCount;
+		memory_info->resident_size_peak = info.residentSizePeak;
+		memory_info->internal_size = info.internalSize;
+		memory_info->external_size = info.externalSize;
+		memory_info->swapped_size = info.swappedSize;
+		memory_info->phys_footprint = info.physFootprint;
+		memory_info->phys_footprint_peak = info.physFootprintPeak;
 		return true;
 	};
 

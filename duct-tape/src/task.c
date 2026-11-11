@@ -506,16 +506,25 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 
 			info->page_size = meminfo.page_size;
 			info->resident_size = meminfo.resident_size;
-			info->resident_size_peak = meminfo.resident_size;
+			info->resident_size_peak = meminfo.resident_size_peak;
 			info->virtual_size = meminfo.virtual_size;
 
-			// TODO: fill in other stuff
+			// The breakdown follows Mach's meaning of the fields; the sources are the Rss*/VmSwap
+			// counters of /proc/<pid>/status (see Process::memoryInfo()). There is no compressor,
+			// so `compressed` stays 0 and swapped-out pages count towards the footprint instead.
+			// The other fields (device, reusable, purgeable_*, the per-tag ledgers) have no Linux
+			// counterpart and are 0.
+			info->internal = meminfo.internal_size;
+			info->external = meminfo.external_size;
 
 			*task_info_count = TASK_VM_INFO_REV0_COUNT;
 
 			if (orig_info_count >= TASK_VM_INFO_REV1_COUNT) {
 
 				*task_info_count = TASK_VM_INFO_REV1_COUNT;
+
+				// only revisions the caller's buffer has room for are filled
+				info->phys_footprint = meminfo.phys_footprint;
 
 				if (orig_info_count >= TASK_VM_INFO_REV2_COUNT) {
 
@@ -524,6 +533,7 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 					if (orig_info_count >= TASK_VM_INFO_REV3_COUNT) {
 
 						*task_info_count = TASK_VM_INFO_REV3_COUNT;
+						info->ledger_phys_footprint_peak = (int64_t)meminfo.phys_footprint_peak;
 
 						if (orig_info_count >= TASK_VM_INFO_REV4_COUNT) {
 
