@@ -814,6 +814,14 @@ calls = [
 	# records that the calling process applied a sandbox profile (`DSERVER_CS_SANDBOXED`);
 	# Darling enforces no sandbox, so this only changes what the process reports
 	('cs_mark_sandboxed', [], []),
+
+	# Append new calls to preserve existing wire call numbers. Let XNU
+	# validate the count and copy the result into the calling task.
+	('mach_generate_activity_id', [
+		('target', 'uint32_t'),
+		('count', 'int32_t'),
+		('activity_id', 'uint64_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
 ]
 
 ALLOWED_PRIVATE_TYPES = [
