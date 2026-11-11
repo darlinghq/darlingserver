@@ -73,6 +73,14 @@ add_custom_command(
 	VERBATIM
 )
 add_custom_command(
+	OUTPUT ${gen}/thread_discovery.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/thread_discovery.inc
+		${host}/extract-static.sh ${root}/src/thread.cpp findThreadByStackHint
+	DEPENDS ${host}/extract-static.sh ${root}/src/thread.cpp
+	VERBATIM
+)
+add_custom_command(
 	OUTPUT ${gen}/process_maps.inc
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/process_maps.inc
@@ -117,6 +125,9 @@ target_compile_definitions(dserver_arg_parse_test PRIVATE ARG_PARSE_INC="${gen}/
 
 dserver_host_test(process_state TEMP_DIR SOURCES ${host}/process_state_test.cpp ${gen}/process_state.inc)
 target_compile_definitions(dserver_process_state_test PRIVATE PROCESS_STATE_INC="${gen}/process_state.inc")
+
+dserver_host_test(thread_discovery SOURCES ${host}/thread_discovery_test.cpp ${gen}/thread_discovery.inc)
+target_compile_definitions(dserver_thread_discovery_test PRIVATE THREAD_DISCOVERY_INC="${gen}/thread_discovery.inc")
 
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
 target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)
