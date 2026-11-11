@@ -81,6 +81,22 @@ add_custom_command(
 	VERBATIM
 )
 add_custom_command(
+	OUTPUT ${gen}/launchd_handshake.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/launchd_handshake.inc
+		${host}/extract-static.sh ${root}/src/darlingserver.cpp sendReadyByte readReadyByte
+	DEPENDS ${host}/extract-static.sh ${root}/src/darlingserver.cpp
+	VERBATIM
+)
+add_custom_command(
+	OUTPUT ${gen}/thread_discovery.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/thread_discovery.inc
+		${host}/extract-static.sh ${root}/src/thread.cpp findThreadByStackHint
+	DEPENDS ${host}/extract-static.sh ${root}/src/thread.cpp
+	VERBATIM
+)
+add_custom_command(
 	OUTPUT ${gen}/process_maps.inc
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/process_maps.inc
@@ -128,6 +144,12 @@ target_compile_definitions(dserver_process_state_test PRIVATE PROCESS_STATE_INC=
 
 dserver_host_test(prefix_preinit TEMP_DIR SOURCES ${host}/prefix_preinit_test.cpp ${gen}/prefix_preinit.inc)
 target_compile_definitions(dserver_prefix_preinit_test PRIVATE PREFIX_PREINIT_INC="${gen}/prefix_preinit.inc")
+
+dserver_host_test(launchd_handshake SOURCES ${host}/launchd_handshake_test.cpp ${gen}/launchd_handshake.inc)
+target_compile_definitions(dserver_launchd_handshake_test PRIVATE LAUNCHD_HANDSHAKE_INC="${gen}/launchd_handshake.inc")
+
+dserver_host_test(thread_discovery SOURCES ${host}/thread_discovery_test.cpp ${gen}/thread_discovery.inc)
+target_compile_definitions(dserver_thread_discovery_test PRIVATE THREAD_DISCOVERY_INC="${gen}/thread_discovery.inc")
 
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
 target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)

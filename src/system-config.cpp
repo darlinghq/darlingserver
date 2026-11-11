@@ -24,9 +24,9 @@
 #include <cstddef>
 #include <cstring>
 
-static_assert(offsetof(dserver_system_config_t, generation) == 24, "the layout must not depend on the architecture");
-static_assert(offsetof(dserver_system_config_t, trust_store_path) == 32, "the layout must not depend on the architecture");
-static_assert(sizeof(dserver_system_config_t) == 32 + DSERVER_SYSTEM_CONFIG_PATH_MAX, "the layout must not depend on the architecture");
+static_assert(offsetof(dserver_system_config_t, generation) == 32, "the layout must not depend on the architecture");
+static_assert(offsetof(dserver_system_config_t, trust_store_path) == 40, "the layout must not depend on the architecture");
+static_assert(sizeof(dserver_system_config_t) == 40 + DSERVER_SYSTEM_CONFIG_PATH_MAX, "the layout must not depend on the architecture");
 
 static bool allZero(const char* bytes, size_t length) {
 	for (size_t i = 0; i < length; ++i) {
@@ -46,6 +46,7 @@ static dserver_system_config_t defaultConfig() {
 	config.code_signing_policy = dserver_code_signing_policy_off;
 	config.csr_active_config = dtape_csr_default_config();
 	config.seal_images = 0;
+	config.disable_pointer_authentication = 0;
 	config.generation = 0;
 	return config;
 };
@@ -94,6 +95,18 @@ int DarlingServer::SystemConfig::validate(const dserver_system_config_t& pushed)
 		return -EINVAL;
 	}
 
+	if (pushed.present & DSERVER_SYSTEM_CONFIG_HAS_DISABLE_POINTER_AUTHENTICATION) {
+		if (pushed.disable_pointer_authentication > 1) {
+			return -EINVAL;
+		}
+	} else if (pushed.disable_pointer_authentication != 0) {
+		return -EINVAL;
+	}
+
+	if (pushed.reserved != 0) {
+		return -EINVAL;
+	}
+
 	if (pushed.present & DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH) {
 		// the terminating NUL must be inside the buffer; nothing past it is looked at
 		const void* nul = memchr(pushed.trust_store_path, '\0', sizeof(pushed.trust_store_path));
@@ -126,6 +139,9 @@ int DarlingServer::SystemConfig::apply(const dserver_system_config_t& pushed, bo
 	}
 	if (pushed.present & DSERVER_SYSTEM_CONFIG_HAS_SEAL_IMAGES) {
 		next.seal_images = pushed.seal_images;
+	}
+	if (pushed.present & DSERVER_SYSTEM_CONFIG_HAS_DISABLE_POINTER_AUTHENTICATION) {
+		next.disable_pointer_authentication = pushed.disable_pointer_authentication;
 	}
 	if (pushed.present & DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH) {
 		// `validate` made sure the string is terminated within the buffer

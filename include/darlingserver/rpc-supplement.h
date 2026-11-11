@@ -262,12 +262,14 @@ typedef union dserver_s2c_call {
 #define DSERVER_SYSTEM_CONFIG_HAS_CSR_ACTIVE_CONFIG   (1u << 1)
 #define DSERVER_SYSTEM_CONFIG_HAS_SEAL_IMAGES         (1u << 2)
 #define DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH    (1u << 3)
+#define DSERVER_SYSTEM_CONFIG_HAS_DISABLE_POINTER_AUTHENTICATION (1u << 4)
 
 #define DSERVER_SYSTEM_CONFIG_HAS_ALL ( \
 		DSERVER_SYSTEM_CONFIG_HAS_CODE_SIGNING_POLICY | \
 		DSERVER_SYSTEM_CONFIG_HAS_CSR_ACTIVE_CONFIG | \
 		DSERVER_SYSTEM_CONFIG_HAS_SEAL_IMAGES | \
-		DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH \
+		DSERVER_SYSTEM_CONFIG_HAS_TRUST_STORE_PATH | \
+		DSERVER_SYSTEM_CONFIG_HAS_DISABLE_POINTER_AUTHENTICATION \
 	)
 
 // values of `CodeSigningPolicy` ("off", "warn" and "enforce" in the domain)
@@ -314,6 +316,18 @@ typedef struct dserver_system_config {
 	 * 0 or 1. Default: 0.
 	 */
 	uint32_t seal_images;
+
+	/**
+	 * 0 or 1. Default: 0. When 1, mldr turns off arm64 pointer authentication for every
+	 * Darwin process it starts afterwards (on hosts that support it), so that arm64e code
+	 * and Darling's plain arm64 libraries agree on pointers.
+	 */
+	uint32_t disable_pointer_authentication;
+
+	/**
+	 * Must be zero.
+	 */
+	uint32_t reserved;
 
 	/**
 	 * Number of pushes accepted so far; 0 means the built-in defaults are in effect.
