@@ -998,9 +998,15 @@ thread_set_state(
 			}
 			case ARM_DEBUG_STATE64:
 			{
-				// TODO: ARM64 debug state
-				dtape_stub("ARM64 debug state");
-				return KERN_NOT_SUPPORTED;
+				if (state_count < ARM_DEBUG_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+				// No hardware debug registers can be installed yet. Restoring an
+				// inactive state is valid; retain an explicit error for active ones.
+				const unsigned char* bytes = (const unsigned char*) state;
+				for (size_t i = 0; i < sizeof(arm_debug_state64_t); ++i)
+					if (bytes[i] != 0)
+						return KERN_NOT_SUPPORTED;
+				return KERN_SUCCESS;
 			}
 			default:
 				return KERN_INVALID_ARGUMENT;
@@ -1303,8 +1309,13 @@ thread_get_state_internal(
 			}
 			case ARM_DEBUG_STATE64:
 			{
-				// TODO: ARM64 debug state
-				return KERN_NOT_SUPPORTED;
+				if (*state_count < ARM_DEBUG_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+				// XNU returns a zero debug state for threads with no DebugData.
+				// Darling currently cannot install active ARM64 debug registers.
+				memset(state, 0, sizeof(arm_debug_state64_t));
+				*state_count = ARM_DEBUG_STATE64_COUNT;
+				return KERN_SUCCESS;
 			}
 			default:
 				return KERN_INVALID_ARGUMENT;
