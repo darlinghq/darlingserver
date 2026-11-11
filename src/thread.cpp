@@ -83,6 +83,87 @@ static DarlingServer::Log threadLog("thread");
 
 DarlingServer::StackPool DarlingServer::Thread::stackPool(IDLE_THREAD_STACK_COUNT, THREAD_STACK_SIZE, USE_THREAD_GUARD_PAGES);
 
+// Finds which of the given threads (all in the same process) owns the stack containing `stackHint`:
+// the one whose stack pointer is nearest below it. Each thread is briefly ptrace-attached to read
+// its registers and is always detached again. Returns -1 if no thread matches.
+//
+// If no readable thread matches but exactly one thread's registers could not be read, that thread
+// is returned and `guessed` is set: it is the only thread that can still be the one we want.
+// With two or more unreadable threads there is no way to tell them apart, so none is chosen.
+static pid_t findThreadByStackHint(const std::vector<pid_t>& ids, void* stackHint, bool& guessed) {
+	pid_t chosenId = -1;
+	intptr_t nearest = std::numeric_limits<intptr_t>::max();
+	pid_t unreadableId = -1;
+	size_t unreadableCount = 0;
+
+	guessed = false;
+
+	for (auto id : ids) {
+		if (ptrace(PTRACE_ATTACH, id, 0, 0) == -1) {
+			continue;
+		}
+
+		int status;
+		int waitStatus;
+		do {
+			waitStatus = waitpid(id, &status, 0);
+		} while (waitStatus == -1 && errno == EINTR);
+
+		if (waitStatus < 0) {
+			continue;
+		}
+
+		// the thread exited before it stopped; it is gone and no longer traced
+		if (WIFEXITED(status) || WIFSIGNALED(status)) {
+			continue;
+		}
+
+		uintptr_t stackPointer = 0;
+		bool gotStackPointer = false;
+#ifdef __x86_64__
+		struct user_regs_struct regs;
+		if (ptrace(PTRACE_GETREGS, id, 0, &regs) != -1) {
+			stackPointer = regs.rsp;
+			gotStackPointer = true;
+		}
+#elif defined(__aarch64__)
+		struct user_regs_struct regs;
+		struct iovec iov = { &regs, sizeof(regs) };
+		if (ptrace(PTRACE_GETREGSET, id, (void*)NT_PRSTATUS, &iov) != -1) {
+			stackPointer = regs.sp;
+			gotStackPointer = true;
+		}
+#else
+	#error Unsupported architecture
+#endif
+
+		if (gotStackPointer) {
+			intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)stackPointer;
+			if (stackDiff >= 0 && stackDiff < nearest) {
+				chosenId = id;
+				nearest = stackDiff;
+			}
+		}
+		else {
+			// e.g. a thread that has not reached its ptrace stop yet; it is still detached below
+			unreadableId = id;
+			++unreadableCount;
+		}
+
+		// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
+		if (ptrace(PTRACE_DETACH, id, 0, 0) == -1) {
+			throw std::system_error(errno, std::generic_category(), "Failed to detach from process.");
+		}
+	}
+
+	if (chosenId == -1 && unreadableCount == 1) {
+		chosenId = unreadableId;
+		guessed = true;
+	}
+
+	return chosenId;
+};
+
 DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void* stackHint):
 	_nstid(nsid),
 	_process(process)
@@ -134,51 +215,11 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 		if (ids.size() == 1) {
 			_tid = ids[0];
 		} else if (stackHint != nullptr) {
-			pid_t chosenId = -1;
-			intptr_t nearest = std::numeric_limits<intptr_t>::max();
-
-			for (auto id : ids) {
-				if (ptrace(PTRACE_ATTACH, id, 0, 0) == -1) {
-					continue;
-				}
-
-				int status;
-				int waitStatus = waitpid(id, &status, 0);
-
-				if (waitStatus < 0) {
-					continue;
-				}
-
-#if defined(__aarch64__)
-				struct user_regs_struct regs;
-				struct iovec iov = { &regs, sizeof(regs) };
-				if (ptrace(PTRACE_GETREGSET, id, (void*)NT_PRSTATUS, &iov) == -1) {
-					continue;
-				}
-				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.sp;
-				if (stackDiff >= 0 && stackDiff < nearest) {
-#elif defined(__x86_64__)
-				struct user_regs_struct regs;
-				if (ptrace(PTRACE_GETREGS, id, 0, &regs) == -1) {
-					continue;
-				}
-				intptr_t stackDiff = (intptr_t)stackHint - (intptr_t)regs.rsp;
-				if (stackDiff >= 0 && stackDiff < nearest) {
-#else
-	#error Unsupported architecture
-				if (true) {
-#endif
-					chosenId = id;
-					nearest = stackDiff;
-				}
-
-				// this is critical: we're tracing a process but cannot detach from it, and it'll not run normally.
-				if (ptrace(PTRACE_DETACH, id, 0, 0) == -1) {
-					throw std::system_error(errno, std::generic_category(), "Failed to detach from process.");
-				}
+			bool guessed;
+			_tid = findThreadByStackHint(ids, stackHint, guessed);
+			if (guessed) {
+				threadLog.debug() << "Stack hint matched no readable thread; using thread " << _tid << ", the only one whose registers could not be read" << threadLog.endLog;
 			}
-
-			_tid = chosenId;
 		}
 	}
 
