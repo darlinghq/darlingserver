@@ -120,6 +120,10 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	if (architecture == dserver_rpc_architecture_x86_64 || architecture == dserver_rpc_architecture_arm64) {
 		task_set_64Bit_addr(&task->xnu_task);
 		task_set_64Bit_data(&task->xnu_task);
+	} else {
+		// the IPC code tells a 32-bit task from a 64-bit one by the size of its map,
+		// and lays out out-of-line message descriptors (and their user-space size) to match
+		task->xnu_task.map->max_offset = VM_MAX_ADDRESS;
 	}
 
 	ipc_task_enable(&task->xnu_task);
