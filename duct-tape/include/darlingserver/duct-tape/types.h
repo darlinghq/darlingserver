@@ -40,6 +40,12 @@ typedef struct dtape_memory_info {
 	uint64_t resident_size;
 	uint64_t page_size;
 	uint64_t region_count;
+	uint64_t resident_size_peak;
+	uint64_t internal_size;
+	uint64_t external_size;
+	uint64_t swapped_size;
+	uint64_t phys_footprint;
+	uint64_t phys_footprint_peak;
 } dtape_memory_info_t;
 
 typedef enum dtape_memory_protection {

@@ -36,6 +36,8 @@
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <atomic>
+#include <algorithm>
+#include <string>
 
 #include "procmap-query.h"
 
@@ -513,6 +515,57 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 
 	// TODO
 	info.regionCount = 0;
+
+	// the breakdown: Linux has no counterpart of the compressor, so swap is the stand-in
+	// for compressed memory in the footprint, and the rest follows Mach's definitions of
+	// "internal" (anonymous) and "external" (file-backed) pages
+	uint64_t rssAnon = 0, rssFile = 0, rssShmem = 0, vmSwap = 0, vmHwm = 0;
+	bool haveBreakdown = false;
+	{
+		std::ifstream status("/proc/" + std::to_string(_pid) + "/status");
+		std::string line;
+		while (std::getline(status, line)) {
+			unsigned long long kb = 0;
+			char name[16] = {0};
+			if (sscanf(line.c_str(), "%15[A-Za-z]: %llu kB", name, &kb) != 2) {
+				continue;
+			}
+			if (strcmp(name, "RssAnon") == 0) {
+				rssAnon = kb * 1024;
+				haveBreakdown = true;
+			} else if (strcmp(name, "RssFile") == 0) {
+				rssFile = kb * 1024;
+			} else if (strcmp(name, "RssShmem") == 0) {
+				rssShmem = kb * 1024;
+			} else if (strcmp(name, "VmSwap") == 0) {
+				vmSwap = kb * 1024;
+			} else if (strcmp(name, "VmHWM") == 0) {
+				vmHwm = kb * 1024;
+			}
+		}
+	}
+
+	if (haveBreakdown) {
+		info.internalSize = rssAnon + rssShmem;
+		info.externalSize = rssFile;
+		info.swappedSize = vmSwap;
+	} else {
+		// no per-type counters (kernels before 4.5): count everything resident as anonymous
+		info.internalSize = info.residentSize;
+	}
+	info.physFootprint = info.internalSize + info.swappedSize;
+
+	// The kernel's high-water mark can lag the resident size it has just reported by a
+	// few pages (per-thread counter batching), so both peaks are also kept monotonic
+	// here: a peak never goes down between queries.
+	auto raisePeak = [](std::atomic<uint64_t>& peak, uint64_t value) {
+		uint64_t current = peak.load(std::memory_order_relaxed);
+		while (current < value && !peak.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+		}
+		return std::max(current, value);
+	};
+	info.residentSizePeak = raisePeak(_residentSizePeak, std::max(vmHwm, info.residentSize));
+	info.physFootprintPeak = raisePeak(_physFootprintPeak, info.physFootprint);
 
 	return info;
 };
