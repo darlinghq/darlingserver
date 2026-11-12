@@ -1097,6 +1097,17 @@ int main(int argc, char** argv) {
 			//exit(1);
 		}
 
+		// launchd is the first process of the container's pid namespace; when it dies, the kernel
+		// kills every other process in the container. Tie its life to ours, so that the container
+		// does not outlive the server that every process in it talks to.
+		// This has to come after the privilege drop above: changing ids clears the parent-death signal.
+		// There is no getppid() check for a server that died before this point: our parent is outside
+		// the namespace and getppid() returns 0 here. The end-of-file check on the socket pair below
+		// covers that case.
+		if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0) {
+			fprintf(stderr, "Warning: failed to tie launchd to the server's life: %s\n", strerror(errno));
+		}
+
 		// tell the parent that our namespace is set up
 		if (!sendReadyByte(childWaitFDs[0])) {
 			exit(1);
