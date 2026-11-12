@@ -1036,7 +1036,9 @@ kern_return_t mach_memory_entry_ownership(ipc_port_t entry_port, task_t owner, i
 	if (ledger_flags & ~VM_LEDGER_FLAGS) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	if (ledger_tag <= 0 || ledger_tag > VM_LEDGER_TAG_MAX) {
+	// Some callers pass -1 (VM_LEDGER_TAG_UNCHANGED in newer XNU; not defined in this tree's
+	// headers): keep the tag and change only the owner.
+	if (ledger_tag != VM_LEDGER_TAG_NONE && ledger_tag != -1 && (ledger_tag < 0 || ledger_tag > VM_LEDGER_TAG_MAX)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 	if (!is_named_entry_port(entry_port)) {
