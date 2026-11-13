@@ -164,6 +164,16 @@ void mirrorBelow(int lowerFd, int upperFd, const std::string& path) {
 
 bool copyBelow(int lowerFd, int upperFd, const std::string& path);
 
+// Whether the copy gives files the owners of the lower ones. Only root can; the copy is made by one
+// thread, and this is set once before it starts. Without it the files belong to whoever copies, and
+// the set-ID bits, which would then name that user rather than the lower owner, are not kept.
+bool keepOwners = true;
+
+mode_t copiedMode(mode_t lowerMode) {
+	mode_t mode = lowerMode & ALLPERMS;
+	return keepOwners ? mode : (mode & ~(S_ISUID | S_ISGID));
+}
+
 // Owner and times of a symbolic link, through a descriptor of the link itself.
 bool setLinkAttributes(int upperFd, const char* name, const struct stat& from, const std::string& path) {
 	Fd link(openat(upperFd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC));
@@ -179,7 +189,7 @@ bool setLinkAttributes(int upperFd, const char* name, const struct stat& from, c
 		skipped(path, "it changed while being updated");
 		return true;
 	}
-	if (fchownat(link.get(), "", from.st_uid, from.st_gid, AT_EMPTY_PATH) != 0) {
+	if (keepOwners && fchownat(link.get(), "", from.st_uid, from.st_gid, AT_EMPTY_PATH) != 0) {
 		return failed("set the owner of", path);
 	}
 	const struct timespec times[] = { from.st_atim, from.st_mtim };
@@ -196,7 +206,10 @@ bool setLinkAttributes(int upperFd, const char* name, const struct stat& from, c
 // other links is left alone, as changing it would change files elsewhere.
 bool updateFileAttributes(int upperFd, const char* name, const struct stat& from, const struct stat& to, const std::string& path) {
 	mode_t mode = from.st_mode & ALLPERMS & ~(S_ISUID | S_ISGID);
-	if (to.st_uid == from.st_uid && to.st_gid == from.st_gid && (to.st_mode & ALLPERMS) == (from.st_mode & ALLPERMS)) {
+	if (keepOwners && to.st_uid == from.st_uid && to.st_gid == from.st_gid && (to.st_mode & ALLPERMS) == (from.st_mode & ALLPERMS)) {
+		return true;
+	}
+	if (!keepOwners && (to.st_mode & ALLPERMS) == mode) {
 		return true;
 	}
 
@@ -222,7 +235,7 @@ bool updateFileAttributes(int upperFd, const char* name, const struct stat& from
 	// this very file.
 	std::string self = procFdPath(file.get());
 	const struct timespec times[] = { from.st_atim, from.st_mtim };
-	if (fchownat(file.get(), "", from.st_uid, from.st_gid, AT_EMPTY_PATH) != 0) {
+	if (keepOwners && fchownat(file.get(), "", from.st_uid, from.st_gid, AT_EMPTY_PATH) != 0) {
 		return failed("set the owner of", path);
 	}
 	if (chmod(self.c_str(), mode) != 0) {
@@ -280,10 +293,10 @@ bool copyFile(int lowerFd, int upperFd, const char* name, const struct stat& fro
 
 	// The owner first: changing it clears set-ID bits, which the mode then sets.
 	const struct timespec times[] = { from.st_atim, from.st_mtim };
-	if (fchown(out.get(), from.st_uid, from.st_gid) != 0) {
+	if (keepOwners && fchown(out.get(), from.st_uid, from.st_gid) != 0) {
 		return failed("set the owner of", path);
 	}
-	if (fchmod(out.get(), from.st_mode & ALLPERMS) != 0) {
+	if (fchmod(out.get(), copiedMode(from.st_mode)) != 0) {
 		return failed("set the permissions of", path);
 	}
 	if (futimens(out.get(), times) != 0) {
@@ -336,7 +349,7 @@ bool copyDirectory(int lowerFd, int upperFd, const char* name, const struct stat
 			return failed("open", path);
 		}
 		created = now.st_uid == geteuid();
-		if (created && (fchown(upper.get(), from.st_uid, from.st_gid) != 0 || fchmod(upper.get(), from.st_mode & ALLPERMS) != 0)) {
+		if (created && ((keepOwners && fchown(upper.get(), from.st_uid, from.st_gid) != 0) || fchmod(upper.get(), copiedMode(from.st_mode)) != 0)) {
 			return failed("set the owner and permissions of", path);
 		}
 	}
@@ -482,7 +495,8 @@ void mirrorDirectories(int lowerFd, int upperFd) {
 	mirrorBelow(lowerFd, upperFd, "");
 }
 
-bool copyTree(int lowerFd, int upperFd) {
+bool copyTree(int lowerFd, int upperFd, bool giveLowerOwners) {
+	keepOwners = giveLowerOwners;
 	return copyBelow(lowerFd, upperFd, "");
 }
 

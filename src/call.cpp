@@ -605,10 +605,11 @@ void DarlingServer::Call::MldrPath::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			auto tmpstr = std::string(Config::defaultMldrPath).substr(0, _body.buffer_size - 1);
+			auto mldrPath = Config::defaultMldrPath();
+			auto tmpstr = mldrPath.substr(0, _body.buffer_size - 1);
 			auto len = std::min(tmpstr.length() + 1, _body.buffer_size);
 
-			fullLength = Config::defaultMldrPath.length();
+			fullLength = mldrPath.length();
 
 			if (!process->writeMemory(_body.buffer, tmpstr.c_str(), len, &code)) {
 				// writeMemory returns a positive error code, but we want a negative one
@@ -1649,7 +1650,9 @@ static DarlingServer::Log codeSigningLog("codesign");
 static constexpr const char* defaultTrustStorePath = "/private/var/db/darling/trustcache";
 
 // the key that signs the trust store, in the Darling installation (outside the prefix's writable layer)
-static constexpr const char* trustStorePublicKeyPath = LIBEXEC_PATH "/private/var/db/darling/trustcache.pub";
+static std::string trustStorePublicKeyPath() {
+	return DarlingServer::Config::libexecPath() + "/private/var/db/darling/trustcache.pub";
+}
 
 static bool trustStoreContains(const uint8_t* cdhash) {
 	auto config = DarlingServer::SystemConfig::sharedInstance().current();
@@ -1660,7 +1663,7 @@ static bool trustStoreContains(const uint8_t* cdhash) {
 		path.assign(config.trust_store_path, strnlen(config.trust_store_path, sizeof(config.trust_store_path)));
 	}
 
-	bool found = DarlingServer::TrustStore::sharedInstance().contains(DarlingServer::Server::sharedInstance().prefix(), path, trustStorePublicKeyPath, cdhash, error);
+	bool found = DarlingServer::TrustStore::sharedInstance().contains(DarlingServer::Server::sharedInstance().prefix(), path, trustStorePublicKeyPath(), cdhash, error);
 
 	if (!error.empty()) {
 		codeSigningLog.warning() << "Cannot use the trust store " << path << ": " << error << codeSigningLog.endLog;
