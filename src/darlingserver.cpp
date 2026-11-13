@@ -281,6 +281,14 @@ void spawnLaunchd(const char* prefix)
 	setenv("__mldr_DYLD_ROOT_PATH", libexec.c_str(), 1);
 	setenv("__mldr_sockpath", tmp.c_str(), 1);
 
+	// Without a PID namespace launchd is not process 1 and has no procfs of its own; it is told so.
+	// This is the server's own finding about itself, not a setting taken from anyone's environment.
+	if (runMode == DarlingServer::RunMode::Mode::NonRoot) {
+		setenv("DARLING_NONROOT", "1", 1);
+	} else {
+		unsetenv("DARLING_NONROOT");
+	}
+
 	// These describe the host user and its host paths. launchd sets them for
 	// each job from the job's own account, but never replaces inherited ones.
 	static const char* const hostIdentityVars[] = { "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR" };
@@ -1247,6 +1255,13 @@ int main(int argc, char** argv) {
 			exit(1);
 		}
 		close(childWaitFDs[0]);
+
+		// Without a PID namespace, daemons that detach from their parents would be adopted by the host's
+		// init and escape the container. As the subreaper they stay below launchd in the process tree,
+		// which is how the launcher finds the container's processes to end. The setting survives exec.
+		if (runMode == DarlingServer::RunMode::Mode::NonRoot && prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
+			fprintf(stderr, "Warning: cannot make launchd a subreaper: %s\n", strerror(errno));
+		}
 
 		spawnLaunchd(prefix);
 		__builtin_unreachable();
