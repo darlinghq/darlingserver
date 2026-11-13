@@ -65,6 +65,16 @@ DarlingServer::CodeSigning::Image::Image() {
 };
 
 namespace {
+	// The length of an ASN1_STRING. ASN1_STRING_length() is deprecated from OpenSSL 4.1 in favour
+	// of ASN1_STRING_get_length(), which OpenSSL 3 does not have.
+	size_t asn1StringLength(const ASN1_STRING* string) {
+#if OPENSSL_VERSION_NUMBER >= 0x40100000L
+		return ASN1_STRING_get_length(string);
+#else
+		return static_cast<size_t>(ASN1_STRING_length(string));
+#endif
+	}
+
 	template<typename T, void (*Free)(T*)>
 	struct Deleter {
 		void operator()(T* object) const {
@@ -133,13 +143,14 @@ namespace {
 		int count = attribute ? X509_ATTRIBUTE_count(attribute) : 0;
 
 		for (int i = 0; i < count; ++i) {
-			ASN1_TYPE* value = X509_ATTRIBUTE_get0_type(attribute, i);
+			const ASN1_TYPE* value = X509_ATTRIBUTE_get0_type(attribute, i);
 			if (!value || value->type != V_ASN1_SEQUENCE || !value->value.sequence) {
 				continue;
 			}
 
-			const unsigned char* data = value->value.sequence->data;
-			TypesPointer elements(d2i_ASN1_SEQUENCE_ANY(nullptr, &data, value->value.sequence->length));
+			// Accessors rather than fields: ASN1_STRING is opaque since OpenSSL 4.
+			const unsigned char* data = ASN1_STRING_get0_data(value->value.sequence);
+			TypesPointer elements(d2i_ASN1_SEQUENCE_ANY(nullptr, &data, static_cast<long>(asn1StringLength(value->value.sequence))));
 			if (!elements || sk_ASN1_TYPE_num(elements.get()) != 2) {
 				continue;
 			}
@@ -151,7 +162,7 @@ namespace {
 			}
 
 			if (OBJ_obj2nid(algorithm->value.object) == nid &&
-				static_cast<size_t>(ASN1_STRING_length(digest->value.octet_string)) == codeDirectory.digest_length &&
+				asn1StringLength(digest->value.octet_string) == codeDirectory.digest_length &&
 				memcmp(ASN1_STRING_get0_data(digest->value.octet_string), codeDirectory.digest, codeDirectory.digest_length) == 0)
 			{
 				return true;
@@ -231,7 +242,7 @@ int DarlingServer::CodeSigning::verifyCms(const struct dc_cs_image& image, std::
 		return -1;
 	}
 
-	X509_PUBKEY* publicKey = X509_get_X509_PUBKEY(sk_X509_value(certificates.get(), 0));
+	const X509_PUBKEY* publicKey = X509_get_X509_PUBKEY(sk_X509_value(certificates.get(), 0));
 	unsigned char* encoded = nullptr;
 	int encodedLength = publicKey ? i2d_X509_PUBKEY(publicKey, &encoded) : -1;
 	unsigned int digestLength = 0;

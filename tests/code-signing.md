@@ -1,6 +1,6 @@
 # Code signing state checks
 
-Host-only tests, no darlingserver build needed (they need the host's OpenSSL 3 libcrypto and
+Host-only tests, no darlingserver build needed (they need the host's OpenSSL 3 or later libcrypto and
 libxml2 development files; python3 and the openssl tool for the trust store tool check). From
 the repository root:
 
