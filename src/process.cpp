@@ -784,6 +784,16 @@ bool DarlingServer::Process::setTracerProcess(std::shared_ptr<Process> tracerPro
 	return true;
 };
 
+bool DarlingServer::Process::clearTracerProcess(std::shared_ptr<Process> tracerProcess) {
+	std::unique_lock lock(_rwlock);
+	auto current = _tracerProcess.lock();
+	if (current && current != tracerProcess) {
+		return false;
+	}
+	_tracerProcess.reset();
+	return true;
+};
+
 void DarlingServer::Process::_resetCodeSigningState() {
 	static std::atomic<uint64_t> nextGeneration{1};
 	auto config = SystemConfig::sharedInstance().current();

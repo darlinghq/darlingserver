@@ -1190,7 +1190,18 @@ void DarlingServer::Call::SetTracer::processCall() {
 
 	if (targetProcess) {
 		if (_body.tracer == 0) {
-			// leave tracer process as nullptr
+			// detach: the calling process stops being the tracer. Only the tracer itself may do this.
+			if (_body.target == 0) {
+				code = EPERM;
+			} else if (auto thread = _thread.lock()) {
+				if (!targetProcess->clearTracerProcess(thread->process())) {
+					code = EPERM;
+				}
+			} else {
+				code = -ESRCH;
+			}
+			_sendReply(code);
+			return;
 		} else {
 			if (auto maybeTracerProcess = processRegistry().lookupEntryByNSID(_body.tracer)) {
 				tracerProcess = *maybeTracerProcess;
