@@ -1,6 +1,6 @@
 # Code signature parser checks
 
-Host-only tests, no darlingserver build needed (they need the host's OpenSSL 3 libcrypto and
+Host-only tests, no darlingserver build needed (they need the host's OpenSSL 3 or later libcrypto and
 libxml2 development files). From the repository root:
 
 ```sh

@@ -1,6 +1,6 @@
 # Platform identity checks
 
-Host-only test, no darlingserver build needed (it needs the host's OpenSSL 3 libcrypto). From the
+Host-only test, no darlingserver build needed (it needs the host's OpenSSL 3 or later libcrypto). From the
 repository root:
 
 ```sh
