@@ -274,9 +274,14 @@ static void testCopyWithoutOwners() {
 	writeFile("n/lower/sub/setgid", "setgid", 02755, 2000);
 	writeFile("n/lower/setuid", "setuid", 04755, 2000);
 	writeFile("n/lower/plain", "plain", 0640, 2000);
+	// what the user cannot read is left out instead of failing the whole copy (root reads everything)
+	writeFile("n/lower/secret", "secret", 0200, 2000);
+	mkdirs("n/lower/closed", 0300);
 	mkdirs("n/upper");
 	int lower = openDir("n/lower"), upper = openDir("n/upper");
 	bool ok = copyTree(lower, upper, false);
+	chmod(at("n/lower/closed").c_str(), 0755);
+	chmod(at("n/lower/secret").c_str(), 0644);
 	close(lower);
 	close(upper);
 	CHECK(ok, "the copy without owners succeeds");
@@ -284,6 +289,11 @@ static void testCopyWithoutOwners() {
 	CHECK(modeOf("n/upper/setuid") == 0755, "the set-user-ID bit is dropped without owners");
 	CHECK(modeOf("n/upper/sub/setgid") == 0755, "the set-group-ID bit is dropped without owners");
 	CHECK(modeOf("n/upper/sub") == 0755, "a directory loses the set-group-ID bit too");
+	if (geteuid() != 0) {
+		struct stat st;
+		CHECK(!lstatOk("n/upper/secret", st), "a file the user cannot read is not copied");
+		CHECK(lstatOk("n/upper/closed", st) && S_ISDIR(st.st_mode), "a directory the user cannot read is created empty");
+	}
 }
 
 static void testUserDirs() {

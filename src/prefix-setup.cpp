@@ -169,6 +169,12 @@ bool copyBelow(int lowerFd, int upperFd, const std::string& path);
 // the set-ID bits, which would then name that user rather than the lower owner, are not kept.
 bool keepOwners = true;
 
+// A copy made without root (keepOwners is false) can only contain what its user can read; the system
+// image has a few root-only files (a print backend, for one) that such a user could not use anyway.
+bool unreadableByCopier(int error) {
+	return !keepOwners && error == EACCES;
+}
+
 mode_t copiedMode(mode_t lowerMode) {
 	mode_t mode = lowerMode & ALLPERMS;
 	return keepOwners ? mode : (mode & ~(S_ISUID | S_ISGID));
@@ -250,6 +256,10 @@ bool updateFileAttributes(int upperFd, const char* name, const struct stat& from
 bool copyFile(int lowerFd, int upperFd, const char* name, const struct stat& from, const std::string& path) {
 	Fd in(openat(lowerFd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
 	if (!in.ok()) {
+		if (unreadableByCopier(errno)) {
+			skipped(path, "this user cannot read it");
+			return true;
+		}
 		return failed("read", path);
 	}
 	// A new file that nobody else can open until it is complete.
@@ -356,6 +366,10 @@ bool copyDirectory(int lowerFd, int upperFd, const char* name, const struct stat
 
 	Fd lower(openat(lowerFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
 	if (!lower.ok()) {
+		if (unreadableByCopier(errno)) {
+			skipped(path, "this user cannot read it");
+			return true;
+		}
 		return failed("read", path);
 	}
 	if (!copyBelow(lower.get(), upper.get(), path)) {
