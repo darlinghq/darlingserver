@@ -102,24 +102,29 @@ static void testLibexec() {
 	CHECK(libexecFor(Mode::NonRoot, "/opt/..x/.y", &ok) == "/opt/..x/.y" && ok, "names that only start with dots are fine");
 }
 
+static bool writeMap(const char* path, unsigned id) {
+	char map[64];
+	snprintf(map, sizeof(map), "0 %u 1", id);
+	int fd = open(path, O_WRONLY);
+	if (fd < 0) {
+		return false;
+	}
+	bool ok = write(fd, map, strlen(map)) == (ssize_t) strlen(map);
+	close(fd);
+	return ok;
+}
+
 // Makes a user namespace mapping only this process's ids, as 0, the way the launcher's rootless child
-// does. Returns false if user namespaces are not available.
+// does. Returns false if user namespaces are not available, or are but cannot be used: some hosts
+// (Ubuntu's AppArmor restriction of unprivileged user namespaces) let an unprivileged process create
+// one without any capability in it, so it cannot write its own id maps.
 static bool enterSingleIdNamespace(uid_t uid, gid_t gid) {
 	if (unshare(CLONE_NEWUSER) != 0) {
 		return false;
 	}
-	char map[64];
 	int fd = open("/proc/self/setgroups", O_WRONLY);
 	if (fd >= 0) { write(fd, "deny", 4); close(fd); }
-	snprintf(map, sizeof(map), "0 %u 1", gid);
-	fd = open("/proc/self/gid_map", O_WRONLY);
-	if (fd < 0 || write(fd, map, strlen(map)) < 0) { _exit(78); }
-	close(fd);
-	snprintf(map, sizeof(map), "0 %u 1", uid);
-	fd = open("/proc/self/uid_map", O_WRONLY);
-	if (fd < 0 || write(fd, map, strlen(map)) < 0) { _exit(78); }
-	close(fd);
-	return true;
+	return writeMap("/proc/self/gid_map", gid) && writeMap("/proc/self/uid_map", uid);
 }
 
 // Runs body in a child and returns its exit status: 0 for a pass, 77 when it cannot run here.
@@ -136,7 +141,7 @@ static int inChild(F body) {
 
 static void report(int status, const char* what) {
 	if (status == 77) {
-		std::printf("SKIP %s (user namespaces are not available)\n", what);
+		std::printf("SKIP %s (user namespaces are not available or not usable)\n", what);
 	} else {
 		CHECK(status == 0, what);
 	}
