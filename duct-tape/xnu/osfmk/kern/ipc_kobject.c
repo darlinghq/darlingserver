@@ -1225,11 +1225,11 @@ ipc_kobject_notify(
 	 * refcount on kernel-internal objects - make sure
 	 * that the message wasn't faked!
 	 */
-	if (0 != bcmp(&trailer->msgh_audit, &KERNEL_AUDIT_TOKEN,
+	if (0 != memcmp(&trailer->msgh_audit, &KERNEL_AUDIT_TOKEN,
 	    sizeof(trailer->msgh_audit))) {
 		return FALSE;
 	}
-	if (0 != bcmp(&trailer->msgh_sender, &KERNEL_SECURITY_TOKEN,
+	if (0 != memcmp(&trailer->msgh_sender, &KERNEL_SECURITY_TOKEN,
 	    sizeof(trailer->msgh_sender))) {
 		return FALSE;
 	}

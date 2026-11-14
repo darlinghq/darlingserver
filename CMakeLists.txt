@@ -68,6 +68,16 @@ else()
 	)
 endif()
 
+# Detect Bionic (Android/Termux) from the compiler, so that native builds on
+# an Android device are recognized even when CMAKE_SYSTEM_NAME is Linux.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+#if !defined(__ANDROID__) && !defined(__BIONIC__)
+#error not Bionic
+#endif
+int main() { return 0; }
+" DSERVER_BIONIC)
+
 add_subdirectory(duct-tape)
 
 set(DARLINGSERVER_INIT_PROCESS "/sbin/launchd" CACHE STRING "The init process darlingserver should execute (default is \"/sbin/launchd\")")
@@ -172,6 +182,14 @@ target_link_libraries(darlingserver_dc_codesign PUBLIC
 	${OPENSSL_CRYPTO_LIBRARY}
 	${LIBXML2_LIBRARY}
 )
+
+if (DSERVER_BIONIC)
+	# Bionic has no usable ucontext functions or POSIX semaphores of its own on
+	# these hosts; they come from libucontext and android-posix-semaphore.
+	find_library(LIBUCONTEXT ucontext REQUIRED)
+	find_library(LIBSEMAPHORE android-posix-semaphore REQUIRED)
+	target_link_libraries(darlingserver PRIVATE ${LIBUCONTEXT} ${LIBSEMAPHORE})
+endif()
 
 target_compile_options(darlingserver PRIVATE
 	-pthread

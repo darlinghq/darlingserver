@@ -28,7 +28,21 @@ struct kalloc_heap KHEAP_DATA_BUFFERS[1];
 vm_size_t kalloc_max_prerounded = 0;
 
 void* calloc(size_t count, size_t size);
+#if defined(__ANDROID__)
+static inline void* darling_aligned_alloc(size_t alignment, size_t size) {
+	void* ptr = NULL;
+	if (alignment < sizeof(void*)) {
+		alignment = sizeof(void*);
+	}
+	if (posix_memalign(&ptr, alignment, size) != 0) {
+		return NULL;
+	}
+	return ptr;
+}
+#define aligned_alloc darling_aligned_alloc
+#else
 void* aligned_alloc(size_t alignment, size_t size);
+#endif
 
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long int offset);
 int munmap(void* addr, size_t length);
