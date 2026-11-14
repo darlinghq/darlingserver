@@ -236,6 +236,10 @@ namespace DarlingServer {
 
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);
+		/**
+		 * Forgets the tracer, but only if it is `tracerProcess`. Returns whether the process has no tracer afterwards.
+		 */
+		bool clearTracerProcess(std::shared_ptr<Process> tracerProcess);
 
 		/**
 		 * The process's (guest) user ID, as the process itself set it.
