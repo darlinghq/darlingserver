@@ -19,8 +19,8 @@
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
 #   prefix_setup  links <source-root>/src/prefix-setup.cpp, compiled unchanged, and runs it as the
 #              current (unprivileged) user in a private directory.
-#   run_mode  links <source-root>/src/run-mode.cpp, compiled unchanged; checks the mode decision, in a
-#              child that makes its own user namespace, and the libexec override rule.
+#   run_mode  links <source-root>/src/run-mode.cpp, compiled unchanged; checks the mode decision, in
+#              children that make their own user namespaces, and the libexec override rule.
 #   thread_discovery  includes findThreadByStackHint() cut out of <source-root>/src/thread.cpp
 #              (tests/host/extract-static.sh) and runs it against the threads of a child process.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.

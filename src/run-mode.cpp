@@ -21,12 +21,18 @@
 
 #include <darling-config.h>
 
+#include <cerrno>
 #include <climits>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <linux/capability.h>
+#include <linux/nsfs.h>
 
 namespace DarlingServer::RunMode {
 
@@ -42,32 +48,106 @@ bool isInitialUserNamespace(std::string_view uidMap) {
 	return inside == 0 && outside == 0 && count == 4294967295ULL;
 }
 
-Mode classify(bool initialNamespace, bool rootId, bool capabilities) {
-	if (!initialNamespace) {
-		return Mode::Rootless;
+bool isSingleIdMap(std::string_view map, unsigned int outsideId) {
+	// exactly "0 <id> 1", with padding and a final newline, and nothing after it
+	if (!map.empty() && map.back() == '\n') {
+		map.remove_suffix(1);
 	}
-	return (rootId || capabilities) ? Mode::Root : Mode::NonRoot;
+	if (map.find('\n') != std::string_view::npos) {
+		return false;
+	}
+	std::istringstream line{std::string(map)};
+	unsigned long long inside, outside, count;
+	std::string extra;
+	if (!(line >> inside >> outside >> count) || (line >> extra)) {
+		return false;
+	}
+	return inside == 0 && outside == outsideId && count == 1;
 }
 
-Mode detect() {
-	std::string uidMap;
-	{
-		std::ifstream file("/proc/self/uid_map");
-		std::stringstream contents;
-		contents << file.rdbuf();
-		uidMap = contents.str();
+Mode classify(const Facts& facts) {
+	if (facts.initialNamespace || facts.parent == ParentNamespace::Same) {
+		return (facts.rootId || facts.capabilities) ? Mode::Root : Mode::NonRoot;
 	}
+	if (facts.parent == ParentNamespace::Other && facts.launcherUserOnly) {
+		return Mode::Rootless;
+	}
+	// A namespace that maps more than the launcher's user, such as a container's whose root started
+	// the launcher, or one that cannot be told apart from it: privileges there may reach other users'
+	// files, so they must be dropped as in Root mode.
+	return Mode::Root;
+}
+
+static std::string readFile(const char* path) {
+	std::ifstream file(path);
+	std::stringstream contents;
+	contents << file.rdbuf();
+	return contents.str();
+}
+
+static ParentNamespace parentNamespace() {
+	struct stat self, parent;
+	if (stat("/proc/self/ns/user", &self) != 0) {
+		return ParentNamespace::Unknown;
+	}
+
+	pid_t ppid = getppid();
+	if (ppid <= 1) {
+		return ParentNamespace::Unknown;
+	}
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/%d/ns/user", (int) ppid);
+	int result = stat(path, &parent);
+	int error = errno;
+	// the parent exited, and the pid may now be another process's
+	if (getppid() != ppid) {
+		return ParentNamespace::Unknown;
+	}
+
+	if (result == 0) {
+		return (self.st_dev == parent.st_dev && self.st_ino == parent.st_ino) ? ParentNamespace::Same : ParentNamespace::Other;
+	}
+	// The kernel lets a process look at another's namespaces only with the right to ptrace it, which
+	// a process in a child namespace never has over its parent in the parent namespace (and a process
+	// cannot ask for the parent of its own user namespace either). Being refused therefore says the
+	// parent is elsewhere; whether that elsewhere maps more than the user is checked separately.
+	return (error == EACCES || error == EPERM) ? ParentNamespace::Other : ParentNamespace::Unknown;
+}
+
+// Whether the namespace's owner (the euid of the process that made it) is id 0 inside it, the one id
+// the launcher's map has: the user made the namespace for themselves.
+static bool ownerIsMappedRoot() {
+	int fd = open("/proc/self/ns/user", O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		return false;
+	}
+	uid_t owner = (uid_t) -1;
+	bool ok = ioctl(fd, NS_GET_OWNER_UID, &owner) == 0 && owner == 0;
+	close(fd);
+	return ok;
+}
+
+Mode detect(uid_t uid, gid_t gid) {
+	Facts facts{};
+
+	std::string uidMap = readFile("/proc/self/uid_map");
 	// without the map, assume the host's namespace, the one where privileges mean something
-	bool initialNamespace = uidMap.empty() || isInitialUserNamespace(uidMap);
+	facts.initialNamespace = uidMap.empty() || isInitialUserNamespace(uidMap);
+	if (!facts.initialNamespace) {
+		facts.parent = parentNamespace();
+		// a namespace that maps only root is root's, whoever asks for it to be called the user's
+		facts.launcherUserOnly = uid != 0 && isSingleIdMap(uidMap, uid) && isSingleIdMap(readFile("/proc/self/gid_map"), gid)
+			&& ownerIsMappedRoot();
+	}
 
 	uid_t ruid, euid, suid;
-	bool rootId = getresuid(&ruid, &euid, &suid) != 0 || ruid == 0 || euid == 0 || suid == 0;
+	facts.rootId = getresuid(&ruid, &euid, &suid) != 0 || ruid == 0 || euid == 0 || suid == 0;
 
 	struct __user_cap_header_struct header = { _LINUX_CAPABILITY_VERSION_3, 0 };
 	struct __user_cap_data_struct data[2] = {};
-	bool capabilities = syscall(SYS_capget, &header, data) != 0 || data[0].effective != 0 || data[1].effective != 0;
+	facts.capabilities = syscall(SYS_capget, &header, data) != 0 || data[0].effective != 0 || data[1].effective != 0;
 
-	return classify(initialNamespace, rootId, capabilities);
+	return classify(facts);
 }
 
 bool resolveLibexecPath(Mode mode, const char* override, std::string& path, std::string& error) {

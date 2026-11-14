@@ -984,8 +984,9 @@ int main(int argc, char** argv) {
 
 	// What the kernel says this process may do decides the mode. Neither the arguments nor the
 	// environment can make it other than what it is, so a process with root's power is always in Root
-	// mode, whatever it is told.
-	runMode = DarlingServer::RunMode::detect();
+	// mode, whatever it is told. The user and group given only have to match the namespace's map for
+	// Rootless; given wrongly, they lead to Root, which needs root ids and drops to them.
+	runMode = DarlingServer::RunMode::detect(originalUID, originalGID);
 
 	if (runningAsRoot() && (getuid() != 0 || getgid() != 0)) {
 		fprintf(stderr, "darlingserver needs to start as root\n");

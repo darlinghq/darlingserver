@@ -28,16 +28,19 @@ namespace DarlingServer::RunMode {
 	// How darlingserver was started, decided from what the kernel says about this process and never from
 	// anything the user can set.
 	//
-	//   Root      The process can act as root on the host: a real, effective or saved uid of 0 in the
-	//             initial user namespace, or an effective capability there. Started by the setuid
-	//             launcher (or by root). The full prefix setup runs as root, with every access to the
-	//             user's files made as the user.
-	//   Rootless  The process is inside a user namespace the launcher created. Whatever it is allowed
-	//             to do there, it is allowed only on the user's own behalf; the host sees the user.
+	//   Root      The process can act as root in the user namespace it shares with the launcher (the
+	//             initial one on most hosts, a container's own on others): a real, effective or saved uid
+	//             of 0, or an effective capability. Started by the setuid launcher (or by root). The full
+	//             prefix setup runs as root, with every access to the user's files made as the user.
+	//   Rootless  The process is inside a user namespace the launcher's unprivileged child made for it,
+	//             which maps the launcher's user and group only. Whatever it is allowed to do there, it is
+	//             allowed only on the user's own behalf; the launcher's namespace sees the user.
 	//   NonRoot   No privileges and no namespaces: the prefix is a plain copy owned by the user.
 	//
 	// Both unprivileged modes give the user nothing they could not do themselves, so settings that the
-	// user picks (see resolveLibexecPath) may apply to them, and never to Root.
+	// user picks (see resolveLibexecPath) may apply to them, and never to Root. A process whose
+	// namespace does not fit either description is Root, which needs root ids and drops them to the
+	// user's, so a wrong guess fails rather than keeping privileges.
 	enum class Mode {
 		Root,
 		Rootless,
@@ -48,14 +51,40 @@ namespace DarlingServer::RunMode {
 	// id to itself. Anything else, or contents that cannot be parsed, is not the initial namespace.
 	bool isInitialUserNamespace(std::string_view uidMap);
 
-	// The mode for a process with the given facts. initialNamespace: the user namespace is the
-	// initial one. rootId: the real, effective or saved uid is 0. capabilities: the effective
-	// capability set is not empty.
-	Mode classify(bool initialNamespace, bool rootId, bool capabilities);
+	// Whether the contents of /proc/self/uid_map (or gid_map) are exactly the map the launcher writes for
+	// rootless mode: one line mapping id 0 inside to the given id outside, for a single id.
+	bool isSingleIdMap(std::string_view map, unsigned int outsideId);
 
-	// Reads the facts of this process and classifies it. Anything that cannot be determined counts as
-	// privileged, so that a failure can only lead to the stricter behaviour.
-	Mode detect();
+	// Where the parent process (the launcher) is, as far as user namespaces go.
+	enum class ParentNamespace {
+		Unknown,     // it could not be told
+		Same,        // the parent's user namespace is this process's own
+		Other,       // the parent is in a different user namespace, or in one this process may not look at
+	};
+
+	// The facts the mode is decided from.
+	struct Facts {
+		// the user namespace is the initial one
+		bool initialNamespace;
+		ParentNamespace parent;
+		// the uid and gid maps each map only the launcher's user (or group) to 0, and the namespace's
+		// owner is that user
+		bool launcherUserOnly;
+		// the real, effective or saved uid is 0
+		bool rootId;
+		// the effective capability set is not empty
+		bool capabilities;
+	};
+
+	// The mode for a process with the given facts. In the initial user namespace, or in the launcher's,
+	// privileges decide between Root and NonRoot. Rootless needs a namespace other than the launcher's
+	// that maps only the launcher's user. Anything else is Root.
+	Mode classify(const Facts& facts);
+
+	// Reads the facts of this process and classifies it. uid and gid are the launcher's user and group,
+	// as the launcher passed them, in the launcher's namespace. Anything that cannot be determined counts
+	// as privileged, so that a failure can only lead to the stricter behaviour.
+	Mode detect(uid_t uid, gid_t gid);
 
 	// The libexec directory (the read-only system image the prefix is assembled on) to use. The
 	// override, from the DARLING_LIBEXEC_PATH environment variable, is honoured only for the
