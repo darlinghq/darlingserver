@@ -47,6 +47,9 @@ target_link_libraries(dserver_platform_identity_test PRIVATE ${OPENSSL_CRYPTO_LI
 # root-mode prefix setup helpers; run as an ordinary user in a private directory
 dserver_host_test(prefix_setup TEMP_DIR SOURCES ${host}/prefix_setup_test.cpp ${root}/src/prefix-setup.cpp)
 
+# the run mode decision (root, user namespace, no privileges) and the libexec override rule
+dserver_host_test(run_mode SOURCES ${host}/run_mode_test.cpp ${root}/src/run-mode.cpp)
+
 # tests that compile real functions cut out of a source file
 
 add_custom_command(

@@ -71,7 +71,11 @@ namespace DarlingServer::PrefixSetup {
 	// that file, never by name. The set-user-ID and set-group-ID bits are only given to a file this
 	// call created and filled itself. An entry that changes kind while this runs is skipped.
 	// Returns false, after a message, on any other error.
-	bool copyTree(int lowerFd, int upperFd);
+	//
+	// giveLowerOwners is true when running as root. Without root (the unprivileged modes) the owners
+	// cannot be set: the copy then belongs to its maker, and the set-ID bits, which would name that user
+	// instead of the lower owner, are dropped.
+	bool copyTree(int lowerFd, int upperFd, bool giveLowerOwners = true);
 
 	// Looks up one of the user's directories (name is "DOWNLOAD", "MUSIC" and so on) in the contents
 	// of an xdg-user-dirs configuration file, user-dirs.dirs. Its lines have the form
