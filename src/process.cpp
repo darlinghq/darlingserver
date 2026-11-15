@@ -355,6 +355,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// the new image registers its own when its libpthread initializes
 		mainThread->_cancelMarkedAddress = 0;
 
+		// the loader reports the new image's UUID once it has parsed the image
+		_executableUuid = {};
+
 		// destroy the main thread's old S2C semaphores
 		dtape_semaphore_destroy(mainThread->_s2cPerformSempahore);
 		mainThread->_s2cPerformSempahore = nullptr;
@@ -413,6 +416,10 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// parent's next fork() returns before that child has checked in and inherited its ports.
 		// notify the parent process (if we have one) that we've arrived
 		if (auto parent = _parentProcess.lock()) {
+			// a forked child runs the parent's image
+			setExecutablePath(parent->executablePath());
+			setExecutableUuid(parent->executableUuid());
+
 			{
 				// the parent may have died (or be dying) before we checked in;
 				// its fork-wait semaphore is gone then and there's no one left to wake up
@@ -906,6 +913,16 @@ std::string DarlingServer::Process::executablePath() const {
 void DarlingServer::Process::setExecutablePath(std::string path) {
 	std::unique_lock lock(_rwlock);
 	_executablePath = std::move(path);
+};
+
+std::array<uint8_t, 16> DarlingServer::Process::executableUuid() const {
+	std::shared_lock lock(_rwlock);
+	return _executableUuid;
+};
+
+void DarlingServer::Process::setExecutableUuid(const std::array<uint8_t, 16>& uuid) {
+	std::unique_lock lock(_rwlock);
+	_executableUuid = uuid;
 };
 
 uintptr_t DarlingServer::Process::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {

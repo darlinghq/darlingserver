@@ -20,6 +20,7 @@
 #ifndef _DARLINGSERVER_PROCESS_HPP_
 #define _DARLINGSERVER_PROCESS_HPP_
 
+#include <array>
 #include <atomic>
 #include <sys/types.h>
 #include <memory>
@@ -134,6 +135,7 @@ namespace DarlingServer {
 		Architecture _architecture;
 		std::weak_ptr<Process> _tracerProcess;
 		std::string _executablePath;
+		std::array<uint8_t, 16> _executableUuid = {};
 		bool _dead = false;
 		std::shared_ptr<Process> _selfReference = nullptr;
 		std::vector<uint32_t> _groups;
@@ -284,6 +286,12 @@ namespace DarlingServer {
 
 		std::string executablePath() const;
 		void setExecutablePath(std::string path);
+
+		/**
+		 * The LC_UUID of the main executable (all zeros when it has none).
+		 */
+		std::array<uint8_t, 16> executableUuid() const;
+		void setExecutableUuid(const std::array<uint8_t, 16>& uuid);
 
 		uintptr_t allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite);
 		void freePages(uintptr_t address, size_t pageCount);
