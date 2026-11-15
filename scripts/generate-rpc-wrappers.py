@@ -822,6 +822,19 @@ calls = [
 		('count', 'int32_t'),
 		('activity_id', 'uint64_t*', 'uint64_t'),
 	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
+
+	# the LC_UUID of the main executable the process was started from (16 bytes, as
+	# `proc_pidinfo(PROC_PIDUNIQIDENTIFIERINFO)` reports it in `p_uuid`). `set` is called by the
+	# loader about the image it loads; `get` reads another process's value (ESRCH when no
+	# such process; all zeros when the image has no LC_UUID).
+	('set_executable_uuid', [
+		('uuid', 'const void*', 'uint64_t'),
+	], []),
+
+	('get_executable_uuid', [
+		('pid', 'int32_t'),
+		('uuid', 'void*', 'uint64_t'),
+	], []),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

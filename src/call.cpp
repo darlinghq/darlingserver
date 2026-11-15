@@ -1442,6 +1442,52 @@ void DarlingServer::Call::FileRefPath::processCall() {
 	_sendReply(code, fullLength);
 };
 
+void DarlingServer::Call::SetExecutableUuid::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			std::array<uint8_t, 16> uuid;
+			if (!process->readMemory((uintptr_t)_body.uuid, uuid.data(), uuid.size(), &code)) {
+				// readMemory returns a positive error code, but we want a negative one
+				code = -code;
+			} else {
+				process->setExecutableUuid(uuid);
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::GetExecutableUuid::processCall() {
+	int code = 0;
+
+	if (auto callingThread = _thread.lock()) {
+		if (auto callingProcess = callingThread->process()) {
+			if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.pid)) {
+				auto uuid = (*maybeTargetProcess)->executableUuid();
+				if (!callingProcess->writeMemory((uintptr_t)_body.uuid, uuid.data(), uuid.size(), &code)) {
+					code = -code;
+				}
+			} else {
+				// not negated because this is an acceptable case (see GetExecutablePath).
+				code = ESRCH;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
 void DarlingServer::Call::GetExecutablePath::processCall() {
 	int code = 0;
 	uint64_t fullLength;
