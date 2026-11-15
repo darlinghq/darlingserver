@@ -349,7 +349,8 @@ typedef struct dserver_system_config {
  * The platform identity holds the values of the `org.darlinghq.platform`
  * preferences domain that the layers below CoreFoundation report: `hw.model`,
  * `machdep.cpu.brand_string`, `hw.memsize` (and `host_info()`), `gethostuuid()`,
- * and the IOPlatformExpertDevice properties that iokitd publishes. As with the
+ * `kern.osproductversion`, `kern.osversion`, `kern.osrelease`, and the
+ * IOPlatformExpertDevice properties that iokitd publishes. As with the
  * system configuration, a guest daemon reads the domain through CFPreferences
  * and pushes it with `set_platform_identity`. It pushes the identity before the
  * system configuration, so `wait_system_config` also covers the identity.
@@ -362,6 +363,9 @@ typedef struct dserver_system_config {
  *   - `platform_uuid`: derived from the host's machine ID (see below);
  *   - `serial_number`: "DARLING-" and 8 hex digits from the same derivation;
  *   - `cpu_brand_string`, `memory_size`: none, so the host's values are used;
+ *   - `os_product_version`, `os_version`, `os_release`: none, so libsystem_kernel's
+ *     built-in emulated values are used for kern.osproductversion, kern.osversion,
+ *     and kern.osrelease;
  *   - `rom`, `mlb_serial_number`, `system_id`, `provisioning_udid`: none
  *     (these are never synthesized).
  *
@@ -378,7 +382,7 @@ typedef struct dserver_system_config {
  * afterwards; libsystem_kernel reads it once per process.
  */
 
-#define DSERVER_PLATFORM_IDENTITY_VERSION 1
+#define DSERVER_PLATFORM_IDENTITY_VERSION 2
 
 // size of each string field, including the terminating NUL
 #define DSERVER_PLATFORM_IDENTITY_STRING_MAX 64
@@ -395,8 +399,11 @@ typedef struct dserver_system_config {
 #define DSERVER_PLATFORM_IDENTITY_HAS_MLB_SERIAL_NUMBER (1u << 8)
 #define DSERVER_PLATFORM_IDENTITY_HAS_SYSTEM_ID         (1u << 9)
 #define DSERVER_PLATFORM_IDENTITY_HAS_PROVISIONING_UDID (1u << 10)
+#define DSERVER_PLATFORM_IDENTITY_HAS_OS_PRODUCT_VERSION (1u << 11)
+#define DSERVER_PLATFORM_IDENTITY_HAS_OS_VERSION         (1u << 12)
+#define DSERVER_PLATFORM_IDENTITY_HAS_OS_RELEASE         (1u << 13)
 
-#define DSERVER_PLATFORM_IDENTITY_HAS_ALL ((1u << 11) - 1)
+#define DSERVER_PLATFORM_IDENTITY_HAS_ALL ((1u << 14) - 1)
 
 typedef struct dserver_platform_identity {
 	/**
@@ -468,6 +475,9 @@ typedef struct dserver_platform_identity {
 	char serial_number[DSERVER_PLATFORM_IDENTITY_STRING_MAX];     // `SerialNumber`
 	char mlb_serial_number[DSERVER_PLATFORM_IDENTITY_STRING_MAX]; // `MLBSerialNumber`
 	char cpu_brand_string[DSERVER_PLATFORM_IDENTITY_STRING_MAX];  // `CPUBrandString`
+	char os_product_version[DSERVER_PLATFORM_IDENTITY_STRING_MAX]; // `OSProductVersion`
+	char os_version[DSERVER_PLATFORM_IDENTITY_STRING_MAX];         // `OSVersion`
+	char os_release[DSERVER_PLATFORM_IDENTITY_STRING_MAX];         // `OSRelease`
 } dserver_platform_identity_t;
 
 //

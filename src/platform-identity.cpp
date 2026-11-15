@@ -35,7 +35,7 @@ static_assert(offsetof(dserver_platform_identity_t, memory_size) == 24, "the lay
 static_assert(offsetof(dserver_platform_identity_t, platform_uuid) == 32, "the layout must not depend on the architecture");
 static_assert(offsetof(dserver_platform_identity_t, rom) == 80, "the layout must not depend on the architecture");
 static_assert(offsetof(dserver_platform_identity_t, model) == 88, "the layout must not depend on the architecture");
-static_assert(sizeof(dserver_platform_identity_t) == 88 + 6 * DSERVER_PLATFORM_IDENTITY_STRING_MAX, "the layout must not depend on the architecture");
+static_assert(sizeof(dserver_platform_identity_t) == 88 + 9 * DSERVER_PLATFORM_IDENTITY_STRING_MAX, "the layout must not depend on the architecture");
 
 // the application ID that machine-id(5) asks every user of the machine ID to hash it with,
 // so that the value we hand out cannot be correlated with the raw machine ID or with other
@@ -238,6 +238,9 @@ int DarlingServer::PlatformIdentity::validate(const dserver_platform_identity_t&
 		CHECK_STRING(DSERVER_PLATFORM_IDENTITY_HAS_SERIAL_NUMBER, serial_number) &&
 		CHECK_STRING(DSERVER_PLATFORM_IDENTITY_HAS_MLB_SERIAL_NUMBER, mlb_serial_number) &&
 		CHECK_STRING(DSERVER_PLATFORM_IDENTITY_HAS_CPU_BRAND_STRING, cpu_brand_string) &&
+		CHECK_STRING(DSERVER_PLATFORM_IDENTITY_HAS_OS_PRODUCT_VERSION, os_product_version) &&
+		CHECK_STRING(DSERVER_PLATFORM_IDENTITY_HAS_OS_VERSION, os_version) &&
+		CHECK_STRING(DSERVER_PLATFORM_IDENTITY_HAS_OS_RELEASE, os_release) &&
 		CHECK_BYTES(DSERVER_PLATFORM_IDENTITY_HAS_PLATFORM_UUID, platform_uuid) &&
 		CHECK_BYTES(DSERVER_PLATFORM_IDENTITY_HAS_SYSTEM_ID, system_id) &&
 		CHECK_BYTES(DSERVER_PLATFORM_IDENTITY_HAS_PROVISIONING_UDID, provisioning_udid) &&
@@ -283,6 +286,9 @@ int DarlingServer::PlatformIdentity::apply(const dserver_platform_identity_t& pu
 	TAKE_STRING(DSERVER_PLATFORM_IDENTITY_HAS_SERIAL_NUMBER, serial_number);
 	TAKE_STRING(DSERVER_PLATFORM_IDENTITY_HAS_MLB_SERIAL_NUMBER, mlb_serial_number);
 	TAKE_STRING(DSERVER_PLATFORM_IDENTITY_HAS_CPU_BRAND_STRING, cpu_brand_string);
+	TAKE_STRING(DSERVER_PLATFORM_IDENTITY_HAS_OS_PRODUCT_VERSION, os_product_version);
+	TAKE_STRING(DSERVER_PLATFORM_IDENTITY_HAS_OS_VERSION, os_version);
+	TAKE_STRING(DSERVER_PLATFORM_IDENTITY_HAS_OS_RELEASE, os_release);
 	TAKE_BYTES(DSERVER_PLATFORM_IDENTITY_HAS_PLATFORM_UUID, platform_uuid);
 	TAKE_BYTES(DSERVER_PLATFORM_IDENTITY_HAS_SYSTEM_ID, system_id);
 	TAKE_BYTES(DSERVER_PLATFORM_IDENTITY_HAS_PROVISIONING_UDID, provisioning_udid);

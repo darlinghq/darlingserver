@@ -45,6 +45,9 @@ static dserver_platform_identity_t fullPush() {
 	std::strcpy(identity.serial_number, "TESTSERIAL01");
 	std::strcpy(identity.mlb_serial_number, "TESTMLBSERIAL00001");
 	std::strcpy(identity.cpu_brand_string, "Test CPU @ 3.00GHz");
+	std::strcpy(identity.os_product_version, "12.6.8");
+	std::strcpy(identity.os_version, "21G725");
+	std::strcpy(identity.os_release, "21.6.0");
 	identity.memory_size = 8ull << 30;
 	std::memcpy(identity.platform_uuid, pushedUUID, 16);
 	std::memcpy(identity.provisioning_udid, pushedUUID, 16);
@@ -131,6 +134,8 @@ int main(int argc, char** argv) {
 #endif
 		CHECK(std::memcmp(current.platform_uuid, expectedUUID, 16) == 0, "defaults: derived UUID");
 		CHECK(std::strcmp(current.serial_number, expectedSerial) == 0, "defaults: derived serial");
+		CHECK(current.os_product_version[0] == 0 && current.os_version[0] == 0 && current.os_release[0] == 0,
+			"defaults: OS product version, version, release left empty");
 		CHECK(current.cpu_brand_string[0] == 0 && current.memory_size == 0, "defaults: brand string and memory size left to the host");
 		dserver_platform_identity_t zero;
 		std::memset(&zero, 0, sizeof(zero));
@@ -185,6 +190,25 @@ int main(int argc, char** argv) {
 			"partial push: pushed model, defaults for the rest");
 	}
 
+	// a push with only the OS version keys
+	{
+		PlatformIdentity identity(machineID);
+		auto pushed = emptyPush();
+		pushed.present = DSERVER_PLATFORM_IDENTITY_HAS_OS_PRODUCT_VERSION |
+			DSERVER_PLATFORM_IDENTITY_HAS_OS_VERSION |
+			DSERVER_PLATFORM_IDENTITY_HAS_OS_RELEASE;
+		std::strcpy(pushed.os_product_version, "12.6.8");
+		std::strcpy(pushed.os_version, "21G725");
+		std::strcpy(pushed.os_release, "21.6.0");
+		CHECK(identity.apply(pushed) == 0, "push with only OS version keys accepted");
+		auto current = identity.current();
+		CHECK(current.generation == 1, "OS version push: generation 1");
+		CHECK(std::strcmp(current.os_product_version, "12.6.8") == 0, "OS version push: product version in effect");
+		CHECK(std::strcmp(current.os_version, "21G725") == 0, "OS version push: build version in effect");
+		CHECK(std::strcmp(current.os_release, "21.6.0") == 0, "OS version push: release in effect");
+		CHECK(current.model[0] != 0 && std::memcmp(current.platform_uuid, expectedUUID, 16) == 0, "OS version push: defaults for the rest");
+	}
+
 	// the provisioning UDID must be the platform UUID in effect
 	{
 		PlatformIdentity identity(machineID);
@@ -202,13 +226,13 @@ int main(int argc, char** argv) {
 	// every kind of malformed push is rejected
 	{
 		auto p = fullPush();
-		p.version = 2;
+		p.version = 1;
 		checkRejected(p, "wrong version rejected");
 		p = fullPush();
 		p.size -= 1;
 		checkRejected(p, "wrong size rejected");
 		p = fullPush();
-		p.present |= 1u << 11;
+		p.present |= 1u << 14;
 		checkRejected(p, "unknown present bit rejected");
 		p = fullPush();
 		p.generation = 1;
@@ -251,6 +275,15 @@ int main(int argc, char** argv) {
 		p = fullPush();
 		p.present &= ~DSERVER_PLATFORM_IDENTITY_HAS_CPU_BRAND_STRING;
 		checkRejected(p, "brand string without its present bit rejected");
+		p = fullPush();
+		p.present &= ~DSERVER_PLATFORM_IDENTITY_HAS_OS_PRODUCT_VERSION;
+		checkRejected(p, "OS product version without its present bit rejected");
+		p = fullPush();
+		p.present &= ~DSERVER_PLATFORM_IDENTITY_HAS_OS_VERSION;
+		checkRejected(p, "OS version without its present bit rejected");
+		p = fullPush();
+		p.present &= ~DSERVER_PLATFORM_IDENTITY_HAS_OS_RELEASE;
+		checkRejected(p, "OS release without its present bit rejected");
 		p = fullPush();
 		p.present &= ~DSERVER_PLATFORM_IDENTITY_HAS_MEMORY_SIZE;
 		checkRejected(p, "memory size without its present bit rejected");
