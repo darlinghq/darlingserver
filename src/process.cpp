@@ -328,10 +328,15 @@ bool DarlingServer::Process::writeMemory(uintptr_t remoteAddress, const void* lo
 	return _readOrWriteMemory(true, remoteAddress, const_cast<void*>(localBuffer), length, errorCode);
 };
 
-void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFork) {
+void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFork, bool fromMainThread) {
 	std::unique_lock lock(_rwlock);
 
-	bool didExec = _pendingReplacement;
+	// An exec'd image checks in on its main thread before creating any other thread, so that check-in, and only
+	// that one, completes an exec recorded at its checkout. Previously the exec pipe's hangup set a flag that the
+	// next check-in consumed; when the new image's main-thread check-in was handled first, the flag outlived it and
+	// a later thread's check-in ran this exec branch. That declared the other threads, including the caller, dead,
+	// leaving the later thread waiting for a reply that could never be delivered.
+	bool didExec = !isFork && fromMainThread && _execsInFlight > 0;
 
 	if (didExec) {
 		// exec case
@@ -441,7 +446,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		}
 	}
 
-	_pendingReplacement = false;
+	if (didExec) {
+		_execsInFlight = 0;
+	}
 
 	lock.unlock();
 
@@ -474,12 +481,21 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 	}
 };
 
-void DarlingServer::Process::setPendingReplacement() {
+void DarlingServer::Process::noteExecCheckout() {
 	std::unique_lock lock(_rwlock);
 
 	processLog.info() << "Process " << id() << " (" << nsid() << ") is now pending replacement" << processLog.endLog;
 
-	_pendingReplacement = true;
+	++_execsInFlight;
+};
+
+void DarlingServer::Process::noteExecFailed() {
+	std::unique_lock lock(_rwlock);
+
+	// the new image may have checked in already (then it was a later exec that succeeded, and the count is 0)
+	if (_execsInFlight > 0) {
+		--_execsInFlight;
+	}
 };
 
 void DarlingServer::Process::registerKqchan(std::shared_ptr<Kqchan> kqchan) {
