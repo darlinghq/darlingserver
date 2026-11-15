@@ -1748,6 +1748,16 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 		_deferredReply = std::move(reply);
 	} else if (!_dead) {
 		Server::sharedInstance().sendMessage(std::move(reply));
+	} else {
+		// Nobody waits for it once the thread died with its process; while the process lives the client may
+		// still wait for it (an exec check-in's other threads), and that was silent before
+		auto process = _process;
+		lock.unlock(); // the process's lock is taken below, never under a thread's
+		if (process && !process->isDead()) {
+			threadLog.error() << *this << ": dropped the reply to call #" << (expectedCall ? static_cast<int>(expectedCall->number()) : -1) << " of a thread marked dead in a live process (pid " << process->id() << ", nspid " << process->nsid() << ")" << threadLog.endLog;
+		} else {
+			threadLog.debug() << *this << ": dropped the reply to a call of a dead thread" << threadLog.endLog;
+		}
 	}
 };
 
