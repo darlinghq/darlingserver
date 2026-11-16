@@ -499,10 +499,10 @@ kern_return_t handle_ux_exception(thread_t xthread, int exception, mach_exceptio
 	if (thread->processing_signal) {
 		dtape_hooks->thread_set_pending_signal(thread->context, ux_signal);
 	} else {
-		// the exception cannot be turned into a signal for this thread right now; let the exception processing fail
-		// rather than bring the server down
-		dtape_stub_safe("handle_ux_exception(): TODO: introduce signal into thread");
-		return KERN_FAILURE;
+		// was dtape_stub_unsafe: an exception message sent to the kernel's (ux) handler for a thread that is
+		// not in signal processing aborted the server. The signal is not introduced into the thread (not
+		// implemented); the exception is dropped with a warning, as for an exception with no handler.
+		dtape_log_warning("handle_ux_exception: dropping signal %d (exception %d) for a thread outside signal processing", ux_signal, exception);
 	}
 
 	return KERN_SUCCESS;
@@ -1538,13 +1538,21 @@ void thread_poll_yield(thread_t self) {
 };
 
 kern_return_t act_get_state_to_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* count) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// As XNU: thread_get_state_to_user() for another thread.
+	if (thread == current_thread()) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	return thread_get_state_to_user(thread, flavor, state, count);
 };
 
 kern_return_t act_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t count) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// As XNU: thread_set_state_from_user() for another thread.
+	if (thread == current_thread()) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	return thread_set_state_from_user(thread, flavor, state, count);
 };
 
 kern_return_t thread_abort(thread_t thread) {
@@ -1611,16 +1619,38 @@ void dtape_thread_returning_to_user(dtape_thread_t* thread) {
 };
 
 kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU's checks; on x86 the state needs no conversion between threads (no pointer authentication).
+	if (direction != THREAD_CONVERT_THREAD_STATE_TO_SELF && direction != THREAD_CONVERT_THREAD_STATE_FROM_SELF) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (thread == THREAD_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (in_state_count > *out_state_count) {
+		return KERN_INSUFFICIENT_BUFFER_SIZE;
+	}
+	memcpy(out_state, in_state, in_state_count * sizeof(uint32_t));
+	*out_state_count = in_state_count;
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_create_from_user(task_t task, thread_t* new_thread) {
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// Threads are Linux threads the process makes itself (bsdthread_create); one cannot be made from outside.
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_create_running_from_user(task_t task, int flavor, thread_state_t new_state, mach_msg_type_number_t new_state_count, thread_t* new_thread) {
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// Threads are Linux threads the process makes itself (bsdthread_create); one cannot be made from outside.
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
@@ -1893,18 +1923,80 @@ kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, 
 };
 
 kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU's thread_set_mach_voucher() without the bank ledger / thread group parts. XNU allows it for the current
+	// thread or one not started yet; user threads here are never marked started, so only the current one.
+	if (thread == THREAD_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (thread != current_thread()) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	ipc_voucher_reference(voucher);
+	thread_mtx_lock(thread);
+	ipc_voucher_t old_voucher = thread->ith_voucher;
+	thread->ith_voucher = voucher;
+	thread->ith_voucher_name = MACH_PORT_NULL;
+	thread_mtx_unlock(thread);
+	ipc_voucher_release(old_voucher);
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t policy, policy_base_t base, mach_msg_type_number_t base_count, policy_limit_t limit, mach_msg_type_number_t limit_count) {
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU's argument checks (osfmk/kern/mk_sp.c); the policy itself is not applied (Linux schedules the thread),
+	// as thread_policy() / thread_policy_set() here.
+	int max, bas;
+	if (thread == THREAD_NULL || pset == PROCESSOR_SET_NULL || pset != &pset0) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (invalid_policy(policy)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	switch (policy) {
+		case POLICY_RR:
+			if (base_count != POLICY_RR_BASE_COUNT || limit_count != POLICY_RR_LIMIT_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			bas = ((policy_rr_base_t)base)->base_priority;
+			max = ((policy_rr_limit_t)limit)->max_priority;
+			break;
+		case POLICY_FIFO:
+			if (base_count != POLICY_FIFO_BASE_COUNT || limit_count != POLICY_FIFO_LIMIT_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			bas = ((policy_fifo_base_t)base)->base_priority;
+			max = ((policy_fifo_limit_t)limit)->max_priority;
+			break;
+		case POLICY_TIMESHARE:
+			if (base_count != POLICY_TIMESHARE_BASE_COUNT || limit_count != POLICY_TIMESHARE_LIMIT_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			bas = ((policy_timeshare_base_t)base)->base_priority;
+			max = ((policy_timeshare_limit_t)limit)->max_priority;
+			break;
+		default:
+			return KERN_INVALID_POLICY;
+	}
+	if (invalid_pri(bas) || invalid_pri(max)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wired) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU's thread_wire_internal(): only the current thread, and only a VM-privilege flag.
+	if (host_priv == NULL || thread != current_thread()) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (wired) {
+		thread->options |= TH_OPT_VMPRIV;
+	} else {
+		thread->options &= ~TH_OPT_VMPRIV;
+	}
+	return KERN_SUCCESS;
 };
 
 kern_return_t thread_getstatus_to_user(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t* count) {
