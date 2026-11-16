@@ -220,6 +220,17 @@ static void wipeDir(const char* dirpath)
 			wipeDir(path);
 			rmdir(path);
 		}
+		else if (ent->d_type == DT_SOCK)
+		{
+			/* Leave sockets alone. wipeDir runs on every container start, and
+			 * /var/run is where out-of-container services put their
+			 * listeners - a host service binding a socket under the prefix has
+			 * it deleted out from under it at every boot, so a guest can never
+			 * connect to it. Nothing here owns a socket: the container's own
+			 * state in this directory is files and directories, and the one
+			 * socket the container itself needs (shellspawn.sock) is created
+			 * after this runs. */
+		}
 		else
 			unlink(path);
 	}
