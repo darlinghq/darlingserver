@@ -22,6 +22,9 @@
 
 #include <stdlib.h>
 
+// memory.c (XNU vm_map.c in a real kernel)
+extern void vm_map_copy_discard(vm_map_copy_t copy);
+
 task_t kernel_task = NULL;
 
 void dtape_task_init(void) {
@@ -304,33 +307,88 @@ void task_watchport_elem_deallocate(struct task_watchport_elem* watchport_elem) 
 };
 
 kern_return_t task_create_suid_cred(task_t task, suid_cred_path_t path, suid_cred_uid_t uid, suid_cred_t* sc_p) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// No setuid credentials here (guest setuid is emulated through the Uidgid RPC).
+	if (task == TASK_NULL || task != current_task()) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	return KERN_NO_ACCESS;
 };
 
 kern_return_t task_dyld_process_info_notify_deregister(task_t task, mach_port_name_t rcv_name) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// Registration is refused (below), so nothing is ever registered.
+	if (task == TASK_NULL) {
+		return KERN_INVALID_TASK;
+	}
+	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t task_dyld_process_info_notify_register(task_t task, ipc_port_t sright) {
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// dyld image notifications to another process are not implemented; on failure the MIG server destroys the
+	// send right.
+	if (task == TASK_NULL) {
+		return KERN_INVALID_TASK;
+	}
+	if (!IP_VALID(sright)) {
+		return KERN_INVALID_RIGHT;
+	}
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_generate_corpse(task_t task, ipc_port_t* corpse_task_port) {
-	dtape_stub_safe();
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU answers this when corpses are disabled.
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_get_assignment(task_t task, processor_set_t* pset) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU: every task is in pset0.
+	if (task == TASK_NULL) {
+		return KERN_FAILURE;
+	}
+	*pset = &pset0;
+	return KERN_SUCCESS;
 };
 
 kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mach_msg_type_number_t* state_count) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU (x86 machine_task_get_state): the task-wide debug state new threads inherit. None is ever set here.
+	if (task == TASK_NULL || !state || !state_count) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	switch (flavor) {
+		case x86_DEBUG_STATE32:
+			if (*state_count < x86_DEBUG_STATE32_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			memset(state, 0, x86_DEBUG_STATE32_COUNT * sizeof(natural_t));
+			*state_count = x86_DEBUG_STATE32_COUNT;
+			return KERN_SUCCESS;
+		case x86_DEBUG_STATE64:
+			if (*state_count < x86_DEBUG_STATE64_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			memset(state, 0, x86_DEBUG_STATE64_COUNT * sizeof(natural_t));
+			*state_count = x86_DEBUG_STATE64_COUNT;
+			return KERN_SUCCESS;
+		case x86_DEBUG_STATE: {
+			if (*state_count < x86_DEBUG_STATE_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			x86_debug_state_t* ds = (x86_debug_state_t*)state;
+			memset(ds, 0, sizeof(*ds));
+			ds->dsh.flavor = x86_DEBUG_STATE64;
+			ds->dsh.count = x86_DEBUG_STATE64_COUNT;
+			*state_count = x86_DEBUG_STATE_COUNT;
+			return KERN_SUCCESS;
+		}
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
 };
 
 kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
@@ -695,13 +753,15 @@ bool task_is_driver(task_t task) {
 };
 
 kern_return_t task_map_corpse_info(task_t task, task_t corpse_task, vm_address_t* kcd_addr_begin, uint32_t* kcd_size) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// There are no corpses (task_generate_corpse() fails), so corpse_task never is one.
+	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t task_map_corpse_info_64(task_t task, task_t corpse_task, mach_vm_address_t* kcd_addr_begin, mach_vm_size_t* kcd_size) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// There are no corpses (task_generate_corpse() fails), so corpse_task never is one.
+	return KERN_INVALID_ARGUMENT;
 };
 
 void task_name_deallocate(task_name_t task_name) {
@@ -814,30 +874,65 @@ void task_policy_set_deallocate(task_policy_set_t task_policy_set) {
 };
 
 kern_return_t task_purgable_info(task_t task, task_purgable_info_t* stats) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// Nothing is purgeable here: every queue is empty (XNU fills them from vm_purgeable_stats()).
+	if (task == TASK_NULL || stats == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	memset(stats, 0, sizeof(*stats));
+	return KERN_SUCCESS;
 };
 
 kern_return_t task_register_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU with kdebug tracing off: the out-of-line copy is consumed and dropped.
+	if (!infos_copy) {
+		return KERN_INVALID_ADDRESS;
+	}
+	vm_map_copy_discard((vm_map_copy_t)infos_copy);
+	return KERN_SUCCESS;
 };
 
 kern_return_t task_register_dyld_shared_cache_image_info(task_t task, dyld_kernel_image_info_t cache_img, boolean_t no_cache, boolean_t private_cache) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU only traces it (kdebug).
+	if (task == TASK_NULL || task != current_task()) {
+		return KERN_INVALID_TASK;
+	}
+	return KERN_SUCCESS;
 };
 
 // Restartable ranges are accepted but not acted upon: darlingserver does not see a thread being
 // preempted or interrupted, so it never moves one back to a range's recovery address.
 // task_restartable_ranges_synchronize therefore has nothing to wait for.
 kern_return_t task_restartable_ranges_register(task_t task, task_restartable_range_t* ranges, mach_msg_type_number_t count) {
-	dtape_stub_safe();
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// After VibeDarling/darlingserver 7856569: accepted (with XNU's checks) but not enforced; a thread interrupted
+	// inside a range is not sent to its recovery address. Same as before for every caller that got this far.
+	if (task != current_task()) {
+		return KERN_FAILURE;
+	}
+	if (count == 0) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	for (mach_msg_type_number_t i = 0; i < count; i++) {
+		if (ranges[i].length > TASK_RESTARTABLE_OFFSET_MAX || ranges[i].recovery_offs > TASK_RESTARTABLE_OFFSET_MAX || ranges[i].flags) {
+			return KERN_INVALID_ARGUMENT;
+		}
+		if (ranges[i].location + ranges[i].length < ranges[i].location) {
+			return KERN_INVALID_ARGUMENT;
+		}
+	}
+	dtape_stub_safe("not enforced");
 	return KERN_SUCCESS;
 };
 
 kern_return_t task_restartable_ranges_synchronize(task_t task) {
-	dtape_stub_safe();
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// After VibeDarling/darlingserver 7856569 (see task_restartable_ranges_register).
+	if (task != current_task()) {
+		return KERN_FAILURE;
+	}
 	return KERN_SUCCESS;
 };
 
@@ -853,8 +948,12 @@ kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t
 };
 
 kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU: no flavor is settable (TASK_TRACE_MEMORY_INFO is KERN_NOT_SUPPORTED with CONFIG_ATM).
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	return flavor == TASK_TRACE_MEMORY_INFO ? KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
@@ -863,22 +962,53 @@ kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* 
 };
 
 kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// Task-wide debug state (hardware breakpoints for every new thread) is not implemented: clearing it (all zero,
+	// what task_get_state() reports) succeeds, setting a breakpoint fails.
+	if (task == TASK_NULL || !state) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	mach_msg_type_number_t want;
+	switch (flavor) {
+		case x86_DEBUG_STATE32: want = x86_DEBUG_STATE32_COUNT; break;
+		case x86_DEBUG_STATE64: want = x86_DEBUG_STATE64_COUNT; break;
+		case x86_DEBUG_STATE: want = x86_DEBUG_STATE_COUNT; break;
+		default: return KERN_INVALID_ARGUMENT;
+	}
+	if (state_count != want) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	// x86_DEBUG_STATE starts with its header (flavor and count words)
+	for (mach_msg_type_number_t i = (flavor == x86_DEBUG_STATE) ? 2 : 0; i < state_count; i++) {
+		if (state[i] != 0) {
+			return KERN_NOT_SUPPORTED;
+		}
+	}
+	return KERN_SUCCESS;
 };
 
 void task_suspension_token_deallocate(task_suspension_token_t token) {
-	return task_deallocate((task_t)token);
+	// was dtape_stub_unsafe; task_resume2() (and the task_suspend2 MIG routine) reached it. As XNU: these are task references.
+	task_deallocate((task_t)token);
 };
 
 kern_return_t task_terminate(task_t task) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU refuses BSD tasks (all of them here); a process is ended with kill().
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	return KERN_FAILURE;
 };
 
 kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// XNU with kdebug tracing off: the out-of-line copy is consumed and dropped.
+	if (!infos_copy) {
+		return KERN_INVALID_ADDRESS;
+	}
+	vm_map_copy_discard((vm_map_copy_t)infos_copy);
+	return KERN_SUCCESS;
 };
 
 static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pid, uintptr_t t, mach_task_flavor_t flavor) {
