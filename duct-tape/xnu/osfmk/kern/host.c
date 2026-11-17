@@ -1210,6 +1210,21 @@ is_valid_host_special_port(int id)
 	       ((id <= HOST_LAST_SPECIAL_KERNEL_PORT) || (id > HOST_MAX_SPECIAL_KERNEL_PORT));
 }
 
+/*
+ * Darling does not enforce XNU's rule that the kernel-reserved special port IDs can only be
+ * changed by the kernel itself: Linux's own permission model applies instead. This lets the
+ * IOKit daemon register its port as the IO main port, which host_get_io_main/host_get_io_master
+ * then hand out. The ports that identify the host itself stay under the kernel's control.
+ */
+static bool
+is_user_settable_host_special_port(int id)
+{
+	if (id == HOST_SECURITY_PORT || id == HOST_PORT || id == HOST_PRIV_PORT) {
+		return false;
+	}
+	return is_valid_host_special_port(id);
+}
+
 extern void * XNU_PTRAUTH_SIGNED_PTR("initproc") initproc;
 
 /*
@@ -1281,7 +1296,7 @@ kernel_get_special_port(host_priv_t host_priv, int id, ipc_port_t * portp)
 kern_return_t
 host_set_special_port_from_user(host_priv_t host_priv, int id, ipc_port_t port)
 {
-	if (host_priv == HOST_PRIV_NULL || id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT) {
+	if (host_priv == HOST_PRIV_NULL || !is_user_settable_host_special_port(id)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -1299,7 +1314,7 @@ host_set_special_port_from_user(host_priv_t host_priv, int id, ipc_port_t port)
 kern_return_t
 host_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 {
-	if (host_priv == HOST_PRIV_NULL || id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT) {
+	if (host_priv == HOST_PRIV_NULL || !is_user_settable_host_special_port(id)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 

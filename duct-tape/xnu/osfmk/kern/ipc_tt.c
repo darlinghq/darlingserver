@@ -222,7 +222,16 @@ ipc_task_init(
 			task->exc_actions[i].privileged = FALSE;
 		}/* for */
 
+#ifdef __DARLING__
+		/*
+		 * Darling does not restrict the privileged host port to the kernel's own tasks: the
+		 * first task, and through inheritance every task after it, holds the privileged port,
+		 * so that host_set_special_port and the other host_priv routines are usable.
+		 */
+		kr = host_get_host_priv_port(host_priv_self(), &port);
+#else
 		kr = host_get_host_port(host_priv_self(), &port);
+#endif
 		assert(kr == KERN_SUCCESS);
 		task->itk_host = port;
 
