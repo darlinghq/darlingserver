@@ -2,6 +2,7 @@
 #define _DARLINGSERVER_DUCT_TAPE_MEMORY_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <mach/vm_types.h>
 #include <os/refcnt.h>
 #include <sys/tree.h>
@@ -14,6 +15,12 @@ typedef struct dtape_map_shared_descriptor {
 	os_refcnt_t refcount;
 	int memfd;
 	uint64_t size;
+	// identity of the memfd (what the host reports for a mapping of it); used to find the
+	// descriptor behind an existing mapping. Only valid if `identified`.
+	RB_ENTRY(dtape_map_shared_descriptor) identity_link;
+	uint64_t device;
+	uint64_t inode;
+	bool identified;
 } dtape_map_shared_descriptor_t;
 
 typedef struct dtape_map_shared_entry {

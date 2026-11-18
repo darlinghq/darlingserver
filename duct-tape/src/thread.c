@@ -1175,92 +1175,27 @@ thread_get_state_internal(
 				if (dtask->architecture == dserver_rpc_architecture_x86_64)
 					return KERN_INVALID_ARGUMENT;
 
+				// Hardware debug registers cannot be set (thread_set_state for this flavor is not supported),
+				// so none is ever armed: report them as cleared.
 				x86_debug_state32_t* s = (x86_debug_state32_t*) state;
 				*state_count = x86_DEBUG_STATE32_COUNT;
-
-				// Call self and translate from 64-bit
-				x86_debug_state64_t s64;
-				mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
-
-				kern_return_t kr = thread_get_state_internal(thread, x86_DEBUG_STATE64,
-						(thread_state_t) &s64, &count, FALSE);
-
-				if (kr != KERN_SUCCESS)
-					return kr;
-
-				s->dr0 = s64.dr0;
-				s->dr1 = s64.dr1;
-				s->dr2 = s64.dr2;
-				s->dr3 = s64.dr3;
-				s->dr4 = s64.dr4;
-				s->dr5 = s64.dr5;
-				s->dr6 = s64.dr6;
-				s->dr7 = s64.dr7;
+				memset(s, 0, sizeof(*s));
 
 				return KERN_SUCCESS;
 			}
 			case x86_DEBUG_STATE64:
 			{
-#if 0
 				if (*state_count < x86_DEBUG_STATE64_COUNT)
 					return KERN_INVALID_ARGUMENT;
 				if (dtask->architecture != dserver_rpc_architecture_x86_64)
 					return KERN_INVALID_ARGUMENT;
 
+				// see x86_DEBUG_STATE32
 				x86_debug_state64_t* s = (x86_debug_state64_t*) state;
 				*state_count = x86_DEBUG_STATE64_COUNT;
-
 				memset(s, 0, sizeof(*s));
 
-				struct thread_struct *lthread = &ltask->thread;
-				int i;
-
-				for (i = 0; i < 4; i++)
-				{
-					if (lthread->ptrace_bps[i] != NULL)
-					{
-						const struct perf_event_attr* attr = &lthread->ptrace_bps[i]->attr;
-
-						if (!attr->disabled && attr->bp_type != HW_BREAKPOINT_EMPTY)
-							s->dr7 |= 1 << (2*i); // set local enable flag
-
-						switch (attr->bp_type)
-						{
-							case HW_BREAKPOINT_W:
-								s->dr7 |= 1 << (16 + i*4);
-								break;
-							case HW_BREAKPOINT_RW:
-							case HW_BREAKPOINT_R:
-								s->dr7 |= 3 << (16 + i*4);
-								break;
-							case HW_BREAKPOINT_X:
-								break;
-						}
-
-						switch (attr->bp_len)
-						{
-							case HW_BREAKPOINT_LEN_1:
-								break;
-							case HW_BREAKPOINT_LEN_2:
-								s->dr7 |= 1 << (18 + i*4);
-								break;
-							case HW_BREAKPOINT_LEN_4:
-								s->dr7 |= 3 << (18 + i*4);
-								break;
-							case HW_BREAKPOINT_LEN_8:
-								s->dr7 |= 2 << (18 + i*4);
-								break;
-						}
-
-						(&s->dr0)[i] = attr->bp_addr;
-					}
-				}
-
 				return KERN_SUCCESS;
-#else
-				// TODO
-				return KERN_NOT_SUPPORTED;
-#endif
 			}
 			default:
 				return KERN_INVALID_ARGUMENT;
