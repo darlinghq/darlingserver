@@ -635,7 +635,7 @@ void DarlingServer::Process::_closeMapsDescriptor() {
 // Returns false if the lookup found nothing or could not be done at all; the caller then parses the text of
 // `/proc/<pid>/maps`, which also lists the gate area ("[vsyscall]") that PROCMAP_QUERY does not report.
 //
-bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset) const {
+bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset, uint64_t* device, uint64_t* inode) const {
 	if (procmapQueryUnsupported.load(std::memory_order_relaxed)) {
 		return false;
 	}
@@ -663,6 +663,12 @@ bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext
 			protection = procmapProtection(query.vma_flags);
 			shared = (query.vma_flags & PROCMAP_QUERY_VMA_SHARED) != 0;
 			offset = query.vma_offset;
+			if (device) {
+				*device = ((uint64_t)query.dev_major << 32) | query.dev_minor;
+			}
+			if (inode) {
+				*inode = query.inode;
+			}
 			return true;
 		}
 
@@ -692,10 +698,10 @@ DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInf
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryRegionInfo");
 	}
 
-	MemoryRegionInfo info;
+	MemoryRegionInfo info = {};
 	uintptr_t endAddress;
 
-	if (_queryRegion(address, false, info.startAddress, endAddress, info.protection, info.shared, info.mapOffset)) {
+	if (_queryRegion(address, false, info.startAddress, endAddress, info.protection, info.shared, info.mapOffset, &info.device, &info.inode)) {
 		info.pageCount = (endAddress - info.startAddress) / sysconf(_SC_PAGESIZE);
 		return info;
 	}
@@ -733,6 +739,15 @@ DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInf
 		}
 
 		info.shared = strchr(perms, 's') != nullptr;
+
+		// the "major:minor inode" fields that follow the offset
+		unsigned int deviceMajor = 0;
+		unsigned int deviceMinor = 0;
+		unsigned long long inode = 0;
+		if (sscanf(line.c_str(), "%*x-%*x %*s %*x %x:%x %llu", &deviceMajor, &deviceMinor, &inode) == 3) {
+			info.device = ((uint64_t)deviceMajor << 32) | deviceMinor;
+			info.inode = inode;
+		}
 
 		return info;
 	}

@@ -102,6 +102,8 @@ namespace DarlingServer {
 			uint64_t pageCount;
 			int protection;
 			uint64_t mapOffset;
+			uint64_t device;
+			uint64_t inode;
 			bool shared;
 		};
 
@@ -124,7 +126,7 @@ namespace DarlingServer {
 		// so a lookup never issues the ioctl on a descriptor that another thread closed.
 		mutable std::mutex _mapsMutex;
 		mutable int _mapsFd = -1;
-		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset) const;
+		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset, uint64_t* device = nullptr, uint64_t* inode = nullptr) const;
 		void _closeMapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
