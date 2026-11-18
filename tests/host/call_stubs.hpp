@@ -108,6 +108,13 @@ namespace DarlingServer {
 		std::shared_mutex _rwlock;
 		std::optional<Message> _s2cReply, _pendingSavedReply;
 		void* _s2cReplySempahore = nullptr;
+		bool _s2cCallInFlight = false;
+		bool _s2cStaleReplyPending = false;
+		bool _s2cStaleReplyUsedInterrupt = false;
+		size_t _s2cInterruptAbandoned = 0;
+		bool _s2cInterruptEntered = false;
+		void* _s2cInterruptEnterSemaphore = nullptr;
+		void* _s2cInterruptExitSemaphore = nullptr;
 		std::shared_ptr<Call> _pendingCall;
 		std::stack<Interrupt> _interrupts;
 		Thread(std::shared_ptr<Process> p, pid_t nsid, void*): _process(p), _nsid(nsid) {}
