@@ -96,6 +96,19 @@ namespace DarlingServer {
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
 		dtape_semaphore_t* _s2cReplySempahore = nullptr;
 		std::optional<Message> _s2cReply = std::nullopt;
+		// true from the moment an S2C call is sent until its reply is consumed or abandoned; guarded by `_rwlock`
+		bool _s2cCallInFlight = false;
+		// true while an S2C call that was sent, but whose reply we stopped waiting for (the wait was interrupted), is still unanswered.
+		// the client still performs the call and replies; that reply must be discarded when it arrives.
+		// no other S2C call is sent to the thread until then, so a reply can never be matched to the wrong call
+		// (the client may have been interrupted while servicing the call, and would then answer a newer call first); guarded by `_rwlock`
+		bool _s2cStaleReplyPending = false;
+		// whether that abandoned call was performed through the S2C interrupt (see `_s2cInterruptAbandoned`); guarded by `_rwlock`
+		bool _s2cStaleReplyUsedInterrupt = false;
+		// number of S2C interrupts we signalled but stopped waiting for; guarded by `_rwlock`
+		size_t _s2cInterruptAbandoned = 0;
+		// set by the S2C interrupt handler (S2CPerform) right before it gives the green light; guarded by `_rwlock`
+		bool _s2cInterruptEntered = false;
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;
@@ -126,7 +139,7 @@ namespace DarlingServer {
 
 		friend struct ::DTapeHooks;
 
-		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
+		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno);
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);
