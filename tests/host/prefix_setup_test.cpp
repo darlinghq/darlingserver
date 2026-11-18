@@ -223,6 +223,13 @@ static void testCopy() {
 	mkdirs("c/lower/redirected");
 	writeFile("c/lower/redirected/file", "lower redirected", 0644, 2000);
 	writeFile("c/lower/through-link", "lower through", 0644, 3000);
+	// where an older install left a link to the host's copy, the install's directory replaces it
+	mkdirs("c/lower/usr");
+	mkdirs("c/lower/usr/share");
+	mkdirs("c/lower/usr/share/zoneinfo");
+	writeFile("c/lower/usr/share/zoneinfo/file", "lower zones", 0644, 3000);
+	mkdirs("c/lower/usr/share/other");
+	writeFile("c/lower/usr/share/other/file", "lower other", 0644, 3000);
 	mkdirs("c/upper");
 	makeOutside("c/outside");
 
@@ -238,6 +245,11 @@ static void testCopy() {
 		std::exit(2);
 	}
 	makeLink("../outside", "c/upper/redirected", 2000);
+	mkdirs("c/upper/usr");
+	mkdirs("c/upper/usr/share");
+	makeLink("../../system-root/usr/share/zoneinfo", "c/upper/usr/share/zoneinfo", 1000);
+	// a user's link to somewhere else, even in the same place and older, stays and is not followed
+	makeLink("../../../outside", "c/upper/usr/share/other", 1000);
 	makeLink("../outside/victim", "c/upper/through-link", 1000);
 	mkdirs("c/upper/kind");
 
@@ -263,6 +275,9 @@ static void testCopy() {
 	CHECK(lstatOk("c/upper/kind", st) && S_ISDIR(st.st_mode), "an entry of another kind is left alone");
 	CHECK(linkTarget("c/upper/redirected") == "../outside", "a link where the lower tree has a directory is left alone");
 	CHECK(linkTarget("c/upper/through-link") == "../outside/victim", "a link where the lower tree has a file is left alone");
+	CHECK(lstatOk("c/upper/usr/share/zoneinfo", st) && S_ISDIR(st.st_mode) && readFile("c/upper/usr/share/zoneinfo/file") == "lower zones",
+		"a link to the host's copy that an older install left is replaced by the install's directory, which is then filled");
+	CHECK(linkTarget("c/upper/usr/share/other") == "../../../outside", "a user's link where the lower tree has a directory is kept, whatever its time");
 	outsideUntouched("c/outside", "copying does not follow links or hard links in the user's tree");
 }
 
@@ -294,6 +309,48 @@ static void testCopyWithoutOwners() {
 		CHECK(!lstatOk("n/upper/secret", st), "a file the user cannot read is not copied");
 		CHECK(lstatOk("n/upper/closed", st) && S_ISDIR(st.st_mode), "a directory the user cannot read is created empty");
 	}
+}
+
+// The user template fills a new home with what it lacks and never replaces or follows anything there.
+static void testFill() {
+	mkdirs("f");
+	mkdirs("f/template");
+	mkdirs("f/template/Library", 0750);
+	mkdirs("f/template/Library/Preferences");
+	writeFile("f/template/Library/Preferences/seed.plist", "template", 0644, 2000);
+	writeFile("f/template/.CFUserTextEncoding", "0x0:0:0", 0644, 2000);
+	writeFile("f/template/kept", "template kept", 0644, 5000);
+	mkdirs("f/template/Documents");
+	mkdirs("f/template/Music");
+	mkdirs("f/template/Movies");
+	mkdirs("f/home");
+	mkdirs("f/home/Library");
+	writeFile("f/home/kept", "the user's own", 0600, 1000);
+	makeOutside("f/outside");
+	// the XDG folders are links to the user's own directories; a link is not filled through
+	makeLink("../outside", "f/home/Documents", 1000);
+	makeLink("../outside/victim", "f/home/Movies", 1000);
+
+	int lower = openDir("f/template"), upper = openDir("f/home");
+	bool ok = fillTree(lower, upper);
+	close(lower);
+	close(upper);
+	struct stat st;
+	CHECK(ok, "filling from the template succeeds");
+	CHECK(readFile("f/home/Library/Preferences/seed.plist") == "template", "a file the home lacks is copied into a directory it has");
+	CHECK(lstatOk("f/home/Library/Preferences", st) && S_ISDIR(st.st_mode), "a directory the home lacks is created");
+	CHECK(readFile("f/home/.CFUserTextEncoding") == "0x0:0:0", "a hidden file is copied");
+	CHECK(readFile("f/home/kept") == "the user's own" && modeOf("f/home/kept") == 0600, "an existing file is kept even when the template's is newer");
+	CHECK(lstatOk("f/home/Music", st) && S_ISDIR(st.st_mode), "a missing directory the template has is created");
+	CHECK(linkTarget("f/home/Documents") == "../outside" && linkTarget("f/home/Movies") == "../outside/victim", "links in the home are not replaced");
+	outsideUntouched("f/outside", "filling does not follow links in the home");
+
+	lower = openDir("f/template");
+	upper = openDir("f/home");
+	writeFile("f/home/Library/Preferences/seed.plist", "edited", 0644, 9000);
+	CHECK(fillTree(lower, upper) && readFile("f/home/Library/Preferences/seed.plist") == "edited", "a second fill leaves the user's changes alone");
+	close(lower);
+	close(upper);
 }
 
 static void testUserDirs() {
@@ -355,6 +412,7 @@ int main(int argc, char** argv) {
 	testMirror();
 	testCopy();
 	testCopyWithoutOwners();
+	testFill();
 	testUserDirs();
 
 	std::printf("%s\n", fails ? "FAILED" : "all passed");

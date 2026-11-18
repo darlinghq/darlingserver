@@ -20,6 +20,10 @@ temporary directory. It checks:
   symbolic links and a hard link planted in the upper tree that lead out of it. Nothing outside
   the upper tree may change, a file with another hard link is not changed, and a set-group-ID bit is
   kept only on a file the copy created itself, never on existing contents with a matching time.
+- the stale-link case: a link an older install left (to the host's copy of the same path) where the lower
+  tree now has a directory is replaced by it; any other link, whatever its time, is kept and not followed;
+- the fill mode used for the user template: only missing entries are created, existing files, links
+  and changes are never replaced, and links are not followed;
 - reading the user's directories from an xdg-user-dirs `user-dirs.dirs` file: `$HOME` expansion,
   absolute paths, escapes, comments, the last line winning, and lines that are not a plain quoted
   value being ignored; and xdg-user-dir's fallback when the file or the entry is missing

@@ -20,6 +20,7 @@
 #include <darlingserver/prefix-setup.hpp>
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -168,6 +169,9 @@ bool copyBelow(int lowerFd, int upperFd, const std::string& path);
 // thread, and this is set once before it starts. Without it the files belong to whoever copies, and
 // the set-ID bits, which would then name that user rather than the lower owner, are not kept.
 bool keepOwners = true;
+
+// Set for the fill mode: only what the upper tree lacks is created, and nothing existing is replaced.
+bool onlyMissing = false;
 
 // A copy made without root (keepOwners is false) can only contain what its user can read; the system
 // image has a few root-only files (a print backend, for one) that such a user could not use anyway.
@@ -384,6 +388,23 @@ bool copyDirectory(int lowerFd, int upperFd, const char* name, const struct stat
 	return true;
 }
 
+// Older installs gave a directory of the prefix (usr/share/zoneinfo) as a link to the host's copy of
+// the same path through the mirror directory (../../system-root/<path>). Only such a link is theirs;
+// a link anywhere else, or to another path, was made by the user.
+bool isOlderInstallLink(int upperFd, const char* name, const std::string& path) {
+	char buf[PATH_MAX];
+	ssize_t len = readlinkat(upperFd, name, buf, sizeof(buf) - 1);
+	if (len <= 0) {
+		return false;
+	}
+	std::string target(buf, len);
+	size_t up = 0;
+	while (target.compare(up, 3, "../") == 0) {
+		up += 3;
+	}
+	return up > 0 && target == target.substr(0, up) + "system-root/" + path;
+}
+
 bool copyEntry(int lowerFd, int upperFd, const char* name, const std::string& path) {
 	struct stat from, to;
 	if (fstatat(lowerFd, name, &from, AT_SYMLINK_NOFOLLOW) != 0) {
@@ -395,10 +416,26 @@ bool copyEntry(int lowerFd, int upperFd, const char* name, const std::string& pa
 	}
 
 	if (S_ISDIR(from.st_mode)) {
+		// A link an older install left where the lower tree now has a directory gives way to the
+		// directory. Any other link is the user's and stays.
+		if (!onlyMissing && exists && S_ISLNK(to.st_mode) && isOlderInstallLink(upperFd, name, path)) {
+			if (unlinkat(upperFd, name, 0) != 0) {
+				if (changedMeanwhile(errno)) {
+					skipped(path, "it changed while being replaced");
+					return true;
+				}
+				return failed("remove the old link", path);
+			}
+			exists = false;
+		}
 		if (exists && !S_ISDIR(to.st_mode)) {
 			return true;
 		}
 		return copyDirectory(lowerFd, upperFd, name, from, exists, path);
+	}
+
+	if (onlyMissing && exists) {
+		return true;
 	}
 
 	if (!S_ISREG(from.st_mode) && !S_ISLNK(from.st_mode)) {
@@ -512,6 +549,15 @@ void mirrorDirectories(int lowerFd, int upperFd) {
 bool copyTree(int lowerFd, int upperFd, bool giveLowerOwners) {
 	keepOwners = giveLowerOwners;
 	return copyBelow(lowerFd, upperFd, "");
+}
+
+bool fillTree(int lowerFd, int upperFd) {
+	keepOwners = false;
+	onlyMissing = true;
+	bool ok = copyBelow(lowerFd, upperFd, "");
+	onlyMissing = false;
+	keepOwners = true;
+	return ok;
 }
 
 bool findUserDir(std::string_view contents, std::string_view name, std::string_view home, std::string& dir) {

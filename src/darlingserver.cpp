@@ -186,6 +186,22 @@ void setupUserHome(const char* prefix, uid_t originalUID)
 		unlink(buf);
 		symlink(buf2, buf);
 	}
+
+	// Give the home what a new macOS account gets: what it lacks of the user template. This is where
+	// Library/Preferences comes from, which applications write into without checking it exists.
+	snprintf(buf, sizeof(buf), "%s/Users/%s", prefix, login);
+	int homeFd = open(buf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	std::string templatePath = DarlingServer::Config::libexecPath() + "/System/Library/User Template";
+	int templateFd = open(templatePath.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (homeFd >= 0 && templateFd >= 0) {
+		DarlingServer::PrefixSetup::fillTree(templateFd, homeFd);
+	}
+	if (homeFd >= 0) {
+		close(homeFd);
+	}
+	if (templateFd >= 0) {
+		close(templateFd);
+	}
 }
 
 void setupCoredumpPattern(void)
