@@ -68,8 +68,30 @@ int ftruncate(int fd, off_t length);
 
 #define MFD_CLOEXEC 0x1
 
-void dtape_memory_init(void) {
+// Descriptors whose memfd is mapped by tasks, looked up by the identity the host reports for such a mapping.
+// This lets a named entry be made for memory that is already a mapping of an entry's object (in this task or
+// in a task it was forked from), so the new entry shares that object instead of a snapshot of it.
+// A descriptor leaves the tree when its last reference is dropped, under the same lock as lookups.
+static dtape_mutex_t dtape_descriptor_identity_lock;
 
+static int dtape_map_shared_descriptor_compare(dtape_map_shared_descriptor_t* first, dtape_map_shared_descriptor_t* second) {
+	if (first->device != second->device) {
+		return first->device < second->device ? -1 : 1;
+	}
+	if (first->inode != second->inode) {
+		return first->inode < second->inode ? -1 : 1;
+	}
+	return 0;
+};
+
+RB_HEAD(dtape_map_shared_descriptor_head, dtape_map_shared_descriptor);
+static struct dtape_map_shared_descriptor_head dtape_descriptors_by_identity;
+RB_PROTOTYPE_SC(static, dtape_map_shared_descriptor_head, dtape_map_shared_descriptor, identity_link, dtape_map_shared_descriptor_compare);
+RB_GENERATE(dtape_map_shared_descriptor_head, dtape_map_shared_descriptor, identity_link, dtape_map_shared_descriptor_compare);
+
+void dtape_memory_init(void) {
+	RB_INIT(&dtape_descriptors_by_identity);
+	dtape_mutex_init(&dtape_descriptor_identity_lock);
 };
 
 static uint64_t dtape_byte_count_to_page_count_round_up(uint64_t byte_count) {
@@ -122,8 +144,37 @@ static dtape_map_shared_descriptor_t* dtape_map_shared_descriptor_create(int mem
 
 	desc->memfd = memfd;
 	desc->size = size;
+	desc->identified = false;
+
+	if (dtape_hooks->fd_identity && dtape_hooks->fd_identity(memfd, &desc->device, &desc->inode)) {
+		dtape_mutex_lock(&dtape_descriptor_identity_lock);
+		desc->identified = RB_INSERT(dtape_map_shared_descriptor_head, &dtape_descriptors_by_identity, desc) == NULL;
+		dtape_mutex_unlock(&dtape_descriptor_identity_lock);
+	}
 
 	return desc;
+};
+
+// returns a retained descriptor for the memfd with the given identity, or NULL
+static dtape_map_shared_descriptor_t* dtape_map_shared_descriptor_find(uint64_t device, uint64_t inode) {
+	dtape_map_shared_descriptor_t key;
+	dtape_map_shared_descriptor_t* found;
+
+	if (inode == 0) {
+		return NULL;
+	}
+
+	key.device = device;
+	key.inode = inode;
+
+	dtape_mutex_lock(&dtape_descriptor_identity_lock);
+	found = RB_FIND(dtape_map_shared_descriptor_head, &dtape_descriptors_by_identity, &key);
+	if (found) {
+		os_ref_retain(&found->refcount);
+	}
+	dtape_mutex_unlock(&dtape_descriptor_identity_lock);
+
+	return found;
 };
 
 static void dtape_map_shared_descriptor_retain(dtape_map_shared_descriptor_t* desc) {
@@ -131,9 +182,16 @@ static void dtape_map_shared_descriptor_retain(dtape_map_shared_descriptor_t* de
 };
 
 static void dtape_map_shared_descriptor_release(dtape_map_shared_descriptor_t* desc) {
+	// dropping the last reference and leaving the identity tree are one step for lookups
+	dtape_mutex_lock(&dtape_descriptor_identity_lock);
 	if (os_ref_release(&desc->refcount) != 0) {
+		dtape_mutex_unlock(&dtape_descriptor_identity_lock);
 		return;
 	}
+	if (desc->identified) {
+		RB_REMOVE(dtape_map_shared_descriptor_head, &dtape_descriptors_by_identity, desc);
+	}
+	dtape_mutex_unlock(&dtape_descriptor_identity_lock);
 
 	close(desc->memfd);
 	free(desc);
@@ -768,7 +826,23 @@ kern_return_t _mach_make_memory_entry(vm_map_t target_map, memory_object_size_t*
 			return KERN_PROTECTION_FAILURE;
 		}
 
-		if (!(permission & MAP_MEM_VM_COPY)) {
+		if (!(permission & MAP_MEM_VM_COPY) && region_info.shared) {
+			// A range that is a mapping of a descriptor's memfd (an entry mapped by mach_vm_map or a range
+			// shared by mach_vm_remap, here or in the task this one was forked from) is shared through that
+			// object, at the offset the mapping has in it.
+			descriptor = dtape_map_shared_descriptor_find(region_info.device, region_info.inode);
+			if (descriptor) {
+				uint64_t object_offset = region_info.map_offset + (map_start - region_info.start_address);
+				if (object_offset + map_size > descriptor->size) {
+					dtape_map_shared_descriptor_release(descriptor);
+					descriptor = NULL;
+				} else {
+					entry_offset = object_offset;
+				}
+			}
+		}
+
+		if (!descriptor && !(permission & MAP_MEM_VM_COPY)) {
 			// a range that is already shared (by mach_vm_remap) is shared through its existing object
 			dtape_map_shared_entry_t* existing[8];
 			size_t existing_count;
