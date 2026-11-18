@@ -1443,6 +1443,11 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			}
 			dtape_mutex_unlock(&thread->suspension_mutex);
 
+			if (thread_state == -1 && xthread == current_thread()) {
+				// the calling thread is running, even though Linux sees it blocked in its call to the server
+				thread_state = dtape_thread_state_running;
+			}
+
 			if (thread_state == -1) {
 				thread_state = dtape_hooks->thread_get_state(thread->context);
 			}
@@ -1467,6 +1472,47 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 					panic("invalid thread state: %d; this should be impossible", thread_state);
 			}
 
+			return KERN_SUCCESS;
+		};
+
+		case THREAD_EXTENDED_INFO: {
+			if (*thread_info_count < THREAD_EXTENDED_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			thread_extended_info_t info = (thread_extended_info_t)thread_info_out;
+			uint64_t user_ns = 0;
+			uint64_t system_ns = 0;
+
+			memset(info, 0, sizeof(*info));
+
+			// the name and CPU times of the thread come from Linux; the thread's state is derived the same way as for THREAD_BASIC_INFO
+			if (!dtape_hooks->thread_get_stats(thread->context, info->pth_name, sizeof(info->pth_name), &user_ns, &system_ns)) {
+				// the thread has already exited
+				return KERN_TERMINATED;
+			}
+
+			thread_basic_info_data_t basic;
+			mach_msg_type_number_t basic_count = THREAD_BASIC_INFO_COUNT;
+			kern_return_t kr = thread_info(xthread, THREAD_BASIC_INFO, (thread_info_t)&basic, &basic_count);
+			if (kr != KERN_SUCCESS) {
+				return kr;
+			}
+
+			info->pth_user_time = user_ns;
+			info->pth_system_time = system_ns;
+			info->pth_cpu_usage = 0;
+			info->pth_policy = POLICY_TIMESHARE;
+			info->pth_run_state = basic.run_state;
+			info->pth_flags = 0;
+			info->pth_sleep_time = 0;
+
+			// Darling keeps no per-thread scheduling state, so every thread reports the priorities of a default timeshare thread
+			info->pth_curpri = BASEPRI_DEFAULT;
+			info->pth_priority = BASEPRI_DEFAULT;
+			info->pth_maxpriority = MAXPRI_USER;
+
+			*thread_info_count = THREAD_EXTENDED_INFO_COUNT;
 			return KERN_SUCCESS;
 		};
 

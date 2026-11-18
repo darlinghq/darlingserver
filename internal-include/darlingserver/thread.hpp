@@ -277,6 +277,15 @@ namespace DarlingServer {
 
 		RunState getRunState() const;
 
+		/**
+		 * Reads the thread's name and its user and system CPU time (in nanoseconds) from Linux.
+		 *
+		 * The name is the Linux thread name (at most 15 characters), written NUL-terminated into `name`.
+		 *
+		 * @returns `true` if the thread's information could be read; `false` if the thread is gone.
+		 */
+		bool getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const;
+
 		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;
 
