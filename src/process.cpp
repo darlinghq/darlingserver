@@ -392,8 +392,10 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 			std::unique_lock threadLock(mainThread->_rwlock);
 			mainThread->_s2cReply = std::nullopt;
 			mainThread->_s2cCallInFlight = false;
-			mainThread->_s2cAbandonedReplies.clear();
+			mainThread->_s2cStaleReplyPending = false;
+			mainThread->_s2cStaleReplyUsedInterrupt = false;
 			mainThread->_s2cInterruptAbandoned = 0;
+			mainThread->_s2cInterruptEntered = false;
 		}
 
 		// the new image has not been verified yet, and it starts under the policy in effect now;

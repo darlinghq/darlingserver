@@ -1192,6 +1192,18 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 	{
 		std::unique_lock lock(_rwlock);
 
+		if (_s2cStaleReplyPending) {
+			// an earlier call was abandoned and the client hasn't answered it yet.
+			// it may be in the middle of servicing it (e.g. it was interrupted by a signal while doing so), in which case
+			// it would answer a new call first; and if we're running on its behalf, it can't answer the old call until we return.
+			// so neither sending a new call nor waiting for the old reply is safe; fail this call instead.
+			lock.unlock();
+			s2cLog.debug() << *this << ": Previous S2C call still unanswered; not sending another one" << s2cLog.endLog;
+			dtape_semaphore_up(_s2cPerformSempahore);
+			outErrno = EAGAIN;
+			return std::nullopt;
+		}
+
 		if (!_activeCall) {
 			// signal the thread that we want to perform an S2C call and wait for it to give us the green light
 			lock.unlock();
@@ -1200,16 +1212,29 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 			sendSignal(LINUX_SIGRTMIN + 1);
 			if (!dtape_semaphore_down_simple(_s2cInterruptEnterSemaphore)) {
 				// got interrupted while waiting.
-				// the thread will still run its S2C handler and ask us to let it go; make sure it isn't kept waiting for us.
+				// the thread will still run its S2C handler; make sure it isn't kept waiting for us.
 				lock.lock();
-				++_s2cInterruptAbandoned;
-				lock.unlock();
+				if (_s2cInterruptEntered) {
+					// the handler already got as far as giving us the green light (it raises the semaphore right after setting the flag),
+					// so it is now waiting for us to let it go. take the green light and let it go.
+					_s2cInterruptEntered = false;
+					lock.unlock();
+					while (!dtape_semaphore_down_simple(_s2cInterruptEnterSemaphore)) {
+						// the handler raises the semaphore without blocking first, so this wait is short; just retry
+					}
+					dtape_semaphore_up(_s2cInterruptExitSemaphore);
+				} else {
+					// the handler hasn't got there yet; it checks this count under the same lock and won't wait for us
+					++_s2cInterruptAbandoned;
+					lock.unlock();
+				}
 				dtape_semaphore_up(_s2cPerformSempahore);
 				outErrno = EINTR;
 				return std::nullopt;
 			}
 			s2cLog.debug() << *this << ": Got green light to perform S2C call" << s2cLog.endLog;
 			lock.lock();
+			_s2cInterruptEntered = false;
 		} else if (currentThread().get() != this) {
 			// we have an active call, so the client is waiting for a reply and is able to perform an S2C call,
 			// but we're not the active thread. thus, in order to guarantee the client doesn't receive a reply
@@ -1240,7 +1265,8 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 		} else if (interrupted) {
 			// the client has been asked to perform the call (and will still do so), but we're not going to wait for it.
 			// remember that its reply is stale when it arrives, so that it isn't mistaken for the reply to a later call.
-			_s2cAbandonedReplies.push_back(usingInterrupt);
+			_s2cStaleReplyPending = true;
+			_s2cStaleReplyUsedInterrupt = usingInterrupt;
 			_s2cCallInFlight = false;
 
 			// if we had replies deferred, release them: the client handles the S2C call first (it was sent first),

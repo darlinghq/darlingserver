@@ -27,7 +27,6 @@
 #include <condition_variable>
 #include <stack>
 #include <queue>
-#include <deque>
 #include <atomic>
 
 #include <darlingserver/message.hpp>
@@ -99,12 +98,17 @@ namespace DarlingServer {
 		std::optional<Message> _s2cReply = std::nullopt;
 		// true from the moment an S2C call is sent until its reply is consumed or abandoned; guarded by `_rwlock`
 		bool _s2cCallInFlight = false;
-		// one entry per S2C call that was sent but whose reply we stopped waiting for (the wait was interrupted).
-		// the client still services these calls in order, so that many replies must be discarded when they arrive.
-		// the value says whether the call was performed through the S2C interrupt (see `_s2cInterruptAbandoned`); guarded by `_rwlock`
-		std::deque<bool> _s2cAbandonedReplies;
+		// true while an S2C call that was sent, but whose reply we stopped waiting for (the wait was interrupted), is still unanswered.
+		// the client still performs the call and replies; that reply must be discarded when it arrives.
+		// no other S2C call is sent to the thread until then, so a reply can never be matched to the wrong call
+		// (the client may have been interrupted while servicing the call, and would then answer a newer call first); guarded by `_rwlock`
+		bool _s2cStaleReplyPending = false;
+		// whether that abandoned call was performed through the S2C interrupt (see `_s2cInterruptAbandoned`); guarded by `_rwlock`
+		bool _s2cStaleReplyUsedInterrupt = false;
 		// number of S2C interrupts we signalled but stopped waiting for; guarded by `_rwlock`
 		size_t _s2cInterruptAbandoned = 0;
+		// set by the S2C interrupt handler (S2CPerform) right before it gives the green light; guarded by `_rwlock`
+		bool _s2cInterruptEntered = false;
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;

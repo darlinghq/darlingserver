@@ -160,12 +160,13 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		{
 			std::unique_lock lock(thread->_rwlock);
 
-			if (!thread->_s2cAbandonedReplies.empty()) {
-				// the client services S2C calls in the order they were sent, so this is the reply to a call
+			if (thread->_s2cStaleReplyPending) {
+				// no new call is sent while an abandoned one is unanswered, so this is the reply to the call
 				// whose wait was interrupted; nobody is waiting for it any more
 				stale = true;
-				staleUsedInterrupt = thread->_s2cAbandonedReplies.front();
-				thread->_s2cAbandonedReplies.pop_front();
+				staleUsedInterrupt = thread->_s2cStaleReplyUsedInterrupt;
+				thread->_s2cStaleReplyPending = false;
+				thread->_s2cStaleReplyUsedInterrupt = false;
 			} else if (thread->_s2cCallInFlight && !thread->_s2cReply) {
 				thread->_s2cReply = std::move(requestMessage);
 				accepted = true;
@@ -1327,6 +1328,9 @@ void DarlingServer::Call::S2CPerform::processCall() {
 				// the server stopped waiting for this interrupt; there is nothing to perform, so don't wait for anyone
 				--thread->_s2cInterruptAbandoned;
 				abandoned = true;
+			} else {
+				// from here on, a caller that stops waiting for the green light knows we're about to give it and will let us go
+				thread->_s2cInterruptEntered = true;
 			}
 		}
 
