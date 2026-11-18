@@ -153,17 +153,37 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	if (header->number == dserver_callnum_s2c) {
 		// this is an S2C reply
 
+		bool stale = false;
+		bool staleUsedInterrupt = false;
+		bool accepted = false;
+
 		{
 			std::unique_lock lock(thread->_rwlock);
 
-			if (thread->_s2cReply) {
-				throw std::runtime_error("Received S2C reply but thread already had one pending");
+			if (!thread->_s2cAbandonedReplies.empty()) {
+				// the client services S2C calls in the order they were sent, so this is the reply to a call
+				// whose wait was interrupted; nobody is waiting for it any more
+				stale = true;
+				staleUsedInterrupt = thread->_s2cAbandonedReplies.front();
+				thread->_s2cAbandonedReplies.pop_front();
+			} else if (thread->_s2cCallInFlight && !thread->_s2cReply) {
+				thread->_s2cReply = std::move(requestMessage);
+				accepted = true;
 			}
-
-			thread->_s2cReply = std::move(requestMessage);
 		}
 
-		dtape_semaphore_up(thread->_s2cReplySempahore);
+		if (accepted) {
+			dtape_semaphore_up(thread->_s2cReplySempahore);
+		} else if (stale) {
+			callLog.debug() << "Discarding reply to an abandoned S2C call" << callLog.endLog;
+			if (staleUsedInterrupt) {
+				// the client's S2C interrupt handler is waiting for us to let it go
+				dtape_semaphore_up(thread->_s2cInterruptExitSemaphore);
+			}
+		} else {
+			// a misbehaving client can send a reply nobody asked for; dropping it is the only safe thing to do
+			callLog.error() << "Received unexpected S2C reply; ignoring it" << callLog.endLog;
+		}
 
 		return nullptr;
 	} else if (header->number == dserver_callnum_push_reply) {
@@ -1299,8 +1319,21 @@ void DarlingServer::Call::S2CPerform::processCall() {
 	int code = 0;
 
 	if (auto thread = _thread.lock()) {
-		dtape_semaphore_up(thread->_s2cInterruptEnterSemaphore);
-		dtape_semaphore_down_simple(thread->_s2cInterruptExitSemaphore);
+		bool abandoned = false;
+
+		{
+			std::unique_lock lock(thread->_rwlock);
+			if (thread->_s2cInterruptAbandoned > 0) {
+				// the server stopped waiting for this interrupt; there is nothing to perform, so don't wait for anyone
+				--thread->_s2cInterruptAbandoned;
+				abandoned = true;
+			}
+		}
+
+		if (!abandoned) {
+			dtape_semaphore_up(thread->_s2cInterruptEnterSemaphore);
+			dtape_semaphore_down_simple(thread->_s2cInterruptExitSemaphore);
+		}
 	} else {
 		code = -ESRCH;
 	}

@@ -27,6 +27,7 @@
 #include <condition_variable>
 #include <stack>
 #include <queue>
+#include <deque>
 #include <atomic>
 
 #include <darlingserver/message.hpp>
@@ -96,6 +97,14 @@ namespace DarlingServer {
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
 		dtape_semaphore_t* _s2cReplySempahore = nullptr;
 		std::optional<Message> _s2cReply = std::nullopt;
+		// true from the moment an S2C call is sent until its reply is consumed or abandoned; guarded by `_rwlock`
+		bool _s2cCallInFlight = false;
+		// one entry per S2C call that was sent but whose reply we stopped waiting for (the wait was interrupted).
+		// the client still services these calls in order, so that many replies must be discarded when they arrive.
+		// the value says whether the call was performed through the S2C interrupt (see `_s2cInterruptAbandoned`); guarded by `_rwlock`
+		std::deque<bool> _s2cAbandonedReplies;
+		// number of S2C interrupts we signalled but stopped waiting for; guarded by `_rwlock`
+		size_t _s2cInterruptAbandoned = 0;
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;
@@ -126,7 +135,7 @@ namespace DarlingServer {
 
 		friend struct ::DTapeHooks;
 
-		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
+		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno);
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);
