@@ -2,6 +2,7 @@
 #include <darlingserver/duct-tape/stubs.h>
 #include <darlingserver/duct-tape/task.h>
 #include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/memory.h>
 #include <darlingserver/duct-tape/hooks.internal.h>
 
 #include <sys/proc.h>
@@ -518,6 +519,50 @@ static vm_map_t shim_current_map(void) {
 	return dtape_thread_for_xnu_thread(current_thread())->xnu_thread.map;
 };
 
+//
+// Identifies the memory behind an address for process-shared mutexes, condition variables and read-write locks:
+// two addresses get the same object ID and offset exactly when they are the same byte of the same shared memory,
+// in this process or in any other that maps it (e.g. across fork). Memory that is not shared is identified by
+// the task and the address, so a process-shared primitive still works within one process.
+//
+// Only the object ID and offset of VM_PAGE_INFO_BASIC are filled in.
+//
+static kern_return_t shim_vm_map_page_info(vm_map_t map, vm_map_offset_t offset, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t* count) {
+	vm_page_info_basic_t basic = (vm_page_info_basic_t)info;
+	dtape_memory_region_info_t region;
+	uint64_t object_id;
+	uint64_t object_offset;
+
+	if (flavor != VM_PAGE_INFO_BASIC || !count || (*count != VM_PAGE_INFO_BASIC_COUNT && *count != VM_PAGE_INFO_BASIC_COUNT - 1)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (!dtape_hooks->task_get_memory_region_info(map->dtape_task->context, offset, &region) || region.start_address > offset) {
+		return KERN_INVALID_ADDRESS;
+	}
+
+	if (region.shared && region.inode != 0) {
+		// the same file or shared memory object has the same device and inode in every process
+		object_id = (region.device << 40) ^ region.inode;
+		object_offset = region.map_offset + (offset - region.start_address);
+	} else {
+		object_id = (uint64_t)(uintptr_t)map->dtape_task;
+		object_offset = offset;
+	}
+
+	// the set bit keeps the two kinds of object IDs apart; a multiplication spreads them over the hash buckets
+	object_id = (object_id * 0x9e3779b97f4a7c15ULL) >> 1;
+	if (!(region.shared && region.inode != 0)) {
+		object_id |= 1ULL << 63;
+	}
+
+	memset(basic, 0, sizeof(*basic));
+	basic->ref_count = 1;
+	basic->object_id = object_id;
+	basic->offset = object_offset;
+	return KERN_SUCCESS;
+};
+
 static uint32_t shim_get_task_threadmax(void) {
 	return CONFIG_THREAD_MAX;
 };
@@ -689,6 +734,7 @@ static const struct pthread_callbacks_s pthread_kern_real = {
 	.uthread_get_uukwe           = shim_uthread_get_uukwe,
 	.uthread_is_cancelled        = shim_uthread_is_cancelled,
 	.uthread_set_returnval       = shim_uthread_set_returnval,
+	.vm_map_page_info            = shim_vm_map_page_info,
 };
 
 pthread_callbacks_t pthread_kern = &pthread_kern_real;
