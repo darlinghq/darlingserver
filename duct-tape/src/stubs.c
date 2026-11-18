@@ -140,7 +140,12 @@ boolean_t ml_set_interrupts_enabled(boolean_t enable) {
 };
 
 boolean_t ml_delay_should_spin(uint64_t interval) {
-	return FALSE;
+	// like XNU, spin for short delays instead of blocking.
+	// these are used to back off from a contended lock (e.g. in clear_wait_internal()), possibly while clearing the
+	// caller's own wait, where blocking the microthread would corrupt its wait state.
+	uint64_t threshold;
+	nanoseconds_to_absolutetime(10 * NSEC_PER_USEC, &threshold);
+	return interval < threshold;
 };
 
 unsigned int ml_wait_max_cpus(void) {
