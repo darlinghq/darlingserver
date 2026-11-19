@@ -69,6 +69,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	task->saved_pid = nsid;
 	task->architecture = architecture;
 	task->has_sigexc = false;
+	task->category_role = TASK_UNSPECIFIED;
 	task->dyld_info_addr = 0;
 	task->dyld_info_length = 0;
 	task->p_ident.eid = dtape_hooks->task_eternal_id(context);
@@ -600,17 +601,105 @@ void task_name_deallocate(task_name_t task_name) {
 	dtape_stub_unsafe();
 };
 
-kern_return_t task_policy_get(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
-	dtape_stub_unsafe();
+// Task scheduling policies are not enforced: the server does not schedule guest processes, so only the
+// state a guest can observe through task_policy_get() is kept. That is the category role (set through
+// task_policy_set()); every other flavour reads back as its default (nothing requested, nothing suppressed).
+kern_return_t task_policy_get(task_t xtask, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
+	if (xtask == TASK_NULL || xtask == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
+
+	switch (flavor) {
+		case TASK_CATEGORY_POLICY: {
+			task_category_policy_t info = (task_category_policy_t)policy_info;
+
+			if (*count < TASK_CATEGORY_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			info->role = *get_default ? TASK_UNSPECIFIED : task->category_role;
+			*count = TASK_CATEGORY_POLICY_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_BASE_QOS_POLICY:
+		case TASK_OVERRIDE_QOS_POLICY: {
+			task_qos_policy_t info = (task_qos_policy_t)policy_info;
+
+			if (*count < TASK_QOS_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			info->task_latency_qos_tier = LATENCY_QOS_TIER_UNSPECIFIED;
+			info->task_throughput_qos_tier = THROUGHPUT_QOS_TIER_UNSPECIFIED;
+			*count = TASK_QOS_POLICY_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_POLICY_STATE: {
+			if (*count < TASK_POLICY_STATE_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			// macOS restricts this flavour to privileged callers; there is nothing to protect here
+			memset(policy_info, 0, TASK_POLICY_STATE_COUNT * sizeof(integer_t));
+			*count = TASK_POLICY_STATE_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_SUPPRESSION_POLICY: {
+			task_suppression_policy_t info = (task_suppression_policy_t)policy_info;
+
+			if (*count < TASK_SUPPRESSION_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			memset(info, 0, sizeof(*info));
+			info->timer_throttle = LATENCY_QOS_TIER_UNSPECIFIED;
+			*count = TASK_SUPPRESSION_POLICY_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		default:
+			// includes TASK_BASE_LATENCY_QOS_POLICY and TASK_BASE_THROUGHPUT_QOS_POLICY, which are settable only
+			return KERN_INVALID_ARGUMENT;
+	}
 };
 
 void task_policy_get_deallocate(task_policy_get_t task_policy_get) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)task_policy_get);
 };
 
-kern_return_t task_policy_set(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t count) {
-	dtape_stub_safe();
-	return KERN_SUCCESS;
+kern_return_t task_policy_set(task_t xtask, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t count) {
+	if (xtask == TASK_NULL || xtask == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (flavor != TASK_CATEGORY_POLICY) {
+		// the other flavours are accepted but not acted upon
+		dtape_stub_safe();
+		return KERN_SUCCESS;
+	}
+
+	if (count < TASK_CATEGORY_POLICY_COUNT) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	task_role_t role = ((task_category_policy_t)policy_info)->role;
+
+	switch (role) {
+		case TASK_FOREGROUND_APPLICATION:
+		case TASK_BACKGROUND_APPLICATION:
+		case TASK_DEFAULT_APPLICATION:
+		case TASK_CONTROL_APPLICATION:
+		case TASK_GRAPHICS_SERVER:
+			dtape_task_for_xnu_task(xtask)->category_role = role;
+			return KERN_SUCCESS;
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
 };
 
 void task_policy_set_deallocate(task_policy_set_t task_policy_set) {

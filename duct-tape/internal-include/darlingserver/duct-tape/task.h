@@ -24,6 +24,8 @@ struct dtape_task {
 	dtape_mutex_t dyld_info_lock;
 	dtape_condvar_t dyld_info_condvar;
 	struct proc_ident p_ident;
+	// role set with task_policy_set(TASK_CATEGORY_POLICY); TASK_UNSPECIFIED until set
+	_Atomic int category_role;
 	struct task xnu_task;
 };
 
