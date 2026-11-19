@@ -30,6 +30,7 @@
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/system-config.hpp>
 #include <darlingserver/platform-identity.hpp>
+#include <darlingserver/iosurface.hpp>
 #include <darlingserver/code-signing.hpp>
 #include <darlingserver/trust-store.hpp>
 #include <darling-config.h>
@@ -2031,4 +2032,149 @@ void DarlingServer::Call::CsVerifyImage::processCall() {
 	}
 
 	_sendReply(code, status, flags, codeLimit, pageSizeLog2, libraryValidationOk);
+};
+
+//
+// IOSurface service (see "IOSurface service" in rpc-supplement.h)
+//
+
+void DarlingServer::Call::IosurfaceRetain::processCall() {
+	int code = 0;
+	uint32_t surfaceID = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			code = IOSurfaceRegistry::sharedInstance().retain(process->id(), _body.memory, _body.id_hint, _body.flags, _body.counter_offset, &surfaceID);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, surfaceID);
+};
+
+void DarlingServer::Call::IosurfaceRelease::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			code = IOSurfaceRegistry::sharedInstance().release(process->id(), _body.surface_id);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::IosurfaceLookup::processCall() {
+	int code = 0;
+	int memory = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			code = IOSurfaceRegistry::sharedInstance().lookup(process->id(), _body.surface_id, &memory);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	// the reply takes ownership of the new descriptor
+	_sendReply(code, memory);
+};
+
+void DarlingServer::Call::IosurfacePublishGpuBuffer::processCall() {
+	int code = 0;
+	int published = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			dserver_iosurface_gpu_buffer_t info;
+			if (_body.info_size != sizeof(info)) {
+				code = -EINVAL;
+			} else if (!process->readMemory(_body.info, &info, sizeof(info), &code)) {
+				code = -code;
+			} else {
+				dserver_iosurface_gpu_buffer_t publishedInfo;
+				code = IOSurfaceRegistry::sharedInstance().publishGPUBuffer(process->id(), _body.surface_id, _body.buffer, info, &published, &publishedInfo);
+				if (code == 0 && !process->writeMemory(_body.info, &publishedInfo, sizeof(publishedInfo), &code)) {
+					code = -code;
+					close(published);
+					published = -1;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, published);
+};
+
+void DarlingServer::Call::IosurfaceCopyGpuBuffer::processCall() {
+	int code = 0;
+	int buffer = -1;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			dserver_iosurface_gpu_buffer_t info;
+			if (_body.info_size != sizeof(info)) {
+				code = -EINVAL;
+			} else {
+				code = IOSurfaceRegistry::sharedInstance().copyGPUBuffer(process->id(), _body.surface_id, &buffer, &info);
+				if (code == 0 && !process->writeMemory(_body.info, &info, sizeof(info), &code)) {
+					code = -code;
+					close(buffer);
+					buffer = -1;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, buffer);
+};
+
+void DarlingServer::Call::IosurfaceSetUsage::processCall() {
+	int code = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			code = IOSurfaceRegistry::sharedInstance().setUsage(process->id(), _body.surface_id, _body.usage);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::IosurfaceGetState::processCall() {
+	int code = 0;
+	IOSurfaceRegistry::State state {};
+
+	if (auto thread = _thread.lock()) {
+		if (thread->process()) {
+			code = IOSurfaceRegistry::sharedInstance().getState(_body.surface_id, &state);
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, state.holders, state.memoryUsers, state.flags);
 };

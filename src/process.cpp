@@ -25,6 +25,7 @@
 #include <darlingserver/logging.hpp>
 #include <darlingserver/code-signing.hpp>
 #include <darlingserver/system-config.hpp>
+#include <darlingserver/iosurface.hpp>
 #include <kern/cs_blobs.h>
 
 #include <fstream>
@@ -421,6 +422,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 	lock.unlock();
 
 	if (didExec) {
+		// the image the process held IOSurfaces from is gone
+		IOSurfaceRegistry::sharedInstance().forgetProcess(id());
+
 		// notify listeners that we have exec'd (i.e. been replaced)
 		_notifyListeningKqchannels(NOTE_EXEC, 0);
 	} else if (isFork) {
@@ -1069,6 +1073,9 @@ void DarlingServer::Process::notifyDead() {
 
 	// keep ourselves alive until the duct-taped context is done
 	_selfReference = shared_from_this();
+
+	// a dead process holds no IOSurfaces
+	IOSurfaceRegistry::sharedInstance().forgetProcess(id());
 
 	// TODO: get exit status
 	_notifyListeningKqchannels(NOTE_EXIT, 0);

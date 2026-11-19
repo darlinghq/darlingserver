@@ -135,6 +135,7 @@ add_executable(darlingserver
 	src/stack-pool.cpp
 	src/system-config.cpp
 	src/platform-identity.cpp
+	src/iosurface.cpp
 	src/code-signing.cpp
 	src/trust-store.cpp
 	src/prefix-setup.cpp

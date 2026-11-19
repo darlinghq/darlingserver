@@ -606,6 +606,62 @@ typedef struct dserver_cs_state {
 	char identifier[DSERVER_CS_IDENTIFIER_MAX];
 } dserver_cs_state_t;
 
+//
+// IOSurface service
+//
+
+/**
+ * On macOS an IOSurface is a kernel object: its ID, global lookup and the rights to it are kernel
+ * state. Here darlingserver keeps that state for the surfaces IOSurface.framework allocates in
+ * shared memory objects, so that IDs are unique across processes, `IOSurfaceLookup` finds global
+ * surfaces of other processes, and a second descriptor, the surface's GPU buffer (a DMA-BUF in a
+ * layout of the GPU driver's own), reaches every process that shares the surface.
+ *
+ * Possession of a surface's shared memory object is what lets a process hold it: the object
+ * travels in the Mach port that `IOSurfaceCreateMachPort` makes, or comes from `iosurface_lookup`
+ * for a global surface. A process that holds a surface may get its GPU buffer. Holds are counted
+ * per process and dropped when the process exits or execs; the service closes its descriptors
+ * when the last hold goes.
+ *
+ * The service publishes the number of holding processes that may read the surface's memory (that
+ * have not imported its GPU buffer, or have said they use the memory) as a 32-bit value at
+ * `counter_offset` in the first page of the shared memory object, if that is not 0. It only ever
+ * writes that value, and never reads the object.
+ */
+
+// iosurface_retain flags
+#define DSERVER_IOSURFACE_GLOBAL 0x1U
+
+// iosurface_set_usage bits
+#define DSERVER_IOSURFACE_USAGE_IMPORTED_BUFFER 0x1U
+#define DSERVER_IOSURFACE_USAGE_USES_MEMORY 0x2U
+
+// iosurface_get_state flags
+#define DSERVER_IOSURFACE_STATE_GLOBAL 0x1U
+#define DSERVER_IOSURFACE_STATE_HAS_GPU_BUFFER 0x2U
+
+// the counter lies within the first page
+#define DSERVER_IOSURFACE_COUNTER_LIMIT 4096U
+
+#define DSERVER_IOSURFACE_RENDER_NODE_MAX 64
+
+/**
+ * A surface's GPU buffer: one plane at `offset` in the DMA-BUF.
+ */
+typedef struct dserver_iosurface_gpu_buffer {
+	// DRM format modifier (layout)
+	uint64_t modifier DSERVER_RPC_ALIGN64;
+	// DRM fourcc
+	uint32_t fourcc;
+	uint32_t width;
+	uint32_t height;
+	uint32_t offset;
+	uint32_t stride;
+	uint32_t reserved;
+	// the host path of the DRM render node the buffer was allocated on; NUL-terminated
+	char render_node[DSERVER_IOSURFACE_RENDER_NODE_MAX];
+} dserver_iosurface_gpu_buffer_t;
+
 #if __cplusplus
 };
 #endif
