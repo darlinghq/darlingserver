@@ -48,6 +48,14 @@ typedef struct _vm_map dtape_map_t;
 // releases the object kept by mach_make_memory_entry_internal() for the given thread (if any)
 void dtape_thread_release_kept_descriptor(struct dtape_thread* thread);
 
+// maps `size` bytes in `map` for the given out-of-line copy or port array (`key`) of the message the current thread
+// is receiving, unless already done; the message's copyout takes the region with dtape_thread_take_reserved_region()
+kern_return_t dtape_thread_reserve_region(vm_map_t map, const void* key, vm_size_t size);
+// returns the region reserved for `key` by the current thread and forgets it, or 0 if there is none
+uintptr_t dtape_thread_take_reserved_region(const void* key);
+// unmaps (when `map` is given) and forgets the regions the thread reserved but didn't use
+void dtape_thread_release_reserved_regions(struct dtape_thread* thread, vm_map_t map);
+
 #define VM_MAP_PAGE_SHIFT(map) ((map) ? (map)->dtape_page_shift : PAGE_SHIFT)
 
 struct vm_map_header {

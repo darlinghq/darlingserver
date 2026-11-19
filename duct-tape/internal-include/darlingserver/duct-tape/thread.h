@@ -10,6 +10,13 @@
 
 typedef struct dtape_thread dtape_thread_t;
 
+struct dtape_reserved_region {
+	// the kernel-side object the region is for: an out-of-line memory copy or an out-of-line port array
+	const void* key;
+	uintptr_t address;
+	size_t size;
+};
+
 struct dtape_opaque_ksyn_waitq_element {
 	// more than enough for the actual structure (should be a max of 56 bytes)
 	char opaque[64];
@@ -49,6 +56,19 @@ struct dtape_thread {
 	// the object of a memory entry whose creation failed after its memory may have been mapped into the task;
 	// kept until the thread's next mach_msg send completes, so a restarted request finds it (see mach_make_memory_entry_internal())
 	struct dtape_map_shared_descriptor* kept_descriptor;
+
+	// the out-of-line regions of the message this thread is receiving, mapped into its task before the message's
+	// copyout starts (see dtape_kmsg_reserve_out_of_line()) and taken by the copyout instead of mapping new ones
+	struct dtape_reserved_region* reserved_regions;
+	size_t reserved_region_count;
+	// set by mach_msg_overwrite_trap() for a receive-only call; consumed by mach_msg_receive_results(),
+	// which may then have the call restarted (see there)
+	bool receive_restart_allowed;
+	// a message this thread had already dequeued when mapping its out-of-line memory was interrupted by a signal.
+	// the restarted receive on the same port or port set (`pending_receive_object`, referenced) gets it
+	struct ipc_kmsg* pending_receive_kmsg;
+	struct ipc_object* pending_receive_object;
+	mach_port_seqno_t pending_receive_seqno;
 
 	bool waiting_suspended;
 	// set (with the thread locked) when thread_unblock() ends a wait, cleared once the woken thread has picked up its
@@ -94,5 +114,8 @@ static dtape_task_t* dtape_task_for_thread(dtape_thread_t* thread) {
 	}
 	return dtape_task_for_xnu_task(thread->xnu_thread.task);
 };
+
+// gives up the message held for a restarted receive (if any) of a thread that is going away
+void dtape_thread_abandon_pending_receive(dtape_thread_t* thread);
 
 #endif // _DARLINGSERVER_DUCT_TAPE_THREAD_H_
