@@ -69,6 +69,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	task->saved_pid = nsid;
 	task->architecture = architecture;
 	task->has_sigexc = false;
+	task->category_role = TASK_UNSPECIFIED;
 	task->dyld_info_addr = 0;
 	task->dyld_info_length = 0;
 	task->p_ident.eid = dtape_hooks->task_eternal_id(context);
@@ -285,27 +286,33 @@ void task_watchport_elem_deallocate(struct task_watchport_elem* watchport_elem) 
 };
 
 kern_return_t task_create_suid_cred(task_t task, suid_cred_path_t path, suid_cred_uid_t uid, suid_cred_t* sc_p) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_dyld_process_info_notify_deregister(task_t task, mach_port_name_t rcv_name) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_dyld_process_info_notify_register(task_t task, ipc_port_t sright) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_generate_corpse(task_t task, ipc_port_t* corpse_task_port) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_get_assignment(task_t task, processor_set_t* pset) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mach_msg_type_number_t* state_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
@@ -589,28 +596,118 @@ bool task_is_driver(task_t task) {
 };
 
 kern_return_t task_map_corpse_info(task_t task, task_t corpse_task, vm_address_t* kcd_addr_begin, uint32_t* kcd_size) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_map_corpse_info_64(task_t task, task_t corpse_task, mach_vm_address_t* kcd_addr_begin, mach_vm_size_t* kcd_size) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 void task_name_deallocate(task_name_t task_name) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)task_name);
 };
 
-kern_return_t task_policy_get(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
-	dtape_stub_unsafe();
+// Task scheduling policies are not enforced: the server does not schedule guest processes, so only the
+// state a guest can observe through task_policy_get() is kept. That is the category role (set through
+// task_policy_set()); every other flavour reads back as its default (nothing requested, nothing suppressed).
+kern_return_t task_policy_get(task_t xtask, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
+	if (xtask == TASK_NULL || xtask == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	dtape_task_t* task = dtape_task_for_xnu_task(xtask);
+
+	switch (flavor) {
+		case TASK_CATEGORY_POLICY: {
+			task_category_policy_t info = (task_category_policy_t)policy_info;
+
+			if (*count < TASK_CATEGORY_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			info->role = *get_default ? TASK_UNSPECIFIED : task->category_role;
+			*count = TASK_CATEGORY_POLICY_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_BASE_QOS_POLICY:
+		case TASK_OVERRIDE_QOS_POLICY: {
+			task_qos_policy_t info = (task_qos_policy_t)policy_info;
+
+			if (*count < TASK_QOS_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			info->task_latency_qos_tier = LATENCY_QOS_TIER_UNSPECIFIED;
+			info->task_throughput_qos_tier = THROUGHPUT_QOS_TIER_UNSPECIFIED;
+			*count = TASK_QOS_POLICY_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_POLICY_STATE: {
+			if (*count < TASK_POLICY_STATE_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			// macOS restricts this flavour to privileged callers; there is nothing to protect here
+			memset(policy_info, 0, TASK_POLICY_STATE_COUNT * sizeof(integer_t));
+			*count = TASK_POLICY_STATE_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_SUPPRESSION_POLICY: {
+			task_suppression_policy_t info = (task_suppression_policy_t)policy_info;
+
+			if (*count < TASK_SUPPRESSION_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			memset(info, 0, sizeof(*info));
+			info->timer_throttle = LATENCY_QOS_TIER_UNSPECIFIED;
+			*count = TASK_SUPPRESSION_POLICY_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		default:
+			// includes TASK_BASE_LATENCY_QOS_POLICY and TASK_BASE_THROUGHPUT_QOS_POLICY, which are settable only
+			return KERN_INVALID_ARGUMENT;
+	}
 };
 
 void task_policy_get_deallocate(task_policy_get_t task_policy_get) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)task_policy_get);
 };
 
-kern_return_t task_policy_set(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t count) {
-	dtape_stub_safe();
-	return KERN_SUCCESS;
+kern_return_t task_policy_set(task_t xtask, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t count) {
+	if (xtask == TASK_NULL || xtask == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (flavor != TASK_CATEGORY_POLICY) {
+		// the other flavours are accepted but not acted upon
+		dtape_stub_safe();
+		return KERN_SUCCESS;
+	}
+
+	if (count < TASK_CATEGORY_POLICY_COUNT) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	task_role_t role = ((task_category_policy_t)policy_info)->role;
+
+	switch (role) {
+		case TASK_FOREGROUND_APPLICATION:
+		case TASK_BACKGROUND_APPLICATION:
+		case TASK_DEFAULT_APPLICATION:
+		case TASK_CONTROL_APPLICATION:
+		case TASK_GRAPHICS_SERVER:
+			dtape_task_for_xnu_task(xtask)->category_role = role;
+			return KERN_SUCCESS;
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
 };
 
 void task_policy_set_deallocate(task_policy_set_t task_policy_set) {
@@ -618,15 +715,18 @@ void task_policy_set_deallocate(task_policy_set_t task_policy_set) {
 };
 
 kern_return_t task_purgable_info(task_t task, task_purgable_info_t* stats) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_register_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_register_dyld_shared_cache_image_info(task_t task, dyld_kernel_image_info_t cache_img, boolean_t no_cache, boolean_t private_cache) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 // Restartable ranges are accepted but not acted upon: darlingserver does not see a thread being
@@ -654,7 +754,8 @@ kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t
 };
 
 kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
@@ -663,19 +764,22 @@ kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* 
 };
 
 kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 void task_suspension_token_deallocate(task_suspension_token_t token) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)token);
 };
 
 kern_return_t task_terminate(task_t task) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pid, uintptr_t t, mach_task_flavor_t flavor) {
