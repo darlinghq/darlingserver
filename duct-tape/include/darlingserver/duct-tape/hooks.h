@@ -53,6 +53,9 @@ typedef void (*dtape_hook_current_thread_set_bsd_retval_f)(uint32_t retval);
 // returns whether a wait of the current thread for a server-to-client call was interrupted since the last time this was asked
 // (a signal is being delivered to the thread, or it is being suspended or killed), and clears that state
 typedef bool (*dtape_hook_current_thread_take_s2c_interrupted_f)(void);
+// returns fresh read-write anonymous memory of `length` bytes that an interrupted server-to-client mmap of the current thread
+// mapped in its task after the wait for it was abandoned (and forgets it), or 0 if there is none
+typedef uintptr_t (*dtape_hook_current_thread_take_stale_mapping_f)(size_t length);
 
 typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
@@ -121,6 +124,7 @@ typedef struct dtape_hooks {
 	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
 	dtape_hook_current_thread_set_bsd_retval_f current_thread_set_bsd_retval;
 	dtape_hook_current_thread_take_s2c_interrupted_f current_thread_take_s2c_interrupted;
+	dtape_hook_current_thread_take_stale_mapping_f current_thread_take_stale_mapping;
 
 	dtape_hook_task_read_memory_f task_read_memory;
 	dtape_hook_task_write_memory_f task_write_memory;

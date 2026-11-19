@@ -959,7 +959,16 @@ kern_return_t dtape_thread_reserve_region(vm_map_t map, const void* key, vm_size
 	}
 	thread->reserved_regions = regions;
 
-	uintptr_t address = dtape_hooks->task_allocate_pages(map->dtape_task->context, dtape_byte_count_to_page_count_round_up(size), PROT_READ | PROT_WRITE, 0, 0);
+	// an earlier attempt to receive this message may have been interrupted while the memory was being mapped.
+	// the client still mapped it; take that memory, so that every attempt gets further even if each one is interrupted
+	size_t page_count = dtape_byte_count_to_page_count_round_up(size);
+	uintptr_t address = 0;
+	if (map->dtape_task == dtape_task_for_thread(thread)) {
+		address = dtape_hooks->current_thread_take_stale_mapping(page_count * sysconf(_SC_PAGESIZE));
+	}
+	if (address == 0) {
+		address = dtape_hooks->task_allocate_pages(map->dtape_task->context, page_count, PROT_READ | PROT_WRITE, 0, 0);
+	}
 	if (address == 0) {
 		return KERN_RESOURCE_SHORTAGE;
 	}

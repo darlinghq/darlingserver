@@ -157,6 +157,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		bool stale = false;
 		bool staleUsedInterrupt = false;
 		size_t staleMappingLength = 0;
+		bool staleMappingReusable = false;
 		bool accepted = false;
 
 		{
@@ -168,9 +169,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 				stale = true;
 				staleUsedInterrupt = thread->_s2cStaleReplyUsedInterrupt;
 				staleMappingLength = thread->_s2cStaleMappingLength;
+				staleMappingReusable = thread->_s2cStaleMappingReusable;
 				thread->_s2cStaleReplyPending = false;
 				thread->_s2cStaleReplyUsedInterrupt = false;
 				thread->_s2cStaleMappingLength = 0;
+				thread->_s2cStaleMappingReusable = false;
 			} else if (thread->_s2cCallInFlight && !thread->_s2cReply) {
 				thread->_s2cReply = std::move(requestMessage);
 				accepted = true;
@@ -183,7 +186,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			callLog.debug() << "Discarding reply to an abandoned S2C call" << callLog.endLog;
 			if (staleMappingLength > 0) {
 				// nobody will use the memory the abandoned mmap call mapped; it is unmapped before the next S2C call
-				thread->_s2cNoteStaleMapping(requestMessage, staleMappingLength);
+				thread->_s2cNoteStaleMapping(requestMessage, staleMappingLength, staleMappingReusable);
 			}
 			if (staleUsedInterrupt) {
 				// the client's S2C interrupt handler is waiting for us to let it go

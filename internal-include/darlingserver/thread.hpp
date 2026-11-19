@@ -114,8 +114,15 @@ namespace DarlingServer {
 		// the length of the mapping that the abandoned call (see `_s2cStaleReplyPending`) makes, if it is an mmap whose result
 		// must be undone (0 if there is nothing to undo); guarded by `_rwlock`
 		size_t _s2cStaleMappingLength = 0;
+		// whether that mapping is plain read-write anonymous memory placed by the client (see `_s2cReusableStaleMappings`); guarded by `_rwlock`
+		bool _s2cStaleMappingReusable = false;
 		// mappings made by abandoned mmap calls, unmapped before the next S2C call on this thread; guarded by `_rwlock`
 		std::vector<std::pair<uintptr_t, size_t>> _s2cStaleMappings;
+		// mappings made by abandoned mmap calls for fresh read-write anonymous memory anywhere in the task. a restarted call
+		// of this thread that needs such memory takes one (`_takeReusableStaleMapping()`) instead of mapping it again, so
+		// that a call interrupted again and again still gets further each time; the rest are unmapped like `_s2cStaleMappings`.
+		// guarded by `_rwlock`
+		std::vector<std::pair<uintptr_t, size_t>> _s2cReusableStaleMappings;
 		// set when an S2C wait of the current call on this thread is interrupted, so that the call can be restarted
 		// (see the `current_thread_take_s2c_interrupted` duct-tape hook); only used by the thread's own microthread
 		bool _s2cInterrupted = false;
@@ -150,9 +157,10 @@ namespace DarlingServer {
 
 		friend struct ::DTapeHooks;
 
-		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno, size_t staleMappingLength = 0);
-		void _s2cNoteStaleMapping(const Message& staleReply, size_t length);
+		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno, size_t staleMappingLength = 0, bool staleMappingReusable = false);
+		void _s2cNoteStaleMapping(const Message& staleReply, size_t length, bool reusable);
 		void _s2cUndoStaleMappings();
+		uintptr_t _takeReusableStaleMapping(size_t length);
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);

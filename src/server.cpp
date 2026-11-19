@@ -274,6 +274,14 @@ struct DTapeHooks {
 		return interrupted;
 	};
 
+	static uintptr_t dtape_hook_current_thread_take_stale_mapping(size_t length) {
+		auto thread = DarlingServer::Thread::currentThread();
+		if (!thread) {
+			return 0;
+		}
+		return thread->_takeReusableStaleMapping(length);
+	};
+
 	static bool dtape_hook_task_read_memory(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length) {
 		return static_cast<DarlingServer::Process*>(task_context)->readMemory(remote_address, local_buffer, length);
 	};
@@ -516,6 +524,7 @@ struct DTapeHooks {
 		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,
 		.current_thread_set_bsd_retval = dtape_hook_current_thread_set_bsd_retval,
 		.current_thread_take_s2c_interrupted = dtape_hook_current_thread_take_s2c_interrupted,
+		.current_thread_take_stale_mapping = dtape_hook_current_thread_take_stale_mapping,
 
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
