@@ -25,6 +25,10 @@
 #include <darlingserver/logging.hpp>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
 
 #include <sys/mman.h>
 #include <signal.h>
@@ -1598,6 +1602,64 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 	} else if (!_dead) {
 		Server::sharedInstance().sendMessage(std::move(reply));
 	}
+};
+
+bool DarlingServer::Thread::getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const {
+	auto process = this->process();
+	if (!process || isDead() || nameSize == 0) {
+		return false;
+	}
+
+	std::string base = "/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id());
+	std::string line;
+
+	{
+		std::ifstream file(base + "/stat");
+		if (!std::getline(file, line)) {
+			return false;
+		}
+	}
+
+	// the command name is parenthesized and may itself contain spaces and parentheses, so parse after the last ')'.
+	// the fields after it start with the state (field 3); utime and stime are fields 14 and 15, in clock ticks.
+	auto endOfComm = line.rfind(')');
+	if (endOfComm == std::string::npos) {
+		return false;
+	}
+
+	std::istringstream fields(line.substr(endOfComm + 1));
+	std::string field;
+	unsigned long long utime = 0;
+	unsigned long long stime = 0;
+	for (int index = 3; index <= 15; ++index) {
+		if (!(fields >> field)) {
+			return false;
+		}
+		if (index == 14) {
+			utime = std::strtoull(field.c_str(), nullptr, 10);
+		} else if (index == 15) {
+			stime = std::strtoull(field.c_str(), nullptr, 10);
+		}
+	}
+
+	long ticksPerSecond = sysconf(_SC_CLK_TCK);
+	if (ticksPerSecond <= 0) {
+		ticksPerSecond = 100;
+	}
+	userTimeNs = utime * (1000000000ULL / ticksPerSecond);
+	systemTimeNs = stime * (1000000000ULL / ticksPerSecond);
+
+	std::string comm;
+	{
+		std::ifstream file(base + "/comm");
+		if (!std::getline(file, comm)) {
+			return false;
+		}
+	}
+	std::strncpy(name, comm.c_str(), nameSize - 1);
+	name[nameSize - 1] = '\0';
+
+	return true;
 };
 
 DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
