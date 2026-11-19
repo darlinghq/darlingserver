@@ -893,6 +893,16 @@ kern_return_t _mach_make_memory_entry(vm_map_t target_map, memory_object_size_t*
 				// A range that is already a shared host mapping (a file, or a mapping of another
 				// named entry) keeps its mapping, and the entry gets a snapshot of its contents.
 				if (dtape_hooks->task_map_file(target_map->dtape_task->context, descriptor->memfd, map_size / (page_mask + 1), dtape_linux_protection(region_protection), map_start, 0, dtape_memory_flag_fixed | dtape_memory_flag_overwrite) != map_start) {
+					// The mapping may still have been made (e.g. when the call to map it was interrupted by a signal
+					// and the request is restarted after it). Keep the object until this thread's next message is sent,
+					// so that a new request for the range finds it through that mapping (see above)
+					// instead of making an entry that doesn't share the task's memory.
+					dtape_thread_t* dthread = dtape_thread_for_xnu_thread(current_thread());
+					if (dthread) {
+						dtape_thread_release_kept_descriptor(dthread);
+						dthread->kept_descriptor = descriptor;
+						descriptor = NULL;
+					}
 					kr = KERN_FAILURE;
 					goto out;
 				}
@@ -924,6 +934,14 @@ out:
 		dtape_map_shared_descriptor_release(descriptor);
 	}
 	return kr;
+};
+
+void dtape_thread_release_kept_descriptor(dtape_thread_t* thread) {
+	dtape_map_shared_descriptor_t* descriptor = thread->kept_descriptor;
+	thread->kept_descriptor = NULL;
+	if (descriptor) {
+		dtape_map_shared_descriptor_release(descriptor);
+	}
 };
 
 kern_return_t mach_memory_entry_access_tracking(ipc_port_t entry_port, int* access_tracking, uint32_t* access_tracking_reads, uint32_t* access_tracking_writes) {

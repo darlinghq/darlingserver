@@ -64,6 +64,9 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 
 	thread->context = context;
 	thread->processing_signal = false;
+	thread->kobject_restart_allowed = false;
+	thread->kept_descriptor = NULL;
+	thread->kobject_restart_requested = false;
 	thread->name = NULL;
 	thread->waiting_suspended = false;
 	libsimple_lock_init(&thread->block_suspend_gate);
@@ -124,6 +127,7 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 	dtape_log_debug("%llu: thread being destroyed", thread->xnu_thread.thread_id);
 
 	dtape_psynch_thread_destroy(thread);
+	dtape_thread_release_kept_descriptor(thread);
 
 	// this next section uses code adapted from XNU's thread_deallocate_complete() in osfmk/kern/thread.c
 

@@ -13,6 +13,12 @@ extern "C" {
 // structures do, so that every architecture uses the same layout.
 #define DSERVER_RPC_ALIGN64 __attribute__((aligned(8)))
 
+// A call that fails with -DSERVER_RPC_RESTART had no effect and must be made again, unchanged, once the
+// signal that interrupted it has been handled. The server returns it when a signal for the calling thread
+// interrupts work that the call needs from that thread (a server-to-client call, e.g. to map memory).
+// Like Linux's ERESTARTSYS (the same value), it never reaches the application: the RPC wrapper retries.
+#define DSERVER_RPC_RESTART 512
+
 //
 // kqueue channels
 //
