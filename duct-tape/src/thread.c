@@ -568,6 +568,15 @@ static void thread_continuation_callback(void* context) {
 	thread->xnu_thread.parameter = NULL;
 
 	wait_result = thread->xnu_thread.wait_result;
+
+	if (wait_result == THREAD_WAITING) {
+		// resumed although nobody ended the wait (see thread_block_parameter()); keep waiting
+		thread->xnu_thread.state |= TH_WAIT;
+		thread_unlock(&thread->xnu_thread);
+		thread_block_parameter(continuation, parameter);
+		__builtin_unreachable();
+	}
+
 	thread_unlock(&thread->xnu_thread);
 
 	continuation(parameter, wait_result);
@@ -577,7 +586,9 @@ static void thread_continuation_callback(void* context) {
 
 wait_result_t thread_block_parameter(thread_continue_t continuation, void* parameter) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
+	wait_result_t wait_result;
 
+again:
 	thread_lock(&thread->xnu_thread);
 
 	thread->xnu_thread.continuation = continuation;
@@ -600,7 +611,17 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 	}
 
 	thread_lock(&thread->xnu_thread);
-	wait_result_t wait_result = thread->xnu_thread.wait_result;
+	wait_result = thread->xnu_thread.wait_result;
+
+	if (waiting && wait_result == THREAD_WAITING) {
+		// we were resumed although nobody ended the wait: a wakeup (thread_unblock() resumes the microthread) can be
+		// left over from an earlier wait that a signal interrupted, and it resumes whatever wait the thread is in
+		// when it runs. we're still on the wait queue, so just keep waiting (the next run clears TH_WAIT again).
+		thread->xnu_thread.state |= TH_WAIT;
+		thread_unlock(&thread->xnu_thread);
+		goto again;
+	}
+
 	thread_unlock(&thread->xnu_thread);
 
 	if (continuation) {
