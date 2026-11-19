@@ -224,6 +224,10 @@ struct DTapeHooks {
 		return static_cast<dtape_thread_state_t>(static_cast<DarlingServer::Thread*>(thread_context)->getRunState());
 	};
 
+	static bool dtape_hook_thread_get_stats(void* thread_context, char* name, size_t name_size, uint64_t* user_time_ns, uint64_t* system_time_ns) {
+		return static_cast<DarlingServer::Thread*>(thread_context)->getStats(name, name_size, *user_time_ns, *system_time_ns);
+	};
+
 	static int dtape_hook_thread_send_signal(void* thread_context, int signal) {
 		try {
 			static_cast<DarlingServer::Thread*>(thread_context)->sendSignal(signal);
@@ -502,6 +506,7 @@ struct DTapeHooks {
 		.thread_lookup = dtape_hook_thread_lookup,
 		.thread_lookup_eternal = dtape_hook_thread_lookup_eternal,
 		.thread_get_state = dtape_hook_thread_get_state,
+		.thread_get_stats = dtape_hook_thread_get_stats,
 		.thread_send_signal = dtape_hook_thread_send_signal,
 		.thread_context_dispose = dtape_hook_thread_context_dispose,
 		.thread_eternal_id = dtape_hook_thread_eternal_id,

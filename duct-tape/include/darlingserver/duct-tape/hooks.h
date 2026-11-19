@@ -41,6 +41,7 @@ typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_conte
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_eternal_f)(dtape_eternal_id_t eid, bool retain);
 typedef dtape_thread_state_t (*dtape_hook_thread_get_state_f)(void* thread_context);
+typedef bool (*dtape_hook_thread_get_stats_f)(void* thread_context, char* name, size_t name_size, uint64_t* user_time_ns, uint64_t* system_time_ns);
 typedef int (*dtape_hook_thread_send_signal_f)(void* thread_context, int signal);
 typedef void (*dtape_hook_thread_context_dispose_f)(void* thread_context);
 typedef dtape_eternal_id_t (*dtape_hook_thread_eternal_id_f)(void* thread_context);
@@ -110,6 +111,7 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_lookup_f thread_lookup;
 	dtape_hook_thread_lookup_eternal_f thread_lookup_eternal;
 	dtape_hook_thread_get_state_f thread_get_state;
+	dtape_hook_thread_get_stats_f thread_get_stats;
 	dtape_hook_thread_send_signal_f thread_send_signal;
 	dtape_hook_thread_context_dispose_f thread_context_dispose;
 	dtape_hook_thread_eternal_id_f thread_eternal_id;

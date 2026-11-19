@@ -219,25 +219,27 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 		replyToSave.setAddress(requestMessage.address());
 
+		bool pending = false;
 		{
 			std::unique_lock lock(thread->_rwlock);
+			// the client can push more than one reply: e.g. when a signal arrives while it waits for the reply to
+			// interrupt_exit, the new interrupt_enter sees both that reply and the reply to the call the first signal
+			// interrupted (sent after interrupt_exit). all of them are kept, in order.
 			if (thread->_pendingCall && thread->_pendingCall->number() == Call::Number::InterruptEnter) {
 				// this means the client got interrupted after we had already sent a reply for the interrupted call,
 				// the client saw this unexpected reply while waiting for interrupt_enter to respond and sent it back to us,
 				// and we received both calls (interrupt_enter and push_reply) at the same time
-				thread->_pendingSavedReply = std::move(replyToSave);
+				thread->_pendingSavedReplies.push_back(std::move(replyToSave));
+				pending = true;
 			} else {
 				if (thread->_interrupts.empty()) {
 					throw std::runtime_error("Client tried to push reply outside of interrupt");
 				}
-				if (thread->_interrupts.top().savedReply) {
-					throw std::runtime_error("Client-pushed reply overwriting existing saved reply");
-				}
-				thread->_interrupts.top().savedReply = std::move(replyToSave);
+				thread->_interrupts.top().savedReplies.push_back(std::move(replyToSave));
 			}
 		}
 
-		callLog.debug() << *thread << ": Saved client-pushed reply (" << ((thread->_pendingSavedReply) ? "pending" : "normal") << ")" << callLog.endLog;
+		callLog.debug() << *thread << ": Saved client-pushed reply (" << (pending ? "pending" : "normal") << ")" << callLog.endLog;
 
 		// write a byte to the pipe so the caller can continue
 		write(pipeDesc.fd(), &tmp, sizeof(tmp));
@@ -1087,10 +1089,9 @@ void DarlingServer::Call::InterruptExit::processCall() {
 
 		thread->_interrupts.pop();
 
-		if (tmp.savedReply) {
+		for (auto& savedReply: tmp.savedReplies) {
 			callLog.debug() << *thread << ": Going to send saved reply" << callLog.endLog;
-			Server::sharedInstance().sendMessage(std::move(*tmp.savedReply));
-			tmp.savedReply = std::nullopt;
+			Server::sharedInstance().sendMessage(std::move(savedReply));
 		}
 	}
 };

@@ -26,6 +26,7 @@
 #include <shared_mutex>
 #include <condition_variable>
 #include <stack>
+#include <deque>
 #include <queue>
 #include <atomic>
 #include <vector>
@@ -132,14 +133,15 @@ namespace DarlingServer {
 		std::optional<Message> _deferredReply = std::nullopt;
 
 		struct InterruptContext {
-			std::optional<Message> savedReply = std::nullopt;
+			// replies to send once the interrupt is over, in the order they were sent originally
+			std::deque<Message> savedReplies;
 			std::shared_ptr<Call> interruptedCall = nullptr;
 			StackPool::Stack savedStack;
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
 		std::queue<std::shared_ptr<Call>> _pendingInterrupts;
-		std::optional<Message> _pendingSavedReply = std::nullopt;
+		std::deque<Message> _pendingSavedReplies;
 		bool _dead = false;
 		std::shared_ptr<Thread> _selfReference = nullptr;
 
@@ -287,6 +289,15 @@ namespace DarlingServer {
 		void pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply);
 
 		RunState getRunState() const;
+
+		/**
+		 * Reads the thread's name and its user and system CPU time (in nanoseconds) from Linux.
+		 *
+		 * The name is the Linux thread name (at most 15 characters), written NUL-terminated into `name`.
+		 *
+		 * @returns `true` if the thread's information could be read; `false` if the thread is gone.
+		 */
+		bool getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const;
 
 		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;

@@ -25,6 +25,10 @@
 #include <darlingserver/logging.hpp>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
 
 #include <sys/mman.h>
 #include <signal.h>
@@ -1655,16 +1659,70 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 	}
 
 	if (_interruptedForSignal) {
-		if (_interrupts.top().savedReply) {
-			throw std::runtime_error("New reply would overwrite existing saved reply");
-		}
-
-		_interrupts.top().savedReply = std::move(reply);
+		_interrupts.top().savedReplies.push_back(std::move(reply));
 	} else if (_deferReplyForS2C) {
 		_deferredReply = std::move(reply);
 	} else if (!_dead) {
 		Server::sharedInstance().sendMessage(std::move(reply));
 	}
+};
+
+bool DarlingServer::Thread::getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const {
+	auto process = this->process();
+	if (!process || isDead() || nameSize == 0) {
+		return false;
+	}
+
+	std::string base = "/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id());
+	std::string line;
+
+	{
+		std::ifstream file(base + "/stat");
+		if (!std::getline(file, line)) {
+			return false;
+		}
+	}
+
+	// the command name is parenthesized and may itself contain spaces and parentheses, so parse after the last ')'.
+	// the fields after it start with the state (field 3); utime and stime are fields 14 and 15, in clock ticks.
+	auto endOfComm = line.rfind(')');
+	if (endOfComm == std::string::npos) {
+		return false;
+	}
+
+	std::istringstream fields(line.substr(endOfComm + 1));
+	std::string field;
+	unsigned long long utime = 0;
+	unsigned long long stime = 0;
+	for (int index = 3; index <= 15; ++index) {
+		if (!(fields >> field)) {
+			return false;
+		}
+		if (index == 14) {
+			utime = std::strtoull(field.c_str(), nullptr, 10);
+		} else if (index == 15) {
+			stime = std::strtoull(field.c_str(), nullptr, 10);
+		}
+	}
+
+	long ticksPerSecond = sysconf(_SC_CLK_TCK);
+	if (ticksPerSecond <= 0) {
+		ticksPerSecond = 100;
+	}
+	userTimeNs = utime * (1000000000ULL / ticksPerSecond);
+	systemTimeNs = stime * (1000000000ULL / ticksPerSecond);
+
+	std::string comm;
+	{
+		std::ifstream file(base + "/comm");
+		if (!std::getline(file, comm)) {
+			return false;
+		}
+	}
+	std::strncpy(name, comm.c_str(), nameSize - 1);
+	name[nameSize - 1] = '\0';
+
+	return true;
 };
 
 DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
@@ -1817,13 +1875,11 @@ void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
 	{
 		std::unique_lock lock(currentThreadVar->_rwlock);
 
-		if (currentThreadVar->_pendingSavedReply) {
-			if (currentThreadVar->_interrupts.top().savedReply) {
-				throw std::runtime_error("Pending saved reply would overwrite saved reply");
-			}
-
-			currentThreadVar->_interrupts.top().savedReply = std::move(*currentThreadVar->_pendingSavedReply);
-			currentThreadVar->_pendingSavedReply = std::nullopt;
+		// replies the client pushed back before this interrupt was entered were sent before anything saved since
+		auto& savedReplies = currentThreadVar->_interrupts.top().savedReplies;
+		while (!currentThreadVar->_pendingSavedReplies.empty()) {
+			savedReplies.push_front(std::move(currentThreadVar->_pendingSavedReplies.back()));
+			currentThreadVar->_pendingSavedReplies.pop_back();
 		}
 
 		currentThreadVar->_interruptedForSignal = true;

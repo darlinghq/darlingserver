@@ -51,6 +51,14 @@ struct dtape_thread {
 	struct dtape_map_shared_descriptor* kept_descriptor;
 
 	bool waiting_suspended;
+	// set (with the thread locked) when thread_unblock() ends a wait, cleared once the woken thread has picked up its
+	// wait result. while it is set, the wait has already been completed (e.g. a receive has been handed its message)
+	// and must not be turned into an interruption; see dtape_thread_sigexc_enter()
+	bool wakeup_pending;
+	// set when a signal arrived while `wakeup_pending` was set: the woken call runs on, but the next interruptible wait
+	// it starts before it returns is interrupted at once. cleared then, or once the interrupted call is done
+	// (dtape_thread_sigexc_enter2())
+	bool interrupt_deferred;
 	// held from the TH_WAIT check in thread_block_parameter() until the
 	// microthread has been suspended; see thread_block_parameter()
 	libsimple_lock_t block_suspend_gate;
