@@ -17,14 +17,14 @@ static void reset() {
 	threads.m[101] = std::make_shared<Thread>(p, 101, nullptr);
 }
 
-static Message pushReply(pid_t kernelPid, int writeEnd) {
+static Message pushReply(pid_t kernelPid, int writeEnd, uint64_t replySize = 16) {
 	Message m;
 	m.bytes.resize(sizeof(dserver_rpc_call_push_reply_t));
 	auto c = reinterpret_cast<dserver_rpc_call_push_reply_t*>(m.bytes.data());
 	c->header.number = dserver_callnum_push_reply;
 	c->header.pid = 100;
 	c->header.tid = 101;
-	c->reply_size = 16;
+	c->reply_size = replySize;
 	m.kernelPid = kernelPid;
 	m.fds = {writeEnd};
 	return m;
@@ -63,9 +63,22 @@ int main(int, char**) {
 	threads.m[101]->_interrupts.push({});
 	if (pipe2(p, O_NONBLOCK | O_CLOEXEC) != 0) return 2;
 	CHECK(!threw(pushReply(500, p[1])), "push_reply during an interrupt is accepted");
-	CHECK(threads.m[101]->_interrupts.top().savedReply.has_value(), "the reply is saved on the interrupt");
+	CHECK(threads.m[101]->_interrupts.top().savedReplies.size() == 1, "the reply is saved on the interrupt");
 	CHECK(clientRead(p[0]) == 1, "the client receives its byte");
 	CHECK(clientRead(p[0]) == 0, "and then EOF: the server closed the pipe");
+	close(p[0]);
+
+	// a second reply pushed during the same interrupt (e.g. the client was waiting for the reply to interrupt_exit
+	// when the next signal arrived, and then also saw the reply to the call the first signal interrupted)
+	// is kept as well, after the first one
+	if (pipe2(p, O_NONBLOCK | O_CLOEXEC) != 0) return 2;
+	CHECK(!threw(pushReply(500, p[1], 24)), "a second push_reply during the same interrupt is accepted");
+	{
+		auto& saved = threads.m[101]->_interrupts.top().savedReplies;
+		CHECK(saved.size() == 2, "both replies are saved");
+		CHECK(saved.size() == 2 && saved[0].bytes.size() == 16 && saved[1].bytes.size() == 24, "in the order they were pushed");
+	}
+	CHECK(clientRead(p[0]) == 1, "the client receives its byte for the second push");
 	close(p[0]);
 
 	std::printf("%s (%d failures)\n", fails ? "FAILED" : "OK", fails);

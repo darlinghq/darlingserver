@@ -26,6 +26,7 @@
 #include <shared_mutex>
 #include <condition_variable>
 #include <stack>
+#include <deque>
 #include <queue>
 #include <atomic>
 
@@ -123,14 +124,15 @@ namespace DarlingServer {
 		std::optional<Message> _deferredReply = std::nullopt;
 
 		struct InterruptContext {
-			std::optional<Message> savedReply = std::nullopt;
+			// replies to send once the interrupt is over, in the order they were sent originally
+			std::deque<Message> savedReplies;
 			std::shared_ptr<Call> interruptedCall = nullptr;
 			StackPool::Stack savedStack;
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
 		std::queue<std::shared_ptr<Call>> _pendingInterrupts;
-		std::optional<Message> _pendingSavedReply = std::nullopt;
+		std::deque<Message> _pendingSavedReplies;
 		bool _dead = false;
 		std::shared_ptr<Thread> _selfReference = nullptr;
 
