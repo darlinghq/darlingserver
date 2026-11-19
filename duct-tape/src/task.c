@@ -286,27 +286,33 @@ void task_watchport_elem_deallocate(struct task_watchport_elem* watchport_elem) 
 };
 
 kern_return_t task_create_suid_cred(task_t task, suid_cred_path_t path, suid_cred_uid_t uid, suid_cred_t* sc_p) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_dyld_process_info_notify_deregister(task_t task, mach_port_name_t rcv_name) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_dyld_process_info_notify_register(task_t task, ipc_port_t sright) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_generate_corpse(task_t task, ipc_port_t* corpse_task_port) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_get_assignment(task_t task, processor_set_t* pset) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mach_msg_type_number_t* state_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t* task_info_count) {
@@ -590,15 +596,17 @@ bool task_is_driver(task_t task) {
 };
 
 kern_return_t task_map_corpse_info(task_t task, task_t corpse_task, vm_address_t* kcd_addr_begin, uint32_t* kcd_size) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_map_corpse_info_64(task_t task, task_t corpse_task, mach_vm_address_t* kcd_addr_begin, mach_vm_size_t* kcd_size) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 void task_name_deallocate(task_name_t task_name) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)task_name);
 };
 
 // Task scheduling policies are not enforced: the server does not schedule guest processes, so only the
@@ -707,15 +715,18 @@ void task_policy_set_deallocate(task_policy_set_t task_policy_set) {
 };
 
 kern_return_t task_purgable_info(task_t task, task_purgable_info_t* stats) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_register_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_register_dyld_shared_cache_image_info(task_t task, dyld_kernel_image_info_t cache_img, boolean_t no_cache, boolean_t private_cache) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 // Restartable ranges are accepted but not acted upon: darlingserver does not see a thread being
@@ -743,7 +754,8 @@ kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t
 };
 
 kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
@@ -752,19 +764,22 @@ kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* 
 };
 
 kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 void task_suspension_token_deallocate(task_suspension_token_t token) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)token);
 };
 
 kern_return_t task_terminate(task_t task) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 static kern_return_t task_for_pid_internal(mach_port_name_t target_tport, int pid, uintptr_t t, mach_task_flavor_t flavor) {

@@ -163,7 +163,9 @@ _sleep_continue( __unused void *parameter, wait_result_t wresult)
 					error = EINTR;
 				}
 #else
-				dtape_stub_unsafe("_sleep_continue SHOULDissignal");
+				// signal delivery is not modelled: report the interruption like any other
+				dtape_stub("_sleep_continue SHOULDissignal");
+				error = EINTR;
 #endif
 #if 0
 			} else if ((ut->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL) {
@@ -300,7 +302,9 @@ _sleep(
 					goto out;
 				}
 #else
-				dtape_stub_unsafe("_sleep:SHOULDissignal");
+				// signal delivery is not modelled: report the interruption like any other
+				dtape_stub("_sleep:SHOULDissignal");
+				error = EINTR;
 #endif
 			}
 			if (thread_should_abort(self)) {
@@ -373,7 +377,9 @@ block:
 					error = EINTR;
 				}
 #else
-				dtape_stub_unsafe("THREAD_INTERRUPTED SHOULDissignal");
+				// signal delivery is not modelled: report the interruption like any other
+				dtape_stub("THREAD_INTERRUPTED SHOULDissignal");
+				error = EINTR;
 #endif
 #if 0
 			} else if ((ut->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL) {
