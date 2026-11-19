@@ -112,6 +112,12 @@
 
 #include <sys/kdebug.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/memory.h>
+#include <darlingserver/rpc-supplement.h>
+#endif /* __DARLING__ */
+
 #ifndef offsetof
 #define offsetof(type, member)  ((size_t)(&((type *)0)->member))
 #endif /* offsetof */
@@ -556,11 +562,39 @@ mach_msg_overwrite_trap(
 			goto end;
 		}
 
+#ifdef __DARLING__
+		dtape_thread_t *dthread = dtape_thread_for_xnu_thread(current_thread());
+		dthread->kobject_restart_allowed = true;
+		dthread->kobject_restart_requested = false;
+#endif /* __DARLING__ */
+
 		mr = ipc_kmsg_send(kmsg, option, msg_timeout);
+
+#ifdef __DARLING__
+		boolean_t restart = dthread->kobject_restart_requested;
+		dthread->kobject_restart_allowed = false;
+		dthread->kobject_restart_requested = false;
+		if (!restart) {
+			/* a request that was handed back has now been sent again (or the sender went on without it) */
+			dtape_thread_release_kept_descriptor(dthread);
+		}
+#endif /* __DARLING__ */
 
 		if (mr != MACH_MSG_SUCCESS) {
 			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
+#ifdef __DARLING__
+			mach_msg_return_t put_mr = ipc_kmsg_put(kmsg, option, msg_addr, send_size, 0, NULL);
+			if (restart && mr == MACH_SEND_INTERRUPTED && put_mr == MACH_MSG_SUCCESS) {
+				/*
+				 * A kernel object could not perform the request because of a signal (see ipc_kobject_server()).
+				 * The message is back in the sender's buffer, as for an interrupted send; have libsystem_kernel
+				 * send it again, whatever the options, once the signal has been handled.
+				 */
+				mr = -DSERVER_RPC_RESTART;
+			}
+#else
 			(void) ipc_kmsg_put(kmsg, option, msg_addr, send_size, 0, NULL);
+#endif /* __DARLING__ */
 			KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			goto end;
 		}

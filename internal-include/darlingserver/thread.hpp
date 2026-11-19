@@ -29,6 +29,7 @@
 #include <deque>
 #include <queue>
 #include <atomic>
+#include <vector>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -110,6 +111,14 @@ namespace DarlingServer {
 		size_t _s2cInterruptAbandoned = 0;
 		// set by the S2C interrupt handler (S2CPerform) right before it gives the green light; guarded by `_rwlock`
 		bool _s2cInterruptEntered = false;
+		// the length of the mapping that the abandoned call (see `_s2cStaleReplyPending`) makes, if it is an mmap whose result
+		// must be undone (0 if there is nothing to undo); guarded by `_rwlock`
+		size_t _s2cStaleMappingLength = 0;
+		// mappings made by abandoned mmap calls, unmapped before the next S2C call on this thread; guarded by `_rwlock`
+		std::vector<std::pair<uintptr_t, size_t>> _s2cStaleMappings;
+		// set when an S2C wait of the current call on this thread is interrupted, so that the call can be restarted
+		// (see the `current_thread_take_s2c_interrupted` duct-tape hook); only used by the thread's own microthread
+		bool _s2cInterrupted = false;
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;
@@ -141,7 +150,9 @@ namespace DarlingServer {
 
 		friend struct ::DTapeHooks;
 
-		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno);
+		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno, size_t staleMappingLength = 0);
+		void _s2cNoteStaleMapping(const Message& staleReply, size_t length);
+		void _s2cUndoStaleMappings();
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);

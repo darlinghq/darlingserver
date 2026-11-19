@@ -141,6 +141,10 @@
 
 #include <libkern/crypto/sha2.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/thread.h>
+#endif /* __DARLING__ */
+
 #include <ptrauth.h>
 #if __has_feature(ptrauth_calls)
 #include <libkern/ptrauth_utils.h>
@@ -2287,6 +2291,13 @@ retry:
 		 */
 		kmsg = ipc_kobject_server(kmsg, option);
 		if (kmsg == IKM_NULL) {
+#ifdef __DARLING__
+			dtape_thread_t *dthread = dtape_thread_for_xnu_thread(th);
+			if (dthread && dthread->kobject_restart_requested) {
+				/* the request was handed back unsent (see ipc_kobject_server()); the caller still has it */
+				return MACH_SEND_INTERRUPTED;
+			}
+#endif /* __DARLING__ */
 			return MACH_MSG_SUCCESS;
 		}
 

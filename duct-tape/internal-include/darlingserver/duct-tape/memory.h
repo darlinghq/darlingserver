@@ -10,6 +10,7 @@
 #include <darlingserver/duct-tape/locks.h>
 
 struct dtape_task;
+struct dtape_thread;
 
 typedef struct dtape_map_shared_descriptor {
 	os_refcnt_t refcount;
@@ -43,6 +44,9 @@ struct _vm_map {
 };
 
 typedef struct _vm_map dtape_map_t;
+
+// releases the object kept by mach_make_memory_entry_internal() for the given thread (if any)
+void dtape_thread_release_kept_descriptor(struct dtape_thread* thread);
 
 #define VM_MAP_PAGE_SHIFT(map) ((map) ? (map)->dtape_page_shift : PAGE_SHIFT)
 

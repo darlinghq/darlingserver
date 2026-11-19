@@ -1169,9 +1169,18 @@ void DarlingServer::Thread::setPendingCallOverride(bool pendingCallOverride) {
 
 static DarlingServer::Log s2cLog("s2c");
 
-std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno) {
+std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno, size_t staleMappingLength) {
 	std::optional<Message> reply = std::nullopt;
 	bool usingInterrupt = false;
+
+	// an interrupted wait means a signal is being delivered to the current thread (or it is being suspended or killed).
+	// whatever call it is making is abandoned; let that call be restarted once the signal has been handled
+	// (see the `current_thread_take_s2c_interrupted` duct-tape hook) instead of failing it because of the signal.
+	auto abandonedForInterrupt = [&]() {
+		currentThread()->_s2cInterrupted = true;
+		outErrno = EINTR;
+		return std::nullopt;
+	};
 
 	// a failed or interrupted S2C call must never take the server down: every failure is reported to the caller
 	// as `std::nullopt` plus an errno value, and the caller turns that into an error for the single operation.
@@ -1184,11 +1193,34 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 		return std::nullopt;
 	}
 
+	// a call that is being finished while its thread enters a signal handler (see `_handleInterruptEnterForCurrentThread`)
+	// must not wait: a suspension in that state isn't resumed correctly. its S2C waits have just been interrupted anyway,
+	// so don't send a new call (EAGAIN: nothing was sent); the call is restarted after the handler instead.
+	auto finishingInterruptedCall = [&]() {
+		if (!currentThread()->_interruptedForSignal) {
+			return false;
+		}
+		currentThread()->_s2cInterrupted = true;
+		outErrno = EAGAIN;
+		return true;
+	};
+
+	if (finishingInterruptedCall()) {
+		return std::nullopt;
+	}
+
+	// first get rid of what abandoned mmap calls left behind
+	_s2cUndoStaleMappings();
+
+	// (the signal may have arrived while doing that)
+	if (finishingInterruptedCall()) {
+		return std::nullopt;
+	}
+
 	// make sure we're the only one performing an S2C call on this thread
 	if (!dtape_semaphore_down_simple(_s2cPerformSempahore)) {
 		// got interrupted while waiting
-		outErrno = EINTR;
-		return std::nullopt;
+		return abandonedForInterrupt();
 	}
 
 	s2cLog.debug() << *this << ": Going to perform S2C call" << s2cLog.endLog;
@@ -1233,8 +1265,7 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 					lock.unlock();
 				}
 				dtape_semaphore_up(_s2cPerformSempahore);
-				outErrno = EINTR;
-				return std::nullopt;
+				return abandonedForInterrupt();
 			}
 			s2cLog.debug() << *this << ": Got green light to perform S2C call" << s2cLog.endLog;
 			lock.lock();
@@ -1271,6 +1302,7 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 			// remember that its reply is stale when it arrives, so that it isn't mistaken for the reply to a later call.
 			_s2cStaleReplyPending = true;
 			_s2cStaleReplyUsedInterrupt = usingInterrupt;
+			_s2cStaleMappingLength = staleMappingLength;
 			_s2cCallInFlight = false;
 
 			// if we had replies deferred, release them: the client handles the S2C call first (it was sent first),
@@ -1286,8 +1318,7 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 			lock.unlock();
 			s2cLog.debug() << *this << ": S2C reply wait interrupted; reply will be discarded" << s2cLog.endLog;
 			dtape_semaphore_up(_s2cPerformSempahore);
-			outErrno = EINTR;
-			return std::nullopt;
+			return abandonedForInterrupt();
 		} else {
 			continue;
 		}
@@ -1337,6 +1368,40 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 	return std::move(*reply);
 };
 
+void DarlingServer::Thread::_s2cNoteStaleMapping(const Message& staleReply, size_t length) {
+	if (staleReply.data().size() != sizeof(dserver_s2c_reply_mmap_t)) {
+		return;
+	}
+
+	auto reply = reinterpret_cast<const dserver_s2c_reply_mmap_t*>(staleReply.data().data());
+	if (reply->header.s2c_number != dserver_s2c_msgnum_mmap || reply->errno_result != 0 || reply->address == (uint64_t)(uintptr_t)MAP_FAILED) {
+		return;
+	}
+
+	std::unique_lock lock(_rwlock);
+	_s2cStaleMappings.emplace_back(reply->address, length);
+};
+
+void DarlingServer::Thread::_s2cUndoStaleMappings() {
+	std::vector<std::pair<uintptr_t, size_t>> mappings;
+
+	{
+		std::unique_lock lock(_rwlock);
+		mappings.swap(_s2cStaleMappings);
+	}
+
+	// nobody owns these mappings: the calls that made them failed (or were restarted) and the addresses were never handed out
+	for (size_t i = 0; i < mappings.size(); ++i) {
+		int err = 0;
+		if (_munmap(mappings[i].first, mappings[i].second, err) < 0 && (err == EAGAIN || err == EINVAL)) {
+			// the call wasn't sent; try again next time
+			std::unique_lock lock(_rwlock);
+			_s2cStaleMappings.insert(_s2cStaleMappings.end(), mappings.begin() + i, mappings.end());
+			break;
+		}
+	}
+};
+
 uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno) {
 	// XXX: not sure if we want to force all allocations in 32-bit processes to be in the 32-bit address space.
 	//      for now, we leave it up to the caller.
@@ -1375,7 +1440,9 @@ uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int pro
 
 	s2cLog.debug() << "Performing _mmap with address=" << call->address << ", length=" << call->length << ", protection=" << call->protection << ", flags=" << call->flags << ", fd=" << call->fd << " (" << fd << ")" << ", offset=" << call->offset << s2cLog.endLog;
 
-	auto maybeReplyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t), outErrno);
+	// if this call is abandoned, the mapping it makes is unmapped again, unless it replaces memory at a fixed address
+	// (that range belongs to whoever asked for it, and a restarted call maps it again)
+	auto maybeReplyMessage = _s2cPerform(std::move(callMessage), dserver_s2c_msgnum_mmap, sizeof(dserver_s2c_reply_mmap_t), outErrno, (flags & MAP_FIXED) ? 0 : length);
 	if (!maybeReplyMessage) {
 		s2cLog.debug() << "_mmap call interrupted" << s2cLog.endLog;
 		return (uintptr_t)MAP_FAILED;

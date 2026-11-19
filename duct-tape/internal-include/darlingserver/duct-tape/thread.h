@@ -40,6 +40,16 @@ struct dtape_thread {
 	dtape_thread_user_state_t default_state;
 	bool processing_signal;
 
+	// a mach_msg send to a kernel object that fails only because a server-to-client call it needed was interrupted
+	// is handed back to the sender to be restarted (see ipc_kobject_server()).
+	// set by mach_msg_overwrite_trap() around its send and consumed by the first ipc_kobject_server() call
+	bool kobject_restart_allowed;
+	// set by ipc_kobject_server() when it handed the request back instead of performing it
+	bool kobject_restart_requested;
+	// the object of a memory entry whose creation failed after its memory may have been mapped into the task;
+	// kept until the thread's next mach_msg send completes, so a restarted request finds it (see mach_make_memory_entry_internal())
+	struct dtape_map_shared_descriptor* kept_descriptor;
+
 	bool waiting_suspended;
 	// set (with the thread locked) when thread_unblock() ends a wait, cleared once the woken thread has picked up its
 	// wait result. while it is set, the wait has already been completed (e.g. a receive has been handed its message)

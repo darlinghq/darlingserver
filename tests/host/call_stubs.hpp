@@ -126,6 +126,8 @@ namespace DarlingServer {
 		void setAddress(Address a) { address = a; }
 		void registerWithProcess() {}
 		void setPendingCall(std::shared_ptr<Call> c) { _pendingCall = c; }
+		size_t _s2cStaleMappingLength = 0;
+		void _s2cNoteStaleMapping(const Message&, size_t) {}
 		static void kernelAsync(std::function<void()>) {}
 	};
 	inline std::ostream& operator<<(std::ostream& o, const Thread&) { return o; }
