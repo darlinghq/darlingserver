@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <fcntl.h>
 #include <functional>
 #include <map>
@@ -103,10 +104,11 @@ namespace DarlingServer {
 
 	struct Call;
 	struct Thread {
-		struct Interrupt { std::optional<Message> savedReply; };
+		struct Interrupt { std::deque<Message> savedReplies; };
 		std::shared_ptr<Process> _process; pid_t _nsid; Address address;
 		std::shared_mutex _rwlock;
-		std::optional<Message> _s2cReply, _pendingSavedReply;
+		std::optional<Message> _s2cReply;
+		std::deque<Message> _pendingSavedReplies;
 		void* _s2cReplySempahore = nullptr;
 		std::shared_ptr<Call> _pendingCall;
 		std::stack<Interrupt> _interrupts;
