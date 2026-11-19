@@ -24,6 +24,7 @@
 // The flag values come from the imported XNU headers (PTHREAD_CANCEL_DEFS_INC).
 #include <errno.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -50,11 +51,8 @@ struct thread {
 };
 typedef struct thread* thread_t;
 
-typedef struct dtape_thread {
-	int uu_flag;
-	struct thread xnu_thread;
-} dtape_thread_t;
-
+// struct dtape_thread (the members the functions use) and dtape_thread_for_xnu_thread() are taken from the
+// real duct-tape header by the generator, together with the functions
 static int lock_errors;
 static int clear_wait_calls;
 
