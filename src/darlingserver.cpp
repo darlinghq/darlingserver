@@ -560,6 +560,17 @@ static void sanitizeProcessState(int pipefd) {
 // The invoking user's supplementary groups, as the launcher passed them on.
 static std::vector<gid_t> userGroups;
 
+// Whether the process's supplementary groups are already userGroups. In an unprivileged user
+// namespace (an unprivileged user namespace) setgroups() is denied for good, but there the list
+// never changed from the user's, so it is left alone.
+static bool groupsAreUsers() {
+	int count = getgroups(0, nullptr);
+	if (count < 0 || (size_t)count != userGroups.size())
+		return false;
+	std::vector<gid_t> current(count);
+	return count == 0 || (getgroups(count, current.data()) == count && current == userGroups);
+}
+
 // Runs fn in a child process that has given up root for good, and waits for it. Work in the user's
 // prefix that root is not needed for runs like this, so that nothing it does can get root back.
 template<typename Fn>
@@ -575,7 +586,7 @@ static bool runAsUser(uid_t uid, gid_t gid, Fn&& fn) {
 		// stand for the user), and may not change the groups there; the separate process still keeps
 		// whatever fn does to its own state away from the server.
 		// the groups and gids first, while the uid can still change them
-		if (runningAsRoot() && (setgroups(userGroups.size(), userGroups.data()) != 0 || setresgid(gid, gid, gid) != 0 ||
+		if (runningAsRoot() && ((!groupsAreUsers() && setgroups(userGroups.size(), userGroups.data()) != 0) || setresgid(gid, gid, gid) != 0 ||
 			setresuid(uid, uid, uid) != 0 || !dropTookEffect(uid, gid) || (uid != 0 && setresuid(-1, 0, -1) == 0)))
 		{
 			fprintf(stderr, "Cannot switch to your user and group ids\n");
