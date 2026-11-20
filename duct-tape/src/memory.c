@@ -513,7 +513,11 @@ static kern_return_t vm_map_copyout_kernel_buffer(vm_map_t map, vm_map_address_t
 				return KERN_RESOURCE_SHORTAGE;
 			}
 		} else {
-			*addr = dtape_hooks->task_allocate_pages(map->dtape_task->context, dtape_byte_count_to_page_count_round_up(copy_size), PROT_READ | PROT_WRITE, 0, 0);
+			// a message being received may have had its region mapped already (see dtape_kmsg_reserve_out_of_line())
+			*addr = dtape_thread_take_reserved_region(copy);
+			if (*addr == 0) {
+				*addr = dtape_hooks->task_allocate_pages(map->dtape_task->context, dtape_byte_count_to_page_count_round_up(copy_size), PROT_READ | PROT_WRITE, 0, 0);
+			}
 			if (*addr == 0) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
@@ -934,6 +938,74 @@ out:
 		dtape_map_shared_descriptor_release(descriptor);
 	}
 	return kr;
+};
+
+kern_return_t dtape_thread_reserve_region(vm_map_t map, const void* key, vm_size_t size) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(current_thread());
+	if (!thread || map == kernel_map) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	for (size_t i = 0; i < thread->reserved_region_count; ++i) {
+		if (thread->reserved_regions[i].key == key && thread->reserved_regions[i].size == size) {
+			// reserved by an earlier attempt to receive the same message
+			return KERN_SUCCESS;
+		}
+	}
+
+	struct dtape_reserved_region* regions = realloc(thread->reserved_regions, (thread->reserved_region_count + 1) * sizeof(*regions));
+	if (!regions) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+	thread->reserved_regions = regions;
+
+	// an earlier attempt to receive this message may have been interrupted while the memory was being mapped.
+	// the client still mapped it; take that memory, so that every attempt gets further even if each one is interrupted
+	size_t page_count = dtape_byte_count_to_page_count_round_up(size);
+	uintptr_t address = 0;
+	if (map->dtape_task == dtape_task_for_thread(thread)) {
+		address = dtape_hooks->current_thread_take_stale_mapping(page_count * sysconf(_SC_PAGESIZE));
+	}
+	if (address == 0) {
+		address = dtape_hooks->task_allocate_pages(map->dtape_task->context, page_count, PROT_READ | PROT_WRITE, 0, 0);
+	}
+	if (address == 0) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+
+	regions[thread->reserved_region_count].key = key;
+	regions[thread->reserved_region_count].address = address;
+	regions[thread->reserved_region_count].size = size;
+	++thread->reserved_region_count;
+	return KERN_SUCCESS;
+};
+
+uintptr_t dtape_thread_take_reserved_region(const void* key) {
+	dtape_thread_t* thread = dtape_thread_for_xnu_thread(current_thread());
+	if (!thread) {
+		return 0;
+	}
+
+	for (size_t i = 0; i < thread->reserved_region_count; ++i) {
+		if (thread->reserved_regions[i].key == key) {
+			uintptr_t address = thread->reserved_regions[i].address;
+			thread->reserved_regions[i] = thread->reserved_regions[--thread->reserved_region_count];
+			return address;
+		}
+	}
+	return 0;
+};
+
+void dtape_thread_release_reserved_regions(dtape_thread_t* thread, vm_map_t map) {
+	if (map) {
+		for (size_t i = 0; i < thread->reserved_region_count; ++i) {
+			uintptr_t address = thread->reserved_regions[i].address;
+			vm_map_remove(map, address, vm_map_round_page(address + thread->reserved_regions[i].size, VM_MAP_PAGE_MASK(map)), 0);
+		}
+	}
+	free(thread->reserved_regions);
+	thread->reserved_regions = NULL;
+	thread->reserved_region_count = 0;
 };
 
 void dtape_thread_release_kept_descriptor(dtape_thread_t* thread) {

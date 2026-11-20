@@ -398,7 +398,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 			mainThread->_s2cInterruptAbandoned = 0;
 			mainThread->_s2cInterruptEntered = false;
 			mainThread->_s2cStaleMappingLength = 0;
+			mainThread->_s2cStaleMappingReusable = false;
 			mainThread->_s2cStaleMappings.clear();
+			mainThread->_s2cReusableStaleMappings.clear();
 		}
 
 		// the new image has not been verified yet, and it starts under the policy in effect now;

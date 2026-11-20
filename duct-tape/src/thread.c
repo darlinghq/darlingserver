@@ -67,6 +67,12 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	thread->kobject_restart_allowed = false;
 	thread->kept_descriptor = NULL;
 	thread->kobject_restart_requested = false;
+	thread->reserved_regions = NULL;
+	thread->reserved_region_count = 0;
+	thread->receive_restart_allowed = false;
+	thread->pending_receive_kmsg = NULL;
+	thread->pending_receive_object = NULL;
+	thread->pending_receive_seqno = 0;
 	thread->name = NULL;
 	thread->waiting_suspended = false;
 	thread->wakeup_pending = false;
@@ -130,6 +136,7 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 
 	dtape_psynch_thread_destroy(thread);
 	dtape_thread_release_kept_descriptor(thread);
+	dtape_thread_abandon_pending_receive(thread);
 
 	// this next section uses code adapted from XNU's thread_deallocate_complete() in osfmk/kern/thread.c
 

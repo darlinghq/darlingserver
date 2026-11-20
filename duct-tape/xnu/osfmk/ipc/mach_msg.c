@@ -115,7 +115,76 @@
 #ifdef __DARLING__
 #include <darlingserver/duct-tape/thread.h>
 #include <darlingserver/duct-tape/memory.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/rpc-supplement.h>
+#include <libsimple/lock.h>
+#include <stdlib.h>
+
+/*
+ * Messages held for a restarted receive (see mach_msg_receive_results()) by threads that went away
+ * before receiving them. A thread is destroyed where messages can't be destroyed (that may send
+ * notifications), so they are destroyed by the next thread that enters mach_msg_overwrite_trap().
+ * This is what happens on macOS to a message received by a thread that never returns from the
+ * signal handler that interrupted it: nobody else gets it.
+ */
+struct dtape_abandoned_receive {
+	struct dtape_abandoned_receive *next;
+	ipc_kmsg_t kmsg;
+	ipc_object_t object;
+};
+
+static libsimple_lock_t dtape_abandoned_receives_lock = LIBSIMPLE_LOCK_INITIALIZER;
+static struct dtape_abandoned_receive *dtape_abandoned_receives;
+
+void
+dtape_thread_abandon_pending_receive(dtape_thread_t *thread)
+{
+	struct dtape_abandoned_receive *entry;
+
+	dtape_thread_release_reserved_regions(thread, VM_MAP_NULL);
+
+	if (thread->pending_receive_kmsg == IKM_NULL) {
+		return;
+	}
+
+	entry = malloc(sizeof(*entry));
+	if (entry == NULL) {
+		/* leak it rather than destroy it here */
+		return;
+	}
+	entry->kmsg = thread->pending_receive_kmsg;
+	entry->object = thread->pending_receive_object;
+	thread->pending_receive_kmsg = IKM_NULL;
+	thread->pending_receive_object = IO_NULL;
+
+	libsimple_lock_lock(&dtape_abandoned_receives_lock);
+	entry->next = dtape_abandoned_receives;
+	dtape_abandoned_receives = entry;
+	libsimple_lock_unlock(&dtape_abandoned_receives_lock);
+}
+
+static void
+dtape_destroy_abandoned_receives(void)
+{
+	struct dtape_abandoned_receive *entry;
+
+	if (__atomic_load_n(&dtape_abandoned_receives, __ATOMIC_RELAXED) == NULL) {
+		return;
+	}
+
+	libsimple_lock_lock(&dtape_abandoned_receives_lock);
+	entry = dtape_abandoned_receives;
+	dtape_abandoned_receives = NULL;
+	libsimple_lock_unlock(&dtape_abandoned_receives_lock);
+
+	while (entry != NULL) {
+		struct dtape_abandoned_receive *next = entry->next;
+		ipc_kmsg_destroy(entry->kmsg);
+		io_release(entry->object);
+		free(entry);
+		entry = next;
+	}
+}
 #endif /* __DARLING__ */
 
 #ifndef offsetof
@@ -331,6 +400,18 @@ mach_msg_receive_results(
 	mach_vm_address_t context;
 	mach_msg_size_t   size = 0;
 
+#ifdef __DARLING__
+	dtape_thread_t *dthread = dtape_thread_for_xnu_thread(self);
+	boolean_t restart_allowed = dthread != NULL && dthread->receive_restart_allowed && IO_VALID(object);
+	if (dthread != NULL) {
+		dthread->receive_restart_allowed = FALSE;
+	}
+	if (restart_allowed) {
+		/* kept with the message if it has to be held for a restarted receive */
+		io_reference(object);
+	}
+#endif /* __DARLING__ */
+
 	/*
 	 * unlink the special_reply_port before releasing reference to object.
 	 * get the thread's turnstile, if the thread donated it's turnstile to the port
@@ -339,6 +420,11 @@ mach_msg_receive_results(
 	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
+#ifdef __DARLING__
+		if (restart_allowed) {
+			io_release(object);
+		}
+#endif /* __DARLING__ */
 		if (mr == MACH_RCV_TOO_LARGE) {
 			/*
 			 * If the receive operation occurs with MACH_RCV_LARGE set
@@ -388,6 +474,31 @@ mach_msg_receive_results(
 
 	/* MACH_MSG_SUCCESS */
 
+#ifdef __DARLING__
+	if (restart_allowed) {
+		if (dtape_kmsg_reserve_out_of_line(kmsg, map) != KERN_SUCCESS &&
+		    dtape_hooks->current_thread_take_s2c_interrupted() &&
+		    dthread->pending_receive_kmsg == IKM_NULL) {
+			/*
+			 * Mapping the message's out-of-line memory in this task was interrupted: a signal is being
+			 * delivered to this thread. XNU never fails a receive (or loses its message) because of that,
+			 * so hold the message, which is still intact, and have libsystem_kernel make the same call
+			 * again once the signal has been handled; that call gets this message (see
+			 * mach_msg_overwrite_trap()). The regions mapped so far are kept for it.
+			 */
+			dthread->pending_receive_kmsg = kmsg;
+			dthread->pending_receive_object = object;
+			dthread->pending_receive_seqno = seqno;
+			if (sizep) {
+				*sizep = 0;
+			}
+			return -DSERVER_RPC_RESTART;
+		}
+		/* any other failure is reported by the copyout, as without the reservation */
+		io_release(object);
+	}
+#endif /* __DARLING__ */
+
 #if IMPORTANCE_INHERITANCE
 
 	/* adopt/transform any importance attributes carried in the message */
@@ -402,6 +513,13 @@ mach_msg_receive_results(
 	context = kmsg->ikm_header->msgh_remote_port->ip_context;
 
 	mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
+
+#ifdef __DARLING__
+	if (dthread != NULL && dthread->reserved_region_count != 0) {
+		/* regions the copyout didn't take (e.g. after a header error) */
+		dtape_thread_release_reserved_regions(dthread, map);
+	}
+#endif /* __DARLING__ */
 
 	trailer_size = ipc_kmsg_trailer_size(option, self);
 
@@ -535,6 +653,10 @@ mach_msg_overwrite_trap(
 	/* Only accept options allowed by the user */
 	option &= MACH_MSG_OPTION_USER;
 
+#ifdef __DARLING__
+	dtape_destroy_abandoned_receives();
+#endif /* __DARLING__ */
+
 	if (option & MACH_SEND_MSG) {
 		ipc_space_t space = current_space();
 		ipc_kmsg_t kmsg;
@@ -636,6 +758,24 @@ mach_msg_overwrite_trap(
 		self->ith_receiver_name = MACH_PORT_NULL;
 		self->ith_continuation = thread_syscall_return;
 		self->ith_knote = ITH_KNOTE_NULL;
+
+#ifdef __DARLING__
+		dtape_thread_t *rcv_dthread = dtape_thread_for_xnu_thread(self);
+		/* only a receive-only call can be made again without repeating anything (see mach_msg_receive_results()) */
+		rcv_dthread->receive_restart_allowed = !(option & MACH_SEND_MSG);
+		if (rcv_dthread->pending_receive_kmsg != IKM_NULL && rcv_dthread->pending_receive_object == object) {
+			/* the receive restarted after a signal: it gets the message it had already dequeued */
+			self->ith_kmsg = rcv_dthread->pending_receive_kmsg;
+			self->ith_seqno = rcv_dthread->pending_receive_seqno;
+			self->ith_state = MACH_MSG_SUCCESS;
+			rcv_dthread->pending_receive_kmsg = IKM_NULL;
+			rcv_dthread->pending_receive_object = IO_NULL;
+			/* the held reference; mach_msg_receive_results() releases the one taken by ipc_mqueue_copyin() */
+			io_release(object);
+			mr = mach_msg_receive_results(NULL);
+			goto end;
+		}
+#endif /* __DARLING__ */
 
 		ipc_mqueue_receive(mqueue, option, rcv_size, msg_timeout, THREAD_ABORTSAFE);
 		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0) {
