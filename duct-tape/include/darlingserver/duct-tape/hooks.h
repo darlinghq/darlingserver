@@ -65,6 +65,8 @@ typedef int (*dtape_hook_task_free_pages_f)(void* task_context, uintptr_t addres
 typedef uintptr_t (*dtape_hook_task_map_file_f)(void* task_context, int fd, size_t page_count, int protection, uintptr_t address_hint, size_t page_offset, dtape_memory_flags_t flags);
 typedef bool (*dtape_hook_fd_identity_f)(int fd, uint64_t* device, uint64_t* inode);
 typedef uintptr_t (*dtape_hook_task_get_next_region_f)(void* task_context, uintptr_t address);
+// counts the resident pages of the region that starts at `start_address`: pages only this task maps, and pages shared with other mappings
+typedef bool (*dtape_hook_task_get_region_residency_f)(void* task_context, uintptr_t start_address, uint64_t* private_pages, uint64_t* shared_pages);
 typedef bool (*dtape_hook_task_change_protection_f)(void* task_context, uintptr_t address, size_t page_count, int protection);
 typedef bool (*dtape_hook_task_sync_memory_f)(void* task_context, uintptr_t address, size_t size, int sync_flags);
 typedef void (*dtape_hook_task_context_dispose_f)(void* task_context);
@@ -133,6 +135,7 @@ typedef struct dtape_hooks {
 	dtape_hook_task_map_file_f task_map_file;
 	dtape_hook_fd_identity_f fd_identity;
 	dtape_hook_task_get_next_region_f task_get_next_region;
+	dtape_hook_task_get_region_residency_f task_get_region_residency;
 	dtape_hook_task_change_protection_f task_change_protection;
 	dtape_hook_task_sync_memory_f task_sync_memory;
 	dtape_hook_task_context_dispose_f task_context_dispose;

@@ -399,6 +399,14 @@ struct DTapeHooks {
 		return static_cast<DarlingServer::Process*>(task_context)->getNextRegion(address);
 	};
 
+	static bool dtape_hook_task_get_region_residency(void* task_context, uintptr_t start_address, uint64_t* private_pages, uint64_t* shared_pages) {
+		try {
+			return static_cast<DarlingServer::Process*>(task_context)->regionResidency(start_address, *private_pages, *shared_pages);
+		} catch (...) {
+			return false;
+		}
+	};
+
 	static bool dtape_hook_task_change_protection(void* task_context, uintptr_t address, size_t page_count, int protection) {
 		try {
 			static_cast<DarlingServer::Process*>(task_context)->changeProtection(address, page_count, protection);
@@ -528,6 +536,7 @@ struct DTapeHooks {
 		.task_map_file = dtape_hook_task_map_file,
 		.fd_identity = dtape_hook_fd_identity,
 		.task_get_next_region = dtape_hook_task_get_next_region,
+		.task_get_region_residency = dtape_hook_task_get_region_residency,
 		.task_change_protection = dtape_hook_task_change_protection,
 		.task_sync_memory = dtape_hook_task_sync_memory,
 		.task_context_dispose = dtape_hook_task_context_dispose,

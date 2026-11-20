@@ -1368,6 +1368,62 @@ region_info_out:
 
 			return kr;
 		};
+		case VM_REGION_TOP_INFO: {
+			dtape_memory_region_info_t region_info;
+			uintptr_t addr_to_check = *address;
+			uint64_t private_pages = 0;
+			uint64_t shared_pages = 0;
+			vm_region_top_info_t out = (vm_region_top_info_t)info;
+
+			if (object_name)
+				*object_name = IP_NULL;
+
+			if (*count < VM_REGION_TOP_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			// like XNU: the region containing the address, else the next one above it
+			if (!dtape_hooks->task_get_memory_region_info(map->dtape_task->context, addr_to_check, &region_info)) {
+				addr_to_check = dtape_hooks->task_get_next_region(map->dtape_task->context, addr_to_check);
+				if (addr_to_check == 0 || !dtape_hooks->task_get_memory_region_info(map->dtape_task->context, addr_to_check, &region_info)) {
+					return KERN_INVALID_ADDRESS;
+				}
+			}
+
+			if (!dtape_hooks->task_get_region_residency(map->dtape_task->context, region_info.start_address, &private_pages, &shared_pages)) {
+				private_pages = 0;
+				shared_pages = 0;
+			}
+
+			*address = region_info.start_address;
+			*size = region_info.page_count * sysconf(_SC_PAGESIZE);
+			*count = VM_REGION_TOP_INFO_COUNT;
+
+			memset(out, 0, sizeof(*out));
+			// an identifier of the memory object: the backing file or shared memory object, else the region itself
+			out->obj_id = (unsigned int)((region_info.inode != 0) ? (region_info.device ^ region_info.inode) : (region_info.start_address >> 12));
+			if (region_info.shared) {
+				// shared memory (a mapped memory entry or file mapped shared): all its resident pages count as shared
+				out->share_mode = SM_SHARED;
+				out->ref_count = 2;
+				out->shared_pages_resident = (unsigned int)(private_pages + shared_pages);
+			} else if (region_info.inode != 0) {
+				// a private file mapping: copy-on-write of the file's pages
+				out->share_mode = SM_COW;
+				out->ref_count = 2;
+				out->private_pages_resident = (unsigned int)private_pages;
+				out->shared_pages_resident = (unsigned int)shared_pages;
+			} else if (private_pages + shared_pages == 0) {
+				// anonymous memory that was never touched has no memory object yet
+				out->share_mode = SM_EMPTY;
+				out->obj_id = 0;
+			} else {
+				out->share_mode = SM_PRIVATE;
+				out->ref_count = 1;
+				out->private_pages_resident = (unsigned int)(private_pages + shared_pages);
+			}
+			return KERN_SUCCESS;
+		};
 		default:
 			// the flavor is guest-controlled: reject it as XNU does, never abort the server
 			dtape_log_debug("%s: unsupported flavor %d", __FUNCTION__, flavor);
