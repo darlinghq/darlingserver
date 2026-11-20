@@ -200,7 +200,22 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 {
 	_tid = -1;
 
+	auto& scanRegistry = threadRegistry();
 	for (const auto& entry: std::filesystem::directory_iterator("/proc/" + std::to_string(process->id()) + "/task")) {
+		// a thread that is already registered is not the one being created; skipping it keeps the cost of
+		// creating a thread independent of how many threads the process already has (reading every
+		// thread's status file made each creation cost time proportional to the thread count, with the
+		// server's single loop blocked meanwhile)
+		pid_t candidate = 0;
+		try {
+			candidate = std::stoi(entry.path().filename().string());
+		} catch (const std::exception&) {
+			continue;
+		}
+		if (scanRegistry.lookupEntryByID(candidate).has_value()) {
+			continue;
+		}
+
 		std::ifstream statusFile(entry.path() / "status");
 		std::string line;
 
@@ -221,10 +236,14 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 					continue;
 				}
 
-				_tid = std::stoi(entry.path().filename().string());
+				_tid = candidate;
 
 				break;
 			}
+		}
+
+		if (_tid != -1) {
+			break;
 		}
 	}
 
