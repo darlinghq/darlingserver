@@ -14,6 +14,7 @@
 #include <optional>
 #include <ostream>
 #include <shared_mutex>
+#include <queue>
 #include <stack>
 #include <stdexcept>
 #include <string>
@@ -119,6 +120,7 @@ namespace DarlingServer {
 		void* _s2cInterruptExitSemaphore = nullptr;
 		std::shared_ptr<Call> _pendingCall;
 		std::stack<Interrupt> _interrupts;
+		std::queue<std::shared_ptr<Call>> _pendingInterrupts;
 		Thread(std::shared_ptr<Process> p, pid_t nsid, void*): _process(p), _nsid(nsid) {}
 		std::shared_ptr<Process> process() const { return _process; }
 		pid_t id() const { return _nsid; }
@@ -127,7 +129,8 @@ namespace DarlingServer {
 		void registerWithProcess() {}
 		void setPendingCall(std::shared_ptr<Call> c) { _pendingCall = c; }
 		size_t _s2cStaleMappingLength = 0;
-		void _s2cNoteStaleMapping(const Message&, size_t) {}
+		bool _s2cStaleMappingReusable = false;
+		void _s2cNoteStaleMapping(const Message&, size_t, bool) {}
 		static void kernelAsync(std::function<void()>) {}
 	};
 	inline std::ostream& operator<<(std::ostream& o, const Thread&) { return o; }
