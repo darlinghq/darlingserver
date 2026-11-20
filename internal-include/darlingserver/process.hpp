@@ -237,6 +237,9 @@ namespace DarlingServer {
 
 		MemoryInfo memoryInfo() const;
 		MemoryRegionInfo memoryRegionInfo(uintptr_t address) const;
+		// counts the resident pages of the mapping that starts at `startAddress`, split into pages only this process
+		// maps and pages shared with other mappings (from `/proc/<pid>/smaps`); false if there is no such mapping
+		bool regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const;
 
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);

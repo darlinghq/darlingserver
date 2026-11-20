@@ -712,6 +712,58 @@ bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext
 	return false;
 };
 
+bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const {
+	if (isDead()) {
+		return false;
+	}
+
+	std::ifstream file("/proc/" + std::to_string(_pid) + "/smaps");
+	std::string line;
+	bool inRegion = false;
+	uint64_t privateKiB = 0;
+	uint64_t sharedKiB = 0;
+
+	while (std::getline(file, line)) {
+		uintptr_t start;
+		uintptr_t end;
+		char perms[8];
+		uintptr_t offset;
+
+		// a mapping's header line; the lines that follow it (until the next header) describe it
+		if (parseMapsLine(line, start, end, perms, offset)) {
+			if (inRegion) {
+				break;
+			}
+			inRegion = start == startAddress;
+			continue;
+		}
+
+		if (!inRegion) {
+			continue;
+		}
+
+		char field[32];
+		unsigned long long kib;
+		if (sscanf(line.c_str(), "%31[^:]: %llu kB", field, &kib) != 2) {
+			continue;
+		}
+		if (strcmp(field, "Private_Clean") == 0 || strcmp(field, "Private_Dirty") == 0) {
+			privateKiB += kib;
+		} else if (strcmp(field, "Shared_Clean") == 0 || strcmp(field, "Shared_Dirty") == 0) {
+			sharedKiB += kib;
+		}
+	}
+
+	if (!inRegion) {
+		return false;
+	}
+
+	const uint64_t pageKiB = sysconf(_SC_PAGESIZE) / 1024;
+	privatePages = privateKiB / pageKiB;
+	sharedPages = sharedKiB / pageKiB;
+	return true;
+};
+
 DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInfo(uintptr_t address) const {
 	if (isDead()) {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryRegionInfo");
