@@ -229,10 +229,16 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			// the client can push more than one reply: e.g. when a signal arrives while it waits for the reply to
 			// interrupt_exit, the new interrupt_enter sees both that reply and the reply to the call the first signal
 			// interrupted (sent after interrupt_exit). all of them are kept, in order.
-			if (thread->_pendingCall && thread->_pendingCall->number() == Call::Number::InterruptEnter) {
+			// the client pushes replies only while it waits for the reply to its latest interrupt_enter, so they belong to
+			// that interrupt. if we haven't started handling it yet, keep them for it.
+			if ((thread->_pendingCall && thread->_pendingCall->number() == Call::Number::InterruptEnter) || !thread->_pendingInterrupts.empty()) {
 				// this means the client got interrupted after we had already sent a reply for the interrupted call,
 				// the client saw this unexpected reply while waiting for interrupt_enter to respond and sent it back to us,
-				// and we received both calls (interrupt_enter and push_reply) at the same time
+				// and we received both calls (interrupt_enter and push_reply) at the same time.
+				// the interrupt_enter can also still be queued behind the call that sent the reply (see `Thread::setPendingCall`):
+				// the call has replied, but the interrupt is only scheduled once the call's microthread returns. the reply must
+				// not go to an interrupt that is already being handled: with none, it would be dropped (and the client would
+				// wait for it forever); for a nested interrupt, it would only be sent once the outer interrupt exits.
 				thread->_pendingSavedReplies.push_back(std::move(replyToSave));
 				pending = true;
 			} else {

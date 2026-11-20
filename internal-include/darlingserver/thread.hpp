@@ -148,6 +148,7 @@ namespace DarlingServer {
 		};
 		std::stack<InterruptContext> _interrupts;
 		std::queue<std::shared_ptr<Call>> _pendingInterrupts;
+		// replies the client pushed back for an interrupt_enter we haven't started handling yet (pending or in `_pendingInterrupts`)
 		std::deque<Message> _pendingSavedReplies;
 		bool _dead = false;
 		std::shared_ptr<Thread> _selfReference = nullptr;
