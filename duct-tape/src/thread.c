@@ -501,6 +501,20 @@ void dtape_thread_release(dtape_thread_t* thread) {
 	thread_deallocate(&thread->xnu_thread);
 };
 
+// thread locked
+//
+// A wait that ends before its timer fires must cancel the timer. Otherwise the timer stays armed, fires later during an
+// unrelated wait of the same thread, and ends that one with THREAD_TIMED_OUT: an untimed receive returns
+// MACH_RCV_TIMED_OUT, and the server's own untimed semaphore waits (e.g. for an S2C reply) don't expect a timeout at all.
+static void dtape_thread_cancel_wait_timer_locked(thread_t xthread) {
+	if (xthread->wait_timer_is_set) {
+		if (timer_call_cancel(&xthread->wait_timer)) {
+			xthread->wait_timer_active--;
+		}
+		xthread->wait_timer_is_set = FALSE;
+	}
+};
+
 void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
 	// a wait that has already been ended by a wakeup keeps its result, as XNU's clear_wait() leaves a thread that is
@@ -512,6 +526,9 @@ void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 	if (thread->wakeup_pending) {
 		thread->interrupt_deferred = true;
 	} else {
+		// with TH_WAIT cleared, clear_wait_internal() only takes the thread off its wait queue (thread_unblock() isn't
+		// called), so cancel the timer of a timed wait here
+		dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
 		thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
 		thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
 		clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
@@ -547,6 +564,8 @@ void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 
 void dtape_thread_dying(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
+	// see dtape_thread_sigexc_enter()
+	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
 	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
 	thread->xnu_thread.state |= TH_TERMINATE;
 	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
@@ -671,17 +690,7 @@ boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 	thread->wakeup_pending = true;
 
 	// Cancel any pending wait timer, like XNU's thread_unblock() does.
-	//
-	// Without this, a timed wait that completes normally leaves the wait timer
-	// armed; it fires later, during an unrelated untimed wait, and delivers a
-	// spurious THREAD_TIMED_OUT (which surfaces as MACH_RCV_TIMED_OUT from a
-	// receive issued with MACH_MSG_TIMEOUT_NONE).
-	if (thread->xnu_thread.wait_timer_is_set) {
-		if (timer_call_cancel(&thread->xnu_thread.wait_timer)) {
-			thread->xnu_thread.wait_timer_active--;
-		}
-		thread->xnu_thread.wait_timer_is_set = FALSE;
-	}
+	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
 
 	// like XNU, the thread is no longer waiting. this matters when the wakeup
 	// comes before the thread reaches thread_block(): it must not suspend then.
