@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <atomic>
+#include <cstddef>
+#include <cstring>
 
 static DarlingServer::Log kqchanLog("kqchan");
 static DarlingServer::Log kqchanMachPortLog("kqchan:mach_port");
@@ -304,6 +306,20 @@ void DarlingServer::Kqchan::MachPort::_processMessages() {
 				_read(read->default_buffer, read->default_buffer_size, read->header.tid);
 			} break;
 
+			case dserver_kqchan_msgnum_mach_port_arm: {
+				if (msg->data().size() < sizeof(dserver_kqchan_call_mach_port_arm_t)) {
+					throw std::invalid_argument("Message buffer was too small for dserver_kqchan_call_mach_port_arm");
+				}
+
+				auto arm = reinterpret_cast<dserver_kqchan_call_mach_port_arm_t*>(callhdr);
+
+				_arm(arm->shared_state, arm->default_buffer, arm->default_buffer_size, arm->header.tid);
+			} break;
+
+			case dserver_kqchan_msgnum_mach_port_detach: {
+				_detach();
+			} break;
+
 			default:
 				throw std::invalid_argument("Unknown/invalid kqchan msgnum");
 		}
@@ -342,33 +358,11 @@ void DarlingServer::Kqchan::MachPort::_modify(uint64_t receiveBuffer, uint64_t r
 	});
 };
 
+// the kevent flag for the final event of a knote whose port went away
+static constexpr uint16_t kqchanEventVanished = 0x0200; // EV_VANISHED
+
 void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid) {
 	kqchanMachPortLog.debug() << *this << ": received read request with {defaultBuffer=" << defaultBuffer << ",defaultBufferSize=" << defaultBufferSize << "}" << kqchanMachPortLog.endLog;
-
-	{
-		// our peer has acknowledged our notification by asking for the pending messages;
-		// we can now send a notification again if we receive more data
-		std::unique_lock lock(_notificationMutex);
-		kqchanMachPortLog.debug() << *this << ": received acknowledgement (implicitly via read) for notification " << _notificationCount++ << "; notifications may now be sent" << kqchanMachPortLog.endLog;
-		_canSendNotification = true;
-
-		// defer future notifications until we send our reply.
-		// we do it this way because:
-		// 1) if we don't defer them and just send them right now,
-		//    a notification may be sent before we send our reply,
-		//    leading to out-of-order messages in the channel (which
-		//    causes an abort on the client side).
-		// 2) if we instead move the `_canSendNotification` update to after
-		//    we send the reply, we may miss a notification for an event
-		//    that occurred right after we generated the reply but before
-		//    we updated `_canSendNotification`.
-		// with this approach (notification deferral), channel messages are kept in-order
-		// and we don't miss any notifications. worst case scenario, we might send
-		// a duplicate notification for an event that occurred right after this update
-		// but before we generate the reply; in that case, the client will simply try to read
-		// the duplicate event but we won't have anything and we'll tell it to drop the event.
-		_deferNotification = true;
-	}
 
 	auto maybeThread = threadRegistry().lookupEntryByNSID(nstid);
 
@@ -377,10 +371,23 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 	}
 
 	auto thread = *maybeThread;
+	bool armed;
+
+	{
+		// our peer has acknowledged our notification by asking for the pending messages.
+		// no new notification is sent while we read; after the read, we decide whether
+		// one may be sent again (see _finishMemoryOperation()), so channel messages stay in order.
+		std::unique_lock lock(_notificationMutex);
+		kqchanMachPortLog.debug() << *this << ": received acknowledgement (implicitly via read) for notification " << _notificationCount++ << kqchanMachPortLog.endLog;
+		++_memoryOperations;
+		armed = _armed;
+		// the client reads the event it was told to read
+		_awaitingRead = false;
+	}
 
 	auto self = shared_from_this();
-	Thread::kernelAsync([self, thread, defaultBuffer, defaultBufferSize]() {
-		Message msg(sizeof(dserver_kqchan_reply_mach_port_read_t), 0, self->_checkForEventsAsyncFactory());
+	Thread::kernelAsync([self, thread, defaultBuffer, defaultBufferSize, armed]() {
+		Message msg(sizeof(dserver_kqchan_reply_mach_port_read_t), 0);
 
 		kqchanMachPortLog.debug() << *self << ": handling read request in microthread" << kqchanMachPortLog.endLog;
 
@@ -389,22 +396,282 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 		reply->header.code = 0;
 		reply->header.number = dserver_kqchan_msgnum_mach_port_read;
 
+		bool reopen = false;
+		bool awaitRead = false;
+
 		Thread::currentThread()->impersonate(thread);
 		if (!dtape_kqchan_mach_port_fill(self->_dtapeKqchan, reply, defaultBuffer, defaultBufferSize)) {
 			kqchanMachPortLog.debug() << *self << ": no events to read" << kqchanMachPortLog.endLog;
 			reply->header.code = 0xdead;
+			reopen = true;
+		} else if ((reply->kev.flags & kqchanEventVanished) == 0) {
+			if (armed && dtape_kqchan_mach_port_has_events(self->_dtapeKqchan)) {
+				// see DSERVER_KQCHAN_MACH_PORT_MORE
+				reply->header.code = DSERVER_KQCHAN_MACH_PORT_MORE;
+				awaitRead = true;
+			} else {
+				reopen = true;
+			}
 		}
 		Thread::currentThread()->impersonate(nullptr);
 
 		self->_outbox.push(std::move(msg));
 
-		// now let's send any deferred notifications we might have
-		self->_sendDeferredNotification();
+		self->_finishMemoryOperation(reopen, awaitRead);
 	});
 };
 
+void DarlingServer::Kqchan::MachPort::_arm(uint64_t sharedState, uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid) {
+	std::unique_lock lock(_notificationMutex);
+
+	if (_detached) {
+		return;
+	}
+
+	kqchanMachPortLog.debug() << *this << ": armed by thread " << nstid << " with {sharedState=" << sharedState << ",defaultBuffer=" << defaultBuffer << ",defaultBufferSize=" << defaultBufferSize << "}" << kqchanMachPortLog.endLog;
+
+	_armed = true;
+	_sharedState = sharedState;
+	_defaultBuffer = defaultBuffer;
+	_defaultBufferSize = defaultBufferSize;
+};
+
+void DarlingServer::Kqchan::MachPort::_detach() {
+	bool reply = false;
+
+	{
+		std::unique_lock lock(_notificationMutex);
+
+		kqchanMachPortLog.debug() << *this << ": detaching" << kqchanMachPortLog.endLog;
+
+		_detached = true;
+		_canSendNotification = false;
+
+		if (_memoryOperations == 0) {
+			reply = true;
+		} else {
+			// the client may free the memory it gave us once we reply;
+			// wait for the operations that may still access it
+			_detachReplyPending = true;
+		}
+	}
+
+	if (reply) {
+		Message msg(sizeof(dserver_kqchan_reply_mach_port_detach_t), 0);
+		auto detachReply = reinterpret_cast<dserver_kqchan_reply_mach_port_detach_t*>(msg.data().data());
+		detachReply->header.number = dserver_kqchan_msgnum_mach_port_detach;
+		detachReply->header.code = 0;
+		_outbox.push(std::move(msg));
+	}
+};
+
+void DarlingServer::Kqchan::MachPort::_finishMemoryOperation(bool reopen, bool awaitRead) {
+	bool check = false;
+	bool sendDetachReply = false;
+
+	{
+		std::unique_lock lock(_notificationMutex);
+
+		--_memoryOperations;
+
+		if (_detached) {
+			if (_detachReplyPending && _memoryOperations == 0) {
+				_detachReplyPending = false;
+				sendDetachReply = true;
+			}
+		} else if (awaitRead) {
+			_awaitingRead = true;
+		} else if (reopen) {
+			_canSendNotification = true;
+			check = true;
+		}
+	}
+
+	if (sendDetachReply) {
+		Message msg(sizeof(dserver_kqchan_reply_mach_port_detach_t), 0);
+		auto detachReply = reinterpret_cast<dserver_kqchan_reply_mach_port_detach_t*>(msg.data().data());
+		detachReply->header.number = dserver_kqchan_msgnum_mach_port_detach;
+		detachReply->header.code = 0;
+		_outbox.push(std::move(msg));
+	}
+
+	// a message may have arrived while notifications were held back
+	if (check && dtape_kqchan_mach_port_has_events(_dtapeKqchan)) {
+		_notify();
+	}
+};
+
 void DarlingServer::Kqchan::MachPort::_notify() {
-	_sendNotification();
+	std::unique_lock lock(_notificationMutex);
+
+	if (_detached || !_canSendNotification) {
+		// an earlier notification or event has not been acknowledged yet (or the client is arming or
+		// detaching the channel); the client will ask for the state again
+		return;
+	}
+
+	_canSendNotification = false;
+
+	if (!_armed) {
+		kqchanMachPortLog.debug() << *this << ": sending notification " << _notificationCount << kqchanMachPortLog.endLog;
+
+		lock.unlock(); // the outbox has its own lock
+
+		Message msg(sizeof(dserver_kqchan_call_notification_t), 0);
+		auto notification = reinterpret_cast<dserver_kqchan_call_notification_t*>(msg.data().data());
+		notification->header.number = dserver_kqchan_msgnum_notification;
+		notification->header.pid = 0;
+		notification->header.tid = 0;
+		_outbox.push(std::move(msg));
+		return;
+	}
+
+	++_memoryOperations;
+	lock.unlock();
+
+	Thread::kernelAsync([weakSelf = weak_from_this()]() {
+		auto self = weakSelf.lock();
+		if (!self) {
+			return;
+		}
+		self->_processInline();
+	});
+};
+
+static bool kqchanMachPortReadShared(const DarlingServer::Process& process, uint64_t sharedState, size_t offset, uint32_t& value) {
+	value = 0;
+	return process.readMemory(sharedState + offset, &value, sizeof(value));
+};
+
+static bool kqchanMachPortWriteShared(DarlingServer::Process& process, uint64_t sharedState, size_t offset, uint32_t value) {
+	return process.writeMemory(sharedState + offset, &value, sizeof(value));
+};
+
+void DarlingServer::Kqchan::MachPort::_processInline() {
+	uint64_t sharedState;
+	uint64_t defaultBuffer;
+	uint64_t defaultBufferSize;
+	uint32_t sequence;
+	uint32_t lastArming;
+
+	{
+		std::unique_lock lock(_notificationMutex);
+		if (_detached) {
+			lock.unlock();
+			_finishMemoryOperation(false, false);
+			return;
+		}
+		sharedState = _sharedState;
+		defaultBuffer = _defaultBuffer;
+		defaultBufferSize = _defaultBufferSize;
+		sequence = _sequence;
+		lastArming = _lastArming;
+	}
+
+	Message msg(sizeof(dserver_kqchan_mach_port_event_t), 0);
+	auto event = reinterpret_cast<dserver_kqchan_mach_port_event_t*>(msg.data().data());
+	memset(event, 0, sizeof(*event));
+	event->header.number = dserver_kqchan_msgnum_mach_port_event;
+	event->header.code = 0;
+	event->kind = dserver_kqchan_mach_port_event_unprocessed;
+
+	bool reopen = false;
+	bool awaitRead = false;
+	bool send = true;
+
+	auto proc = _process.lock();
+	std::shared_ptr<Thread> thread = nullptr;
+
+	// reads the client's `armed` value and the waiting thread it names, in whose context we receive the message;
+	// returns 0 if no thread waits for the knote
+	auto readArming = [&]() -> uint32_t {
+		uint32_t value = 0;
+		uint32_t nstid = 0;
+		thread = nullptr;
+		if (!proc || !kqchanMachPortReadShared(*proc, sharedState, offsetof(dserver_kqchan_mach_port_shared_t, armed), value) || value == 0) {
+			return 0;
+		}
+		if (!kqchanMachPortReadShared(*proc, sharedState, offsetof(dserver_kqchan_mach_port_shared_t, thread), nstid)) {
+			return 0;
+		}
+		if (auto maybeThread = threadRegistry().lookupEntryByNSID(static_cast<pid_t>(nstid))) {
+			if ((*maybeThread)->process() == proc) {
+				thread = *maybeThread;
+			}
+		}
+		return thread ? value : 0;
+	};
+
+	// process the knote now only if a thread of the client waits for it (see dserver_kqchan_mach_port_shared_t);
+	// otherwise, the client reads the event when it next looks at the channel.
+	uint32_t arming = readArming();
+
+	if (arming != 0 && arming == lastArming) {
+		// we already processed the knote during this wait; the client may still be returning that event.
+		// ask the client to read the next one instead.
+		if (kqchanMachPortWriteShared(*proc, sharedState, offsetof(dserver_kqchan_mach_port_shared_t, wanted), 1)) {
+			std::atomic_thread_fence(std::memory_order_seq_cst);
+			arming = readArming();
+			if (arming == lastArming) {
+				// the client sees `wanted` when the wait ends
+				send = false;
+				awaitRead = true;
+			} else if (arming != 0) {
+				// a new wait started; process the knote for it
+				kqchanMachPortWriteShared(*proc, sharedState, offsetof(dserver_kqchan_mach_port_shared_t, wanted), 0);
+			}
+		} else {
+			arming = 0;
+		}
+	}
+
+	if (send && arming != 0) {
+		{
+			std::unique_lock lock(_notificationMutex);
+			sequence = ++_sequence;
+		}
+
+		if (kqchanMachPortWriteShared(*proc, sharedState, offsetof(dserver_kqchan_mach_port_shared_t, sequence), sequence)) {
+			std::atomic_thread_fence(std::memory_order_seq_cst);
+
+			uint32_t current = 0;
+			if (kqchanMachPortReadShared(*proc, sharedState, offsetof(dserver_kqchan_mach_port_shared_t, armed), current) && current == arming) {
+				dserver_kqchan_reply_mach_port_read_t reply;
+				memset(&reply, 0, sizeof(reply));
+
+				Thread::currentThread()->impersonate(thread);
+				bool processed = dtape_kqchan_mach_port_fill(_dtapeKqchan, &reply, defaultBuffer, defaultBufferSize);
+				if (processed) {
+					event->kind = dserver_kqchan_mach_port_event_processed;
+					static_assert(sizeof(event->kev) == sizeof(reply.kev), "kevent layouts must match");
+					memcpy(&event->kev, &reply.kev, sizeof(event->kev));
+					{
+						std::unique_lock lock(_notificationMutex);
+						_lastArming = arming;
+					}
+					if ((reply.kev.flags & kqchanEventVanished) == 0 && dtape_kqchan_mach_port_has_events(_dtapeKqchan)) {
+						// see DSERVER_KQCHAN_MACH_PORT_MORE
+						event->flags |= DSERVER_KQCHAN_MACH_PORT_MORE;
+						awaitRead = true;
+					} else {
+						reopen = true;
+					}
+				} else {
+					event->kind = dserver_kqchan_mach_port_event_none;
+					reopen = true;
+				}
+				Thread::currentThread()->impersonate(nullptr);
+			}
+		}
+	}
+
+	if (send) {
+		event->sequence = sequence;
+		kqchanMachPortLog.debug() << *this << ": sending event " << sequence << " of kind " << event->kind << kqchanMachPortLog.endLog;
+		_outbox.push(std::move(msg));
+	}
+
+	_finishMemoryOperation(reopen, awaitRead);
 };
 
 void DarlingServer::Kqchan::MachPort::_checkForEventsAsync() {
