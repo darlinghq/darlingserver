@@ -44,6 +44,11 @@ extern "C" {
  *      by calling the copyout method on the filter. for kqchan-based filters, this means
  *      sending a special message (specialized depending on the channel type) to which the
  *      server replies with the necessary event information.
+ *
+ * Mach port channels can also deliver events inline, without the read round trip
+ * (see dserver_kqchan_msgnum_mach_port_arm): while a thread of the client waits in kevent
+ * for the knote, the server processes the knote (receiving the message, if the filter asks for one)
+ * as soon as the port has a message and sends the result in a dserver_kqchan_msgnum_mach_port_event message.
  */
 
 enum dserver_kqchan_msgnum {
@@ -79,6 +84,30 @@ enum dserver_kqchan_msgnum {
 	 * A request to read the data for the most recent notification on this proc kqueue channel.
 	 */
 	dserver_kqchan_msgnum_proc_read,
+
+	/**
+	 * Enables inline event delivery for this mach port kqueue channel.
+	 *
+	 * The client sends this when it registers the knote. It carries the address of the client's
+	 * dserver_kqchan_mach_port_shared_t for the knote, the default receive buffer, and (in the header)
+	 * the thread whose context the server uses to receive messages for the knote.
+	 *
+	 * This message does NOT have a reply.
+	 */
+	dserver_kqchan_msgnum_mach_port_arm,
+
+	/**
+	 * A server-initiated message for an armed mach port kqueue channel, sent instead of
+	 * dserver_kqchan_msgnum_notification. See dserver_kqchan_mach_port_event_t.
+	 */
+	dserver_kqchan_msgnum_mach_port_event,
+
+	/**
+	 * Stops all delivery on this mach port kqueue channel. The server replies (with the same number)
+	 * once it no longer accesses the client's memory for the channel; the client must not free the
+	 * memory it registered (with dserver_kqchan_msgnum_mach_port_arm) before the reply.
+	 */
+	dserver_kqchan_msgnum_mach_port_detach,
 };
 
 typedef enum dserver_kqchan_msgnum dserver_kqchan_msgnum_t;
@@ -129,6 +158,95 @@ typedef struct dserver_kqchan_reply_mach_port_read {
 		uint64_t ext[4] DSERVER_RPC_ALIGN64;
 	} kev;
 } dserver_kqchan_reply_mach_port_read_t;
+
+/**
+ * State that the client keeps for an armed mach port kqueue channel.
+ *
+ * `armed` is written by the client: it is nonzero while the knote is enabled and a thread waits
+ * in kevent on its kqueue, and it changes every time a wait starts. Before it changes `armed`, the client
+ * names one of its waiting threads in `thread`; the server receives the knote's messages in that thread's
+ * context. `sequence` is written by the server,
+ * which increments it before it processes the knote inline; every dserver_kqchan_mach_port_event_t carries
+ * the value it was sent with.
+ *
+ * The server writes `sequence` and then reads `armed`; the client clears `armed` and then reads `sequence`.
+ * So either the server sees the knote disarmed and does not process it, or the client sees a sequence number
+ * it has not received an event for yet, and collects that event (which is already on its way). A thread that
+ * stops waiting changes `armed` and collects these events before it makes any other server call, so the thread
+ * named in `thread` is idle while the server receives in its context.
+ *
+ * The server processes the knote inline at most once per value of `armed`, because the client may still be
+ * returning the previous event (and its message, in the knote's receive buffer). For a later event during
+ * the same wait, the server sets `wanted` and then reads `armed` again; the client changes or clears `armed`
+ * and then reads `wanted`. If the client sees `wanted`, it clears it and reads the event with
+ * dserver_kqchan_msgnum_mach_port_read; the server sends nothing for the knote until then.
+ */
+typedef struct dserver_kqchan_mach_port_shared {
+	uint32_t armed;
+	uint32_t sequence;
+	uint32_t wanted;
+	uint32_t thread;
+} dserver_kqchan_mach_port_shared_t;
+
+typedef struct dserver_kqchan_call_mach_port_arm {
+	dserver_kqchan_callhdr_t header;
+	uint64_t shared_state DSERVER_RPC_ALIGN64;
+	uint64_t default_buffer DSERVER_RPC_ALIGN64;
+	uint64_t default_buffer_size DSERVER_RPC_ALIGN64;
+} dserver_kqchan_call_mach_port_arm_t;
+
+enum dserver_kqchan_mach_port_event_kind {
+	/**
+	 * The knote was not processed (it was not armed); the client must read the event
+	 * with dserver_kqchan_msgnum_mach_port_read, as for a plain notification.
+	 */
+	dserver_kqchan_mach_port_event_unprocessed = 0,
+
+	/**
+	 * The knote was processed and had an event, which is in `kev`
+	 * (as in dserver_kqchan_reply_mach_port_read_t).
+	 */
+	dserver_kqchan_mach_port_event_processed,
+
+	/**
+	 * The knote was processed but had no event (e.g. another receiver took the message first).
+	 */
+	dserver_kqchan_mach_port_event_none,
+};
+
+/**
+ * Set in a processed event (and as a dserver_kqchan_reply_mach_port_read_t code) of an armed channel when the
+ * port still had messages afterwards. The knote is level-triggered, so the next kevent call that waits for it
+ * must look at the port again: the client reads the next event in that call, and the server sends nothing for
+ * the knote until then.
+ */
+#define DSERVER_KQCHAN_MACH_PORT_MORE 1
+
+typedef struct dserver_kqchan_mach_port_event {
+	dserver_kqchan_replyhdr_t header;
+	uint32_t kind;
+	uint32_t sequence;
+	uint32_t flags;
+	struct {
+		uint64_t ident DSERVER_RPC_ALIGN64;
+		int16_t filter;
+		uint16_t flags;
+		int32_t qos;
+		uint64_t udata DSERVER_RPC_ALIGN64;
+		uint32_t fflags;
+		uint32_t xflags;
+		int64_t data DSERVER_RPC_ALIGN64;
+		uint64_t ext[4] DSERVER_RPC_ALIGN64;
+	} kev;
+} dserver_kqchan_mach_port_event_t;
+
+typedef struct dserver_kqchan_call_mach_port_detach {
+	dserver_kqchan_callhdr_t header;
+} dserver_kqchan_call_mach_port_detach_t;
+
+typedef struct dserver_kqchan_reply_mach_port_detach {
+	dserver_kqchan_replyhdr_t header;
+} dserver_kqchan_reply_mach_port_detach_t;
 
 typedef struct dserver_kqchan_call_proc_modify {
 	dserver_kqchan_callhdr_t header;
