@@ -69,6 +69,10 @@ struct dtape_thread {
 	struct ipc_kmsg* pending_receive_kmsg;
 	struct ipc_object* pending_receive_object;
 	mach_port_seqno_t pending_receive_seqno;
+	// set for a receive the task waits for itself when the port's shared queue is empty (mach_msg_sq_receive);
+	// dtape_sq_mqueue_receive() then sets `sq_local_wait_result` instead of leaving the mode
+	bool sq_local_wait;
+	bool sq_local_wait_result;
 
 	bool waiting_suspended;
 	// set (with the thread locked) when thread_unblock() ends a wait, cleared once the woken thread has picked up its

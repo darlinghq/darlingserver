@@ -26,6 +26,8 @@ struct dtape_task {
 	struct proc_ident p_ident;
 	// role set with task_policy_set(TASK_CATEGORY_POLICY); TASK_UNSPECIFIED until set
 	_Atomic int category_role;
+	// the task's shared message queue region (see mach_sq.h); NULL until it asks for one
+	struct dtape_sq_region* sq_region;
 	struct task xnu_task;
 };
 

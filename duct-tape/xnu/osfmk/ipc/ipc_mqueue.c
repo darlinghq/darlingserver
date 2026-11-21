@@ -101,6 +101,10 @@
 
 #include <sys/event.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#endif /* __DARLING__ */
+
 extern char     *proc_name_address(void *p);
 
 int ipc_mqueue_full;            /* address is event for queue space */
@@ -1021,6 +1025,13 @@ ipc_mqueue_receive(
 	wait_result_t           wresult;
 	thread_t                self = current_thread();
 
+#ifdef __DARLING__
+	/* a port whose queue is in its task's shared region */
+	if (dtape_sq_mqueue_receive(mqueue, option, max_size, rcv_timeout, self)) {
+		return;
+	}
+#endif /* __DARLING__ */
+
 	imq_lock(mqueue);
 	wresult = ipc_mqueue_receive_on_thread(mqueue, option, max_size,
 	    rcv_timeout, interruptible,
@@ -1747,6 +1758,9 @@ ipc_mqueue_set_qlimit(
 		}
 	}
 	mqueue->imq_qlimit = (uint16_t)qlimit;
+#ifdef __DARLING__
+	dtape_sq_port_qlimit_changed(ip_from_mq(mqueue));
+#endif /* __DARLING__ */
 	imq_unlock(mqueue);
 }
 

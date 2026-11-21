@@ -8,6 +8,7 @@
 #include <darlingserver/duct-tape/psynch.h>
 #include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/log.h>
+#include <darlingserver/duct-tape/mach_sq.h>
 
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
@@ -70,6 +71,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	task->architecture = architecture;
 	task->has_sigexc = false;
 	task->category_role = TASK_UNSPECIFIED;
+	task->sq_region = NULL;
 	task->dyld_info_addr = 0;
 	task->dyld_info_length = 0;
 	task->p_ident.eid = dtape_hooks->task_eternal_id(context);
@@ -158,6 +160,8 @@ void dtape_task_destroy(dtape_task_t* task) {
 
 	ipc_space_terminate(task->xnu_task.itk_space);
 
+	dtape_sq_task_destroy(task);
+
 	ipc_task_terminate(&task->xnu_task);
 
 	dtape_vm_map_destroy(task->xnu_task.map);
@@ -187,6 +191,11 @@ void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_ui
 		task->xnu_task.audit_token.val[2] = new_gid;
 	}
 	task_unlock(&task->xnu_task);
+
+	if (new_uid != -1 || new_gid != -1) {
+		// messages the task queues itself from now on carry the new token
+		dtape_sq_task_tokens_changed(task);
+	}
 };
 
 void dtape_task_retain(dtape_task_t* task) {

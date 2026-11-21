@@ -66,6 +66,11 @@
 #include <mach/port.h>
 #include <mach/kern_return.h>
 #include <mach/message.h>
+
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#include <darlingserver/mach-sq.h>
+#endif /* __DARLING__ */
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_pset.h>
@@ -235,6 +240,11 @@ ipc_pset_add(
 
 	assert(ips_active(pset));
 	require_ip_active(port);
+
+#ifdef __DARLING__
+	/* a set receives through the port's own queue */
+	dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 
 	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages,
 	    reserved_link, reserved_prepost);
@@ -846,6 +856,11 @@ lookup_again:
 		 */
 		ip_lock(port);
 		imq_lock(mqueue);
+
+#ifdef __DARLING__
+		/* a knote watches the port's own queue */
+		dtape_sq_port_leave_locked(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 
 		kn->kn_mqueue = mqueue;
 		if (port->ip_sync_link_state != PORT_SYNC_LINK_ANY) {

@@ -101,6 +101,11 @@
 
 #if IMPORTANCE_INHERITANCE
 #include <ipc/ipc_importance.h>
+
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#include <darlingserver/mach-sq.h>
+#endif /* __DARLING__ */
 #endif
 
 kern_return_t mach_port_get_attributes(ipc_space_t space, mach_port_name_t name,
@@ -742,6 +747,11 @@ mach_port_allocate_internal(
 				ipc_kmsg_set_prealloc(kmsg, port);
 			}
 			ip_unlock(port);
+#ifdef __DARLING__
+			if (kmsg == IKM_NULL) {
+				dtape_sq_port_created(space, *namep);
+			}
+#endif /* __DARLING__ */
 		} else if (kmsg != IKM_NULL) {
 			ipc_kmsg_free(kmsg);
 		}
@@ -1094,6 +1104,10 @@ mach_port_peek(
 
 	/* Port locked and active */
 
+#ifdef __DARLING__
+	dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
+
 	found = ipc_mqueue_peek(&port->ip_messages, seqnop,
 	    msg_sizep, msg_idp, &max_trailer, NULL);
 	ip_unlock(port);
@@ -1145,6 +1159,11 @@ mach_port_set_mscount(
 	}
 	/* port is locked and active */
 
+#ifdef __DARLING__
+	/* the count the task's own MAKE_SEND sends add goes to the port first */
+	dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
+
 	port->ip_mscount = mscount;
 	ip_unlock(port);
 	return KERN_SUCCESS;
@@ -1186,6 +1205,10 @@ mach_port_set_seqno(
 		return kr;
 	}
 	/* port is locked and active */
+
+#ifdef __DARLING__
+	dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 
 	ipc_mqueue_set_seqno(&port->ip_messages, seqno);
 
@@ -1308,6 +1331,9 @@ mach_port_set_context(
 	}
 
 	port->ip_context = context;
+#ifdef __DARLING__
+	dtape_sq_port_context_changed(port);
+#endif /* __DARLING__ */
 
 	ip_unlock(port);
 	return KERN_SUCCESS;
@@ -1902,6 +1928,10 @@ mach_port_get_status_helper(
 	if (port->ip_no_grant) {
 		statusp->mps_flags |= MACH_PORT_STATUS_FLAG_NO_GRANT;
 	}
+#ifdef __DARLING__
+	/* the messages queued in the task's shared region */
+	dtape_sq_port_status(port, statusp);
+#endif /* __DARLING__ */
 	return;
 }
 
@@ -2144,6 +2174,10 @@ mach_port_set_attributes(
 			assertcnt = port->ip_impcount;
 		}
 
+#ifdef __DARLING__
+		/* importance is carried by the port's own queue */
+		dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 		port->ip_impdonation = 1;
 		port->ip_tempowner = 1;
 		ip_unlock(port);
@@ -2194,6 +2228,9 @@ mach_port_set_attributes(
 		}
 
 		/* port is locked and active */
+#ifdef __DARLING__
+		dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 		port->ip_impdonation = 1;
 		ip_unlock(port);
 
@@ -2390,6 +2427,9 @@ mach_port_guard_locked(
 
 	imq_lock(&port->ip_messages);
 	port->ip_context = guard;
+#ifdef __DARLING__
+	dtape_sq_port_context_changed(port);
+#endif /* __DARLING__ */
 	port->ip_guarded = 1;
 	port->ip_strict_guard = strict;
 	/* ip_immovable_receive bit is sticky and can't be un-guarded */
@@ -2433,6 +2473,9 @@ mach_port_unguard_locked(
 
 	imq_lock(&port->ip_messages);
 	port->ip_context = 0;
+#ifdef __DARLING__
+	dtape_sq_port_context_changed(port);
+#endif /* __DARLING__ */
 	port->ip_guarded = port->ip_strict_guard = 0;
 	/* Don't clear the ip_immovable_receive bit */
 	imq_unlock(&port->ip_messages);
@@ -2686,6 +2729,10 @@ mach_port_construct(
 			goto cleanup;
 		}
 	}
+
+#ifdef __DARLING__
+	dtape_sq_port_created(space, *name);
+#endif /* __DARLING__ */
 
 	return KERN_SUCCESS;
 
@@ -2971,6 +3018,9 @@ mach_port_swap_guard(
 
 	imq_lock(&port->ip_messages);
 	port->ip_context = new_guard;
+#ifdef __DARLING__
+	dtape_sq_port_context_changed(port);
+#endif /* __DARLING__ */
 	imq_unlock(&port->ip_messages);
 
 	ip_unlock(port);
