@@ -35,6 +35,8 @@
 #include <darlingserver/duct-tape.h>
 #include <sys/timerfd.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
@@ -444,6 +446,16 @@ struct DTapeHooks {
 		return static_cast<DarlingServer::Process*>(task_context)->eternalID();
 	};
 
+	static void dtape_hook_sq_futex_wake(void* address, int count) {
+		// the region is a shared memfd mapping, so the wake is a shared (not private) futex operation
+		syscall(SYS_futex, address, FUTEX_WAKE, count, nullptr, nullptr, 0);
+	};
+
+	static void dtape_hook_sq_region_release(void* s_map, size_t s_size, void* q_map, size_t q_size) {
+		munmap(s_map, s_size);
+		munmap(q_map, q_size);
+	};
+
 	static bool dtape_hook_task_port_allowed(void* caller_task_context, void* target_task_context, dtape_task_port_flavor_t flavor) {
 		using namespace DarlingServer::CodeSigning;
 
@@ -551,6 +563,9 @@ struct DTapeHooks {
 		.task_context_dispose = dtape_hook_task_context_dispose,
 		.task_eternal_id = dtape_hook_task_eternal_id,
 		.task_port_allowed = dtape_hook_task_port_allowed,
+
+		.sq_futex_wake = dtape_hook_sq_futex_wake,
+		.sq_region_release = dtape_hook_sq_region_release,
 
 #if DSERVER_EXTENDED_DEBUG
 		.task_register_name = dtape_hook_task_register_name,
