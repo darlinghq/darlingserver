@@ -4479,6 +4479,16 @@ waitq_unlink_cb(struct waitq *waitq, void *ctx,
 		wql_put_link(left);
 		wql_put_link(right);
 
+		if (ret == WQ_ITERATE_UNLINKED) {
+			/*
+			 * The waitq was unlinked from the set. Removing the
+			 * top link of the waitq's links invalidates 'link',
+			 * but that is the successful outcome, not an invalid
+			 * link, and the caller must be told so.
+			 */
+			return ret;
+		}
+
 		if (!wql_is_valid(link)) {
 			return WQ_ITERATE_INVALID;
 		}
