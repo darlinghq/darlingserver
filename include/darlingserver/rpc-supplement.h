@@ -13,6 +13,12 @@ extern "C" {
 // structures do, so that every architecture uses the same layout.
 #define DSERVER_RPC_ALIGN64 __attribute__((aligned(8)))
 
+// A call that fails with -DSERVER_RPC_RESTART had no effect and must be made again, unchanged, once the
+// signal that interrupted it has been handled. The server returns it when a signal for the calling thread
+// interrupts work that the call needs from that thread (a server-to-client call, e.g. to map memory).
+// Like Linux's ERESTARTSYS (the same value), it never reaches the application: the RPC wrapper retries.
+#define DSERVER_RPC_RESTART 512
+
 //
 // kqueue channels
 //
@@ -38,6 +44,11 @@ extern "C" {
  *      by calling the copyout method on the filter. for kqchan-based filters, this means
  *      sending a special message (specialized depending on the channel type) to which the
  *      server replies with the necessary event information.
+ *
+ * Mach port channels can also deliver events inline, without the read round trip
+ * (see dserver_kqchan_msgnum_mach_port_arm): while a thread of the client waits in kevent
+ * for the knote, the server processes the knote (receiving the message, if the filter asks for one)
+ * as soon as the port has a message and sends the result in a dserver_kqchan_msgnum_mach_port_event message.
  */
 
 enum dserver_kqchan_msgnum {
@@ -73,6 +84,30 @@ enum dserver_kqchan_msgnum {
 	 * A request to read the data for the most recent notification on this proc kqueue channel.
 	 */
 	dserver_kqchan_msgnum_proc_read,
+
+	/**
+	 * Enables inline event delivery for this mach port kqueue channel.
+	 *
+	 * The client sends this when it registers the knote. It carries the address of the client's
+	 * dserver_kqchan_mach_port_shared_t for the knote, the default receive buffer, and (in the header)
+	 * the thread whose context the server uses to receive messages for the knote.
+	 *
+	 * This message does NOT have a reply.
+	 */
+	dserver_kqchan_msgnum_mach_port_arm,
+
+	/**
+	 * A server-initiated message for an armed mach port kqueue channel, sent instead of
+	 * dserver_kqchan_msgnum_notification. See dserver_kqchan_mach_port_event_t.
+	 */
+	dserver_kqchan_msgnum_mach_port_event,
+
+	/**
+	 * Stops all delivery on this mach port kqueue channel. The server replies (with the same number)
+	 * once it no longer accesses the client's memory for the channel; the client must not free the
+	 * memory it registered (with dserver_kqchan_msgnum_mach_port_arm) before the reply.
+	 */
+	dserver_kqchan_msgnum_mach_port_detach,
 };
 
 typedef enum dserver_kqchan_msgnum dserver_kqchan_msgnum_t;
@@ -123,6 +158,95 @@ typedef struct dserver_kqchan_reply_mach_port_read {
 		uint64_t ext[4] DSERVER_RPC_ALIGN64;
 	} kev;
 } dserver_kqchan_reply_mach_port_read_t;
+
+/**
+ * State that the client keeps for an armed mach port kqueue channel.
+ *
+ * `armed` is written by the client: it is nonzero while the knote is enabled and a thread waits
+ * in kevent on its kqueue, and it changes every time a wait starts. Before it changes `armed`, the client
+ * names one of its waiting threads in `thread`; the server receives the knote's messages in that thread's
+ * context. `sequence` is written by the server,
+ * which increments it before it processes the knote inline; every dserver_kqchan_mach_port_event_t carries
+ * the value it was sent with.
+ *
+ * The server writes `sequence` and then reads `armed`; the client clears `armed` and then reads `sequence`.
+ * So either the server sees the knote disarmed and does not process it, or the client sees a sequence number
+ * it has not received an event for yet, and collects that event (which is already on its way). A thread that
+ * stops waiting changes `armed` and collects these events before it makes any other server call, so the thread
+ * named in `thread` is idle while the server receives in its context.
+ *
+ * The server processes the knote inline at most once per value of `armed`, because the client may still be
+ * returning the previous event (and its message, in the knote's receive buffer). For a later event during
+ * the same wait, the server sets `wanted` and then reads `armed` again; the client changes or clears `armed`
+ * and then reads `wanted`. If the client sees `wanted`, it clears it and reads the event with
+ * dserver_kqchan_msgnum_mach_port_read; the server sends nothing for the knote until then.
+ */
+typedef struct dserver_kqchan_mach_port_shared {
+	uint32_t armed;
+	uint32_t sequence;
+	uint32_t wanted;
+	uint32_t thread;
+} dserver_kqchan_mach_port_shared_t;
+
+typedef struct dserver_kqchan_call_mach_port_arm {
+	dserver_kqchan_callhdr_t header;
+	uint64_t shared_state DSERVER_RPC_ALIGN64;
+	uint64_t default_buffer DSERVER_RPC_ALIGN64;
+	uint64_t default_buffer_size DSERVER_RPC_ALIGN64;
+} dserver_kqchan_call_mach_port_arm_t;
+
+enum dserver_kqchan_mach_port_event_kind {
+	/**
+	 * The knote was not processed (it was not armed); the client must read the event
+	 * with dserver_kqchan_msgnum_mach_port_read, as for a plain notification.
+	 */
+	dserver_kqchan_mach_port_event_unprocessed = 0,
+
+	/**
+	 * The knote was processed and had an event, which is in `kev`
+	 * (as in dserver_kqchan_reply_mach_port_read_t).
+	 */
+	dserver_kqchan_mach_port_event_processed,
+
+	/**
+	 * The knote was processed but had no event (e.g. another receiver took the message first).
+	 */
+	dserver_kqchan_mach_port_event_none,
+};
+
+/**
+ * Set in a processed event (and as a dserver_kqchan_reply_mach_port_read_t code) of an armed channel when the
+ * port still had messages afterwards. The knote is level-triggered, so the next kevent call that waits for it
+ * must look at the port again: the client reads the next event in that call, and the server sends nothing for
+ * the knote until then.
+ */
+#define DSERVER_KQCHAN_MACH_PORT_MORE 1
+
+typedef struct dserver_kqchan_mach_port_event {
+	dserver_kqchan_replyhdr_t header;
+	uint32_t kind;
+	uint32_t sequence;
+	uint32_t flags;
+	struct {
+		uint64_t ident DSERVER_RPC_ALIGN64;
+		int16_t filter;
+		uint16_t flags;
+		int32_t qos;
+		uint64_t udata DSERVER_RPC_ALIGN64;
+		uint32_t fflags;
+		uint32_t xflags;
+		int64_t data DSERVER_RPC_ALIGN64;
+		uint64_t ext[4] DSERVER_RPC_ALIGN64;
+	} kev;
+} dserver_kqchan_mach_port_event_t;
+
+typedef struct dserver_kqchan_call_mach_port_detach {
+	dserver_kqchan_callhdr_t header;
+} dserver_kqchan_call_mach_port_detach_t;
+
+typedef struct dserver_kqchan_reply_mach_port_detach {
+	dserver_kqchan_replyhdr_t header;
+} dserver_kqchan_reply_mach_port_detach_t;
 
 typedef struct dserver_kqchan_call_proc_modify {
 	dserver_kqchan_callhdr_t header;
@@ -609,6 +733,62 @@ typedef struct dserver_cs_state {
 	char team_id[DSERVER_CS_TEAM_ID_MAX];
 	char identifier[DSERVER_CS_IDENTIFIER_MAX];
 } dserver_cs_state_t;
+
+//
+// IOSurface service
+//
+
+/**
+ * On macOS an IOSurface is a kernel object: its ID, global lookup and the rights to it are kernel
+ * state. Here darlingserver keeps that state for the surfaces IOSurface.framework allocates in
+ * shared memory objects, so that IDs are unique across processes, `IOSurfaceLookup` finds global
+ * surfaces of other processes, and a second descriptor, the surface's GPU buffer (a DMA-BUF in a
+ * layout of the GPU driver's own), reaches every process that shares the surface.
+ *
+ * Possession of a surface's shared memory object is what lets a process hold it: the object
+ * travels in the Mach port that `IOSurfaceCreateMachPort` makes, or comes from `iosurface_lookup`
+ * for a global surface. A process that holds a surface may get its GPU buffer. Holds are counted
+ * per process and dropped when the process exits or execs; the service closes its descriptors
+ * when the last hold goes.
+ *
+ * The service publishes the number of holding processes that may read the surface's memory (that
+ * have not imported its GPU buffer, or have said they use the memory) as a 32-bit value at
+ * `counter_offset` in the first page of the shared memory object, if that is not 0. It only ever
+ * writes that value, and never reads the object.
+ */
+
+// iosurface_retain flags
+#define DSERVER_IOSURFACE_GLOBAL 0x1U
+
+// iosurface_set_usage bits
+#define DSERVER_IOSURFACE_USAGE_IMPORTED_BUFFER 0x1U
+#define DSERVER_IOSURFACE_USAGE_USES_MEMORY 0x2U
+
+// iosurface_get_state flags
+#define DSERVER_IOSURFACE_STATE_GLOBAL 0x1U
+#define DSERVER_IOSURFACE_STATE_HAS_GPU_BUFFER 0x2U
+
+// the counter lies within the first page
+#define DSERVER_IOSURFACE_COUNTER_LIMIT 4096U
+
+#define DSERVER_IOSURFACE_RENDER_NODE_MAX 64
+
+/**
+ * A surface's GPU buffer: one plane at `offset` in the DMA-BUF.
+ */
+typedef struct dserver_iosurface_gpu_buffer {
+	// DRM format modifier (layout)
+	uint64_t modifier DSERVER_RPC_ALIGN64;
+	// DRM fourcc
+	uint32_t fourcc;
+	uint32_t width;
+	uint32_t height;
+	uint32_t offset;
+	uint32_t stride;
+	uint32_t reserved;
+	// the host path of the DRM render node the buffer was allocated on; NUL-terminated
+	char render_node[DSERVER_IOSURFACE_RENDER_NODE_MAX];
+} dserver_iosurface_gpu_buffer_t;
 
 #if __cplusplus
 };

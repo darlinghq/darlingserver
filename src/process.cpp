@@ -25,6 +25,7 @@
 #include <darlingserver/logging.hpp>
 #include <darlingserver/code-signing.hpp>
 #include <darlingserver/system-config.hpp>
+#include <darlingserver/iosurface.hpp>
 #include <kern/cs_blobs.h>
 
 #include <fstream>
@@ -355,6 +356,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// the new image registers its own when its libpthread initializes
 		mainThread->_cancelMarkedAddress = 0;
 
+		// the loader reports the new image's UUID once it has parsed the image
+		_executableUuid = {};
+
 		// destroy the main thread's old S2C semaphores
 		dtape_semaphore_destroy(mainThread->_s2cPerformSempahore);
 		mainThread->_s2cPerformSempahore = nullptr;
@@ -384,6 +388,21 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		mainThread->_s2cInterruptEnterSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 		mainThread->_s2cInterruptExitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
+		// calls in flight or abandoned belonged to the old image; the new image starts with no S2C history
+		{
+			std::unique_lock threadLock(mainThread->_rwlock);
+			mainThread->_s2cReply = std::nullopt;
+			mainThread->_s2cCallInFlight = false;
+			mainThread->_s2cStaleReplyPending = false;
+			mainThread->_s2cStaleReplyUsedInterrupt = false;
+			mainThread->_s2cInterruptAbandoned = 0;
+			mainThread->_s2cInterruptEntered = false;
+			mainThread->_s2cStaleMappingLength = 0;
+			mainThread->_s2cStaleMappingReusable = false;
+			mainThread->_s2cStaleMappings.clear();
+			mainThread->_s2cReusableStaleMappings.clear();
+		}
+
 		// the new image has not been verified yet, and it starts under the policy in effect now;
 		// a denial of attachment and a sandbox survive the exec
 		{
@@ -405,6 +424,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 	lock.unlock();
 
 	if (didExec) {
+		// the image the process held IOSurfaces from is gone
+		IOSurfaceRegistry::sharedInstance().forgetProcess(id());
+
 		// notify listeners that we have exec'd (i.e. been replaced)
 		_notifyListeningKqchannels(NOTE_EXEC, 0);
 	} else if (isFork) {
@@ -413,6 +435,10 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// parent's next fork() returns before that child has checked in and inherited its ports.
 		// notify the parent process (if we have one) that we've arrived
 		if (auto parent = _parentProcess.lock()) {
+			// a forked child runs the parent's image
+			setExecutablePath(parent->executablePath());
+			setExecutableUuid(parent->executableUuid());
+
 			{
 				// the parent may have died (or be dying) before we checked in;
 				// its fork-wait semaphore is gone then and there's no one left to wake up
@@ -628,7 +654,7 @@ void DarlingServer::Process::_closeMapsDescriptor() {
 // Returns false if the lookup found nothing or could not be done at all; the caller then parses the text of
 // `/proc/<pid>/maps`, which also lists the gate area ("[vsyscall]") that PROCMAP_QUERY does not report.
 //
-bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset) const {
+bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset, uint64_t* device, uint64_t* inode) const {
 	if (procmapQueryUnsupported.load(std::memory_order_relaxed)) {
 		return false;
 	}
@@ -656,6 +682,12 @@ bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext
 			protection = procmapProtection(query.vma_flags);
 			shared = (query.vma_flags & PROCMAP_QUERY_VMA_SHARED) != 0;
 			offset = query.vma_offset;
+			if (device) {
+				*device = ((uint64_t)query.dev_major << 32) | query.dev_minor;
+			}
+			if (inode) {
+				*inode = query.inode;
+			}
 			return true;
 		}
 
@@ -680,15 +712,67 @@ bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext
 	return false;
 };
 
+bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const {
+	if (isDead()) {
+		return false;
+	}
+
+	std::ifstream file("/proc/" + std::to_string(_pid) + "/smaps");
+	std::string line;
+	bool inRegion = false;
+	uint64_t privateKiB = 0;
+	uint64_t sharedKiB = 0;
+
+	while (std::getline(file, line)) {
+		uintptr_t start;
+		uintptr_t end;
+		char perms[8];
+		uintptr_t offset;
+
+		// a mapping's header line; the lines that follow it (until the next header) describe it
+		if (parseMapsLine(line, start, end, perms, offset)) {
+			if (inRegion) {
+				break;
+			}
+			inRegion = start == startAddress;
+			continue;
+		}
+
+		if (!inRegion) {
+			continue;
+		}
+
+		char field[32];
+		unsigned long long kib;
+		if (sscanf(line.c_str(), "%31[^:]: %llu kB", field, &kib) != 2) {
+			continue;
+		}
+		if (strcmp(field, "Private_Clean") == 0 || strcmp(field, "Private_Dirty") == 0) {
+			privateKiB += kib;
+		} else if (strcmp(field, "Shared_Clean") == 0 || strcmp(field, "Shared_Dirty") == 0) {
+			sharedKiB += kib;
+		}
+	}
+
+	if (!inRegion) {
+		return false;
+	}
+
+	const uint64_t pageKiB = sysconf(_SC_PAGESIZE) / 1024;
+	privatePages = privateKiB / pageKiB;
+	sharedPages = sharedKiB / pageKiB;
+	return true;
+};
+
 DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInfo(uintptr_t address) const {
 	if (isDead()) {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryRegionInfo");
 	}
 
-	MemoryRegionInfo info;
+	MemoryRegionInfo info = {};
 	uintptr_t endAddress;
 
-	if (_queryRegion(address, false, info.startAddress, endAddress, info.protection, info.shared, info.mapOffset)) {
+	if (_queryRegion(address, false, info.startAddress, endAddress, info.protection, info.shared, info.mapOffset, &info.device, &info.inode)) {
 		info.pageCount = (endAddress - info.startAddress) / sysconf(_SC_PAGESIZE);
 		return info;
 	}
@@ -726,6 +810,15 @@ DarlingServer::Process::MemoryRegionInfo DarlingServer::Process::memoryRegionInf
 		}
 
 		info.shared = strchr(perms, 's') != nullptr;
+
+		// the "major:minor inode" fields that follow the offset
+		unsigned int deviceMajor = 0;
+		unsigned int deviceMinor = 0;
+		unsigned long long inode = 0;
+		if (sscanf(line.c_str(), "%*x-%*x %*s %*x %x:%x %llu", &deviceMajor, &deviceMinor, &inode) == 3) {
+			info.device = ((uint64_t)deviceMajor << 32) | deviceMinor;
+			info.inode = inode;
+		}
 
 		return info;
 	}
@@ -908,6 +1001,16 @@ void DarlingServer::Process::setExecutablePath(std::string path) {
 	_executablePath = std::move(path);
 };
 
+std::array<uint8_t, 16> DarlingServer::Process::executableUuid() const {
+	std::shared_lock lock(_rwlock);
+	return _executableUuid;
+};
+
+void DarlingServer::Process::setExecutableUuid(const std::array<uint8_t, 16>& uuid) {
+	std::unique_lock lock(_rwlock);
+	_executableUuid = uuid;
+};
+
 uintptr_t DarlingServer::Process::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
 	auto thread = _pickS2CThread();
 
@@ -1024,6 +1127,9 @@ void DarlingServer::Process::notifyDead() {
 
 	// keep ourselves alive until the duct-taped context is done
 	_selfReference = shared_from_this();
+
+	// a dead process holds no IOSurfaces
+	IOSurfaceRegistry::sharedInstance().forgetProcess(id());
 
 	// TODO: get exit status
 	_notifyListeningKqchannels(NOTE_EXIT, 0);

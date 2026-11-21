@@ -20,6 +20,7 @@
 #ifndef _DARLINGSERVER_PROCESS_HPP_
 #define _DARLINGSERVER_PROCESS_HPP_
 
+#include <array>
 #include <atomic>
 #include <sys/types.h>
 #include <memory>
@@ -101,6 +102,8 @@ namespace DarlingServer {
 			uint64_t pageCount;
 			int protection;
 			uint64_t mapOffset;
+			uint64_t device;
+			uint64_t inode;
 			bool shared;
 		};
 
@@ -123,7 +126,7 @@ namespace DarlingServer {
 		// so a lookup never issues the ioctl on a descriptor that another thread closed.
 		mutable std::mutex _mapsMutex;
 		mutable int _mapsFd = -1;
-		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset) const;
+		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset, uint64_t* device = nullptr, uint64_t* inode = nullptr) const;
 		void _closeMapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
@@ -134,6 +137,7 @@ namespace DarlingServer {
 		Architecture _architecture;
 		std::weak_ptr<Process> _tracerProcess;
 		std::string _executablePath;
+		std::array<uint8_t, 16> _executableUuid = {};
 		bool _dead = false;
 		std::shared_ptr<Process> _selfReference = nullptr;
 		std::vector<uint32_t> _groups;
@@ -233,6 +237,9 @@ namespace DarlingServer {
 
 		MemoryInfo memoryInfo() const;
 		MemoryRegionInfo memoryRegionInfo(uintptr_t address) const;
+		// counts the resident pages of the mapping that starts at `startAddress`, split into pages only this process
+		// maps and pages shared with other mappings (from `/proc/<pid>/smaps`); false if there is no such mapping
+		bool regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const;
 
 		std::shared_ptr<Process> tracerProcess() const;
 		bool setTracerProcess(std::shared_ptr<Process> tracerProcess);
@@ -284,6 +291,12 @@ namespace DarlingServer {
 
 		std::string executablePath() const;
 		void setExecutablePath(std::string path);
+
+		/**
+		 * The LC_UUID of the main executable (all zeros when it has none).
+		 */
+		std::array<uint8_t, 16> executableUuid() const;
+		void setExecutableUuid(const std::array<uint8_t, 16>& uuid);
 
 		uintptr_t allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite);
 		void freePages(uintptr_t address, size_t pageCount);

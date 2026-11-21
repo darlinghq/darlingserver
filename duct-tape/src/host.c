@@ -255,13 +255,17 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 		};
 
 		case HOST_SCHED_INFO:
-			dtape_stub_unsafe("HOST_SCHED_INFO");
+			dtape_stub_safe("HOST_SCHED_INFO");
+			return KERN_INVALID_ARGUMENT;
 		case HOST_RESOURCE_SIZES:
-			dtape_stub_unsafe("HOST_RESOURCE_SIZES");
+			dtape_stub_safe("HOST_RESOURCE_SIZES");
+			return KERN_INVALID_ARGUMENT;
 		case HOST_CAN_HAS_DEBUGGER:
-			dtape_stub_unsafe("HOST_CAN_HAS_DEBUGGER");
+			dtape_stub_safe("HOST_CAN_HAS_DEBUGGER");
+			return KERN_INVALID_ARGUMENT;
 		case HOST_VM_PURGABLE:
-			dtape_stub_unsafe("HOST_VM_PURGABLE");
+			dtape_stub_safe("HOST_VM_PURGABLE");
+			return KERN_INVALID_ARGUMENT;
 
 		case HOST_MACH_MSG_TRAP:
 		case HOST_SEMAPHORE_TRAPS:
@@ -274,27 +278,33 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 };
 
 kern_return_t host_default_memory_manager(host_priv_t host_priv, memory_object_default_t* default_manager, memory_object_cluster_size_t cluster_size) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_get_boot_info(host_priv_t host_priv, kernel_boot_info_t boot_info) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_get_UNDServer(host_priv_t host_priv, UNDServerRef* serverp) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_set_UNDServer(host_priv_t host_priv, UNDServerRef server) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_lockgroup_info(host_t host, lockgroup_info_array_t* lockgroup_infop, mach_msg_type_number_t* lockgroup_infoCntp) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_reboot(host_priv_t host_priv, int options) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_security_create_task_token(host_security_t host_security, task_t parent_task, security_token_t sec_token, audit_token_t audit_token, host_priv_t host_priv, ledger_port_array_t ledger_ports, mach_msg_type_number_t num_ledger_ports, boolean_t inherit_memory, task_t* child_task) {
@@ -303,11 +313,13 @@ kern_return_t host_security_create_task_token(host_security_t host_security, tas
 };
 
 kern_return_t host_security_set_task_token(host_security_t host_security, task_t task, security_token_t sec_token, audit_token_t audit_token, host_priv_t host_priv) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_virtual_physical_table_info(host_t host, hash_info_bucket_array_t* infop, mach_msg_type_number_t* countp) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 // The page counts of vm_statistics(64) that Linux can tell us, in pages of the size guests see
@@ -353,7 +365,8 @@ kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t inf
 			return KERN_INVALID_ARGUMENT;
 
 		default:
-			dtape_stub_unsafe();
+			dtape_stub_safe();
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 

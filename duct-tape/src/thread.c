@@ -64,8 +64,19 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 
 	thread->context = context;
 	thread->processing_signal = false;
+	thread->kobject_restart_allowed = false;
+	thread->kept_descriptor = NULL;
+	thread->kobject_restart_requested = false;
+	thread->reserved_regions = NULL;
+	thread->reserved_region_count = 0;
+	thread->receive_restart_allowed = false;
+	thread->pending_receive_kmsg = NULL;
+	thread->pending_receive_object = NULL;
+	thread->pending_receive_seqno = 0;
 	thread->name = NULL;
 	thread->waiting_suspended = false;
+	thread->wakeup_pending = false;
+	thread->interrupt_deferred = false;
 	libsimple_lock_init(&thread->block_suspend_gate);
 	LIST_INIT(&thread->user_states);
 	dtape_mutex_init(&thread->suspension_mutex);
@@ -124,6 +135,8 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 	dtape_log_debug("%llu: thread being destroyed", thread->xnu_thread.thread_id);
 
 	dtape_psynch_thread_destroy(thread);
+	dtape_thread_release_kept_descriptor(thread);
+	dtape_thread_abandon_pending_receive(thread);
 
 	// this next section uses code adapted from XNU's thread_deallocate_complete() in osfmk/kern/thread.c
 
@@ -426,7 +439,10 @@ kern_return_t handle_ux_exception(thread_t xthread, int exception, mach_exceptio
 	if (thread->processing_signal) {
 		dtape_hooks->thread_set_pending_signal(thread->context, ux_signal);
 	} else {
-		dtape_stub_unsafe("handle_ux_exception(): TODO: introduce signal into thread");
+		// the exception cannot be turned into a signal for this thread right now; let the exception processing fail
+		// rather than bring the server down
+		dtape_stub_safe("handle_ux_exception(): TODO: introduce signal into thread");
+		return KERN_FAILURE;
 	}
 
 	return KERN_SUCCESS;
@@ -492,11 +508,38 @@ void dtape_thread_release(dtape_thread_t* thread) {
 	thread_deallocate(&thread->xnu_thread);
 };
 
+// thread locked
+//
+// A wait that ends before its timer fires must cancel the timer. Otherwise the timer stays armed, fires later during an
+// unrelated wait of the same thread, and ends that one with THREAD_TIMED_OUT: an untimed receive returns
+// MACH_RCV_TIMED_OUT, and the server's own untimed semaphore waits (e.g. for an S2C reply) don't expect a timeout at all.
+static void dtape_thread_cancel_wait_timer_locked(thread_t xthread) {
+	if (xthread->wait_timer_is_set) {
+		if (timer_call_cancel(&xthread->wait_timer)) {
+			xthread->wait_timer_active--;
+		}
+		xthread->wait_timer_is_set = FALSE;
+	}
+};
+
 void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
-	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
-	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
-	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+	// a wait that has already been ended by a wakeup keeps its result, as XNU's clear_wait() leaves a thread that is
+	// no longer waiting alone. the waker may already have completed the operation for this thread (e.g. handed a
+	// receive its message); reporting the wait as interrupted would lose that (the caller would receive again and
+	// wait for a reply that has already been taken off the queue).
+	// the call still has to return for the signal to be handled, so interrupt the next wait it starts instead
+	// (as before, one wait is interrupted per signal).
+	if (thread->wakeup_pending) {
+		thread->interrupt_deferred = true;
+	} else {
+		// with TH_WAIT cleared, clear_wait_internal() only takes the thread off its wait queue (thread_unblock() isn't
+		// called), so cancel the timer of a timed wait here
+		dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
+		thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
+		thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
+		clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+	}
 	thread_unlock(&thread->xnu_thread);
 };
 
@@ -509,6 +552,8 @@ void dtape_thread_sigexc_enter2(dtape_thread_t* thread) {
 	memset(new_user_state, 0, sizeof(*new_user_state));
 
 	thread_lock(&thread->xnu_thread);
+	// the interrupted call is done; waits in the signal handler's own calls are not interrupted
+	thread->interrupt_deferred = false;
 	LIST_INSERT_HEAD(&thread->user_states, new_user_state, link);
 	thread_unlock(&thread->xnu_thread);
 };
@@ -526,6 +571,8 @@ void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 
 void dtape_thread_dying(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
+	// see dtape_thread_sigexc_enter()
+	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
 	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
 	thread->xnu_thread.state |= TH_TERMINATE;
 	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
@@ -568,6 +615,16 @@ static void thread_continuation_callback(void* context) {
 	thread->xnu_thread.parameter = NULL;
 
 	wait_result = thread->xnu_thread.wait_result;
+
+	if (wait_result == THREAD_WAITING) {
+		// resumed although nobody ended the wait (see thread_block_parameter()); keep waiting
+		thread->xnu_thread.state |= TH_WAIT;
+		thread_unlock(&thread->xnu_thread);
+		thread_block_parameter(continuation, parameter);
+		__builtin_unreachable();
+	}
+
+	thread->wakeup_pending = false;
 	thread_unlock(&thread->xnu_thread);
 
 	continuation(parameter, wait_result);
@@ -577,7 +634,9 @@ static void thread_continuation_callback(void* context) {
 
 wait_result_t thread_block_parameter(thread_continue_t continuation, void* parameter) {
 	dtape_thread_t* thread = dtape_hooks->current_thread();
+	wait_result_t wait_result;
 
+again:
 	thread_lock(&thread->xnu_thread);
 
 	thread->xnu_thread.continuation = continuation;
@@ -600,7 +659,18 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 	}
 
 	thread_lock(&thread->xnu_thread);
-	wait_result_t wait_result = thread->xnu_thread.wait_result;
+	wait_result = thread->xnu_thread.wait_result;
+
+	if (waiting && wait_result == THREAD_WAITING) {
+		// we were resumed although nobody ended the wait: a wakeup (thread_unblock() resumes the microthread) can be
+		// left over from an earlier wait that a signal interrupted, and it resumes whatever wait the thread is in
+		// when it runs. we're still on the wait queue, so just keep waiting (the next run clears TH_WAIT again).
+		thread->xnu_thread.state |= TH_WAIT;
+		thread_unlock(&thread->xnu_thread);
+		goto again;
+	}
+
+	thread->wakeup_pending = false;
 	thread_unlock(&thread->xnu_thread);
 
 	if (continuation) {
@@ -624,19 +694,10 @@ boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
 	libsimple_lock_lock(&thread->block_suspend_gate);
 
 	thread->xnu_thread.wait_result = wresult;
+	thread->wakeup_pending = true;
 
 	// Cancel any pending wait timer, like XNU's thread_unblock() does.
-	//
-	// Without this, a timed wait that completes normally leaves the wait timer
-	// armed; it fires later, during an unrelated untimed wait, and delivers a
-	// spurious THREAD_TIMED_OUT (which surfaces as MACH_RCV_TIMED_OUT from a
-	// receive issued with MACH_MSG_TIMEOUT_NONE).
-	if (thread->xnu_thread.wait_timer_is_set) {
-		if (timer_call_cancel(&thread->xnu_thread.wait_timer)) {
-			thread->xnu_thread.wait_timer_active--;
-		}
-		thread->xnu_thread.wait_timer_is_set = FALSE;
-	}
+	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
 
 	// like XNU, the thread is no longer waiting. this matters when the wakeup
 	// comes before the thread reaches thread_block(): it must not suspend then.
@@ -658,6 +719,17 @@ wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interrup
 	// the abort handling is adapted from XNU's thread_mark_wait_locked() in osfmk/kern/sched_prim.c
 	wait_interrupt_t interruptible = interruptible_orig & TH_OPT_INTMASK;
 	boolean_t at_safe_point = (interruptible == THREAD_ABORTSAFE);
+
+	// a new wait begins; any earlier wakeup has been consumed
+	dtape_thread_t* dthread = dtape_thread_for_xnu_thread(thread);
+	dthread->wakeup_pending = false;
+
+	// a call that a signal arrived for after it had been woken up (see dtape_thread_sigexc_enter()) must not block again
+	if (dthread->interrupt_deferred && interruptible != THREAD_UNINT) {
+		dthread->interrupt_deferred = false;
+		thread->pending_block_hint = kThreadWaitNone;
+		return thread->wait_result = THREAD_INTERRUPTED;
+	}
 
 	if (interruptible == THREAD_UNINT ||
 	    !(thread->sched_flags & TH_SFLAG_ABORT) ||
@@ -1175,92 +1247,27 @@ thread_get_state_internal(
 				if (dtask->architecture == dserver_rpc_architecture_x86_64)
 					return KERN_INVALID_ARGUMENT;
 
+				// Hardware debug registers cannot be set (thread_set_state for this flavor is not supported),
+				// so none is ever armed: report them as cleared.
 				x86_debug_state32_t* s = (x86_debug_state32_t*) state;
 				*state_count = x86_DEBUG_STATE32_COUNT;
-
-				// Call self and translate from 64-bit
-				x86_debug_state64_t s64;
-				mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
-
-				kern_return_t kr = thread_get_state_internal(thread, x86_DEBUG_STATE64,
-						(thread_state_t) &s64, &count, FALSE);
-
-				if (kr != KERN_SUCCESS)
-					return kr;
-
-				s->dr0 = s64.dr0;
-				s->dr1 = s64.dr1;
-				s->dr2 = s64.dr2;
-				s->dr3 = s64.dr3;
-				s->dr4 = s64.dr4;
-				s->dr5 = s64.dr5;
-				s->dr6 = s64.dr6;
-				s->dr7 = s64.dr7;
+				memset(s, 0, sizeof(*s));
 
 				return KERN_SUCCESS;
 			}
 			case x86_DEBUG_STATE64:
 			{
-#if 0
 				if (*state_count < x86_DEBUG_STATE64_COUNT)
 					return KERN_INVALID_ARGUMENT;
 				if (dtask->architecture != dserver_rpc_architecture_x86_64)
 					return KERN_INVALID_ARGUMENT;
 
+				// see x86_DEBUG_STATE32
 				x86_debug_state64_t* s = (x86_debug_state64_t*) state;
 				*state_count = x86_DEBUG_STATE64_COUNT;
-
 				memset(s, 0, sizeof(*s));
 
-				struct thread_struct *lthread = &ltask->thread;
-				int i;
-
-				for (i = 0; i < 4; i++)
-				{
-					if (lthread->ptrace_bps[i] != NULL)
-					{
-						const struct perf_event_attr* attr = &lthread->ptrace_bps[i]->attr;
-
-						if (!attr->disabled && attr->bp_type != HW_BREAKPOINT_EMPTY)
-							s->dr7 |= 1 << (2*i); // set local enable flag
-
-						switch (attr->bp_type)
-						{
-							case HW_BREAKPOINT_W:
-								s->dr7 |= 1 << (16 + i*4);
-								break;
-							case HW_BREAKPOINT_RW:
-							case HW_BREAKPOINT_R:
-								s->dr7 |= 3 << (16 + i*4);
-								break;
-							case HW_BREAKPOINT_X:
-								break;
-						}
-
-						switch (attr->bp_len)
-						{
-							case HW_BREAKPOINT_LEN_1:
-								break;
-							case HW_BREAKPOINT_LEN_2:
-								s->dr7 |= 1 << (18 + i*4);
-								break;
-							case HW_BREAKPOINT_LEN_4:
-								s->dr7 |= 3 << (18 + i*4);
-								break;
-							case HW_BREAKPOINT_LEN_8:
-								s->dr7 |= 2 << (18 + i*4);
-								break;
-						}
-
-						(&s->dr0)[i] = attr->bp_addr;
-					}
-				}
-
 				return KERN_SUCCESS;
-#else
-				// TODO
-				return KERN_NOT_SUPPORTED;
-#endif
 			}
 			default:
 				return KERN_INVALID_ARGUMENT;
@@ -1389,15 +1396,18 @@ void thread_poll_yield(thread_t self) {
 };
 
 kern_return_t act_get_state_to_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t act_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_abort(thread_t thread) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_abort_safely(thread_t thread) {
@@ -1435,15 +1445,18 @@ void dtape_thread_returning_to_user(dtape_thread_t* thread) {
 };
 
 kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_create_from_user(task_t task, thread_t* new_thread) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_create_running_from_user(task_t task, int flavor, thread_state_t new_state, mach_msg_type_number_t new_state_count, thread_t* new_thread) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_depress_abort_from_user(thread_t thread) {
@@ -1508,6 +1521,11 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			}
 			dtape_mutex_unlock(&thread->suspension_mutex);
 
+			if (thread_state == -1 && xthread == current_thread()) {
+				// the calling thread is running, even though Linux sees it blocked in its call to the server
+				thread_state = dtape_thread_state_running;
+			}
+
 			if (thread_state == -1) {
 				thread_state = dtape_hooks->thread_get_state(thread->context);
 			}
@@ -1532,6 +1550,47 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 					panic("invalid thread state: %d; this should be impossible", thread_state);
 			}
 
+			return KERN_SUCCESS;
+		};
+
+		case THREAD_EXTENDED_INFO: {
+			if (*thread_info_count < THREAD_EXTENDED_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			thread_extended_info_t info = (thread_extended_info_t)thread_info_out;
+			uint64_t user_ns = 0;
+			uint64_t system_ns = 0;
+
+			memset(info, 0, sizeof(*info));
+
+			// the name and CPU times of the thread come from Linux; the thread's state is derived the same way as for THREAD_BASIC_INFO
+			if (!dtape_hooks->thread_get_stats(thread->context, info->pth_name, sizeof(info->pth_name), &user_ns, &system_ns)) {
+				// the thread has already exited
+				return KERN_TERMINATED;
+			}
+
+			thread_basic_info_data_t basic;
+			mach_msg_type_number_t basic_count = THREAD_BASIC_INFO_COUNT;
+			kern_return_t kr = thread_info(xthread, THREAD_BASIC_INFO, (thread_info_t)&basic, &basic_count);
+			if (kr != KERN_SUCCESS) {
+				return kr;
+			}
+
+			info->pth_user_time = user_ns;
+			info->pth_system_time = system_ns;
+			info->pth_cpu_usage = 0;
+			info->pth_policy = POLICY_TIMESHARE;
+			info->pth_run_state = basic.run_state;
+			info->pth_flags = 0;
+			info->pth_sleep_time = 0;
+
+			// Darling keeps no per-thread scheduling state, so every thread reports the priorities of a default timeshare thread
+			info->pth_curpri = BASEPRI_DEFAULT;
+			info->pth_priority = BASEPRI_DEFAULT;
+			info->pth_maxpriority = MAXPRI_USER;
+
+			*thread_info_count = THREAD_EXTENDED_INFO_COUNT;
 			return KERN_SUCCESS;
 		};
 
@@ -1654,15 +1713,18 @@ kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, 
 };
 
 kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t policy, policy_base_t base, mach_msg_type_number_t base_count, policy_limit_t limit, mach_msg_type_number_t limit_count) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wired) {
-	dtape_stub_unsafe();
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t thread_getstatus_to_user(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t* count) {

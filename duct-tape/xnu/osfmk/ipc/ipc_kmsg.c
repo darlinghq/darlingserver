@@ -141,6 +141,11 @@
 
 #include <libkern/crypto/sha2.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/memory.h>
+#endif /* __DARLING__ */
+
 #include <ptrauth.h>
 #if __has_feature(ptrauth_calls)
 #include <libkern/ptrauth_utils.h>
@@ -2287,6 +2292,13 @@ retry:
 		 */
 		kmsg = ipc_kobject_server(kmsg, option);
 		if (kmsg == IKM_NULL) {
+#ifdef __DARLING__
+			dtape_thread_t *dthread = dtape_thread_for_xnu_thread(th);
+			if (dthread && dthread->kobject_restart_requested) {
+				/* the request was handed back unsent (see ipc_kobject_server()); the caller still has it */
+				return MACH_SEND_INTERRUPTED;
+			}
+#endif /* __DARLING__ */
 			return MACH_MSG_SUCCESS;
 		}
 
@@ -5236,10 +5248,16 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
 				tag = VM_MEMORY_MACH_MSG;
 			}
 
-			kern_return_t kr;
-			if ((kr = mach_vm_allocate_kernel(map, &rcv_addr,
+			kern_return_t kr = KERN_SUCCESS;
+#ifdef __DARLING__
+			/* a message being received may have had its region mapped already (see dtape_kmsg_reserve_out_of_line()) */
+			rcv_addr = dtape_thread_take_reserved_region(dsc->address);
+			if (rcv_addr == 0)
+#endif /* __DARLING__ */
+			kr = mach_vm_allocate_kernel(map, &rcv_addr,
 			    (mach_vm_size_t)names_length,
-			    VM_FLAGS_ANYWHERE, tag)) != KERN_SUCCESS) {
+			    VM_FLAGS_ANYWHERE, tag);
+			if (kr != KERN_SUCCESS) {
 				ipc_kmsg_clean_body(kmsg, 1, (mach_msg_descriptor_t *)dsc);
 				rcv_addr = 0;
 
@@ -5495,6 +5513,64 @@ ipc_kmsg_copyout_body(
 
 	return mr;
 }
+
+#ifdef __DARLING__
+/*
+ *	Routine:	dtape_kmsg_reserve_out_of_line
+ *	Purpose:
+ *		Maps the regions that copying out the out-of-line memory and
+ *		out-of-line port arrays of a received message needs in the
+ *		receiver's map, before ipc_kmsg_copyout() changes anything.
+ *		Mapping memory in a task takes a server-to-client call that a
+ *		signal can interrupt; a failure here leaves the message intact,
+ *		so it can still be received. The copyout takes the regions
+ *		(dtape_thread_take_reserved_region()) instead of mapping its own.
+ *	Conditions:
+ *		Nothing locked. The current thread is the receiver.
+ */
+kern_return_t
+dtape_kmsg_reserve_out_of_line(
+	ipc_kmsg_t              kmsg,
+	vm_map_t                map)
+{
+	mach_msg_body_t *body;
+	mach_msg_descriptor_t *kern_dsc;
+	mach_msg_type_number_t dsc_count, i;
+	kern_return_t kr = KERN_SUCCESS;
+
+	if (!(kmsg->ikm_header->msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
+		return KERN_SUCCESS;
+	}
+
+	body = (mach_msg_body_t *) (kmsg->ikm_header + 1);
+	dsc_count = body->msgh_descriptor_count;
+	kern_dsc = (mach_msg_descriptor_t *) (body + 1);
+
+	for (i = 0; i < dsc_count && kr == KERN_SUCCESS; i++) {
+		switch (kern_dsc[i].type.type) {
+		case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
+		case MACH_MSG_OOL_DESCRIPTOR: {
+			vm_map_copy_t copy = (vm_map_copy_t)((mach_msg_ool_descriptor_t *)&kern_dsc[i])->address;
+			if (copy != VM_MAP_COPY_NULL && copy->size != 0) {
+				kr = dtape_thread_reserve_region(map, copy, (vm_size_t)copy->size);
+			}
+			break;
+		}
+		case MACH_MSG_OOL_PORTS_DESCRIPTOR: {
+			mach_msg_ool_ports_descriptor_t *dsc = (mach_msg_ool_ports_descriptor_t *)&kern_dsc[i];
+			if (dsc->count != 0 && dsc->address != NULL) {
+				kr = dtape_thread_reserve_region(map, dsc->address, dsc->count * sizeof(mach_port_name_t));
+			}
+			break;
+		}
+		default:
+			break;
+		}
+	}
+
+	return kr;
+}
+#endif /* __DARLING__ */
 
 /*
  *	Routine:	ipc_kmsg_copyout_size

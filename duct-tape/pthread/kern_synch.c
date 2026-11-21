@@ -1162,8 +1162,19 @@ _psynch_cvwait(__unused proc_t p, user_addr_t cv, uint64_t cvlsgen,
 	 * user level as well.
 	 */
 	if (is_seqhigher_eq(csgen, lockseq) != 0) {
-		__FAILEDUSERTEST__("psync_cvwait; invalid sequence numbers\n");
-		return EINVAL;
+		/* The signal can consume this wait before it reaches the kernel.
+		 * Release the mutex as the normal wait path does, then let the
+		 * caller observe a completed (possibly spurious) wakeup. */
+		if (mutex != 0) {
+			uint32_t mutexrv = 0;
+			error = _psynch_mutexdrop(NULL, mutex, mgen, ugen, 0, flags,
+					&mutexrv);
+			if (error != 0) {
+				return error;
+			}
+		}
+		*retval = 0;
+		return 0;
 	}
 
 	PTHREAD_TRACE(psynch_cvar_kwait | DBG_FUNC_START, cv, mutex, cgen, 0);

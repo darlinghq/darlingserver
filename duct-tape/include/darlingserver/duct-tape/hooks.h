@@ -41,6 +41,7 @@ typedef void (*dtape_hook_thread_set_pending_call_override_f)(void* thread_conte
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_f)(int id, bool id_is_nsid, bool retain);
 typedef dtape_thread_t* (*dtape_hook_thread_lookup_eternal_f)(dtape_eternal_id_t eid, bool retain);
 typedef dtape_thread_state_t (*dtape_hook_thread_get_state_f)(void* thread_context);
+typedef bool (*dtape_hook_thread_get_stats_f)(void* thread_context, char* name, size_t name_size, uint64_t* user_time_ns, uint64_t* system_time_ns);
 typedef int (*dtape_hook_thread_send_signal_f)(void* thread_context, int signal);
 typedef void (*dtape_hook_thread_context_dispose_f)(void* thread_context);
 typedef dtape_eternal_id_t (*dtape_hook_thread_eternal_id_f)(void* thread_context);
@@ -49,6 +50,12 @@ typedef void (*dtape_hook_current_thread_interrupt_disable_f)(void);
 typedef void (*dtape_hook_current_thread_interrupt_enable_f)(void);
 typedef void (*dtape_hook_current_thread_syscall_return_f)(int return_code);
 typedef void (*dtape_hook_current_thread_set_bsd_retval_f)(uint32_t retval);
+// returns whether a wait of the current thread for a server-to-client call was interrupted since the last time this was asked
+// (a signal is being delivered to the thread, or it is being suspended or killed), and clears that state
+typedef bool (*dtape_hook_current_thread_take_s2c_interrupted_f)(void);
+// returns fresh read-write anonymous memory of `length` bytes that an interrupted server-to-client mmap of the current thread
+// mapped in its task after the wait for it was abandoned (and forgets it), or 0 if there is none
+typedef uintptr_t (*dtape_hook_current_thread_take_stale_mapping_f)(size_t length);
 
 typedef bool (*dtape_hook_task_read_memory_f)(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length);
 typedef bool (*dtape_hook_task_write_memory_f)(void* task_context, uintptr_t remote_address, const void* local_buffer, size_t length);
@@ -59,7 +66,10 @@ typedef bool (*dtape_hook_task_get_memory_region_info_f)(void* task_context, uin
 typedef uintptr_t (*dtape_hook_task_allocate_pages_f)(void* task_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
 typedef int (*dtape_hook_task_free_pages_f)(void* task_context, uintptr_t address, size_t page_count);
 typedef uintptr_t (*dtape_hook_task_map_file_f)(void* task_context, int fd, size_t page_count, int protection, uintptr_t address_hint, size_t page_offset, dtape_memory_flags_t flags);
+typedef bool (*dtape_hook_fd_identity_f)(int fd, uint64_t* device, uint64_t* inode);
 typedef uintptr_t (*dtape_hook_task_get_next_region_f)(void* task_context, uintptr_t address);
+// counts the resident pages of the region that starts at `start_address`: pages only this task maps, and pages shared with other mappings
+typedef bool (*dtape_hook_task_get_region_residency_f)(void* task_context, uintptr_t start_address, uint64_t* private_pages, uint64_t* shared_pages);
 typedef bool (*dtape_hook_task_change_protection_f)(void* task_context, uintptr_t address, size_t page_count, int protection);
 typedef bool (*dtape_hook_task_sync_memory_f)(void* task_context, uintptr_t address, size_t size, int sync_flags);
 typedef void (*dtape_hook_task_context_dispose_f)(void* task_context);
@@ -106,6 +116,7 @@ typedef struct dtape_hooks {
 	dtape_hook_thread_lookup_f thread_lookup;
 	dtape_hook_thread_lookup_eternal_f thread_lookup_eternal;
 	dtape_hook_thread_get_state_f thread_get_state;
+	dtape_hook_thread_get_stats_f thread_get_stats;
 	dtape_hook_thread_send_signal_f thread_send_signal;
 	dtape_hook_thread_context_dispose_f thread_context_dispose;
 	dtape_hook_thread_eternal_id_f thread_eternal_id;
@@ -114,6 +125,8 @@ typedef struct dtape_hooks {
 	dtape_hook_current_thread_interrupt_enable_f current_thread_interrupt_enable;
 	dtape_hook_current_thread_syscall_return_f current_thread_syscall_return;
 	dtape_hook_current_thread_set_bsd_retval_f current_thread_set_bsd_retval;
+	dtape_hook_current_thread_take_s2c_interrupted_f current_thread_take_s2c_interrupted;
+	dtape_hook_current_thread_take_stale_mapping_f current_thread_take_stale_mapping;
 
 	dtape_hook_task_read_memory_f task_read_memory;
 	dtape_hook_task_write_memory_f task_write_memory;
@@ -124,7 +137,9 @@ typedef struct dtape_hooks {
 	dtape_hook_task_allocate_pages_f task_allocate_pages;
 	dtape_hook_task_free_pages_f task_free_pages;
 	dtape_hook_task_map_file_f task_map_file;
+	dtape_hook_fd_identity_f fd_identity;
 	dtape_hook_task_get_next_region_f task_get_next_region;
+	dtape_hook_task_get_region_residency_f task_get_region_residency;
 	dtape_hook_task_change_protection_f task_change_protection;
 	dtape_hook_task_sync_memory_f task_sync_memory;
 	dtape_hook_task_context_dispose_f task_context_dispose;

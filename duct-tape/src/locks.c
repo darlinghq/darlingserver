@@ -115,6 +115,12 @@ bool dtape_mutex_try_lock(dtape_mutex_t* mutex) {
 
 	dtape_mutex_assert(mutex, false);
 
+	// the owner may only be examined with the queue lock held: a holder without an active thread
+	// (see lck_mtx_lock()) owns the mutex by holding the queue lock, while the owner field stays 0
+	if (!libsimple_lock_try_lock(&mutex->dtape_queue_lock)) {
+		return FALSE;
+	}
+
 	if (mutex->dtape_owner == 0 || mutex->dtape_owner == (uintptr_t)xthread) {
 		// lock successfully acquired
 		mutex->dtape_owner = (uintptr_t)xthread;
@@ -124,6 +130,7 @@ bool dtape_mutex_try_lock(dtape_mutex_t* mutex) {
 	}
 
 	// lock not acquired
+	libsimple_lock_unlock(&mutex->dtape_queue_lock);
 	return FALSE;
 };
 

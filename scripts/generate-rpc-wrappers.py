@@ -822,6 +822,90 @@ calls = [
 		('count', 'int32_t'),
 		('activity_id', 'uint64_t*', 'uint64_t'),
 	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX),
+
+	# the LC_UUID of the main executable the process was started from (16 bytes, as
+	# `proc_pidinfo(PROC_PIDUNIQIDENTIFIERINFO)` reports it in `p_uuid`). `set` is called by the
+	# loader about the image it loads; `get` reads another process's value (ESRCH when no
+	# such process; all zeros when the image has no LC_UUID).
+	('set_executable_uuid', [
+		('uuid', 'const void*', 'uint64_t'),
+	], []),
+
+	('get_executable_uuid', [
+		('pid', 'int32_t'),
+		('uuid', 'void*', 'uint64_t'),
+	], []),
+
+	#
+	# IOSurface service
+	#
+	# The surfaces IOSurface.framework shares between processes (see "IOSurface service" in
+	# rpc-supplement.h). A surface is named by the ID `iosurface_retain` returns.
+	#
+
+	# holds the surface whose shared memory object is `memory` for the calling process (once more
+	# if it already does) and returns its ID. a surface the service does not know yet gets
+	# `id_hint` if that is not 0 and not in use, or a new ID. `flags` (DSERVER_IOSURFACE_GLOBAL) and
+	# `counter_offset` apply to a new surface only; see rpc-supplement.h for the counter.
+	('iosurface_retain', [
+		('memory', '@fd'),
+		('id_hint', 'uint32_t'),
+		('flags', 'uint32_t'),
+		('counter_offset', 'uint32_t'),
+	], [
+		('surface_id', 'uint32_t'),
+	]),
+
+	# drops one hold of the calling process
+	('iosurface_release', [
+		('surface_id', 'uint32_t'),
+	], []),
+
+	# the shared memory object of a global surface, or of one the caller holds (ENOENT otherwise);
+	# the caller holds it only once it retains it through the descriptor
+	('iosurface_lookup', [
+		('surface_id', 'uint32_t'),
+	], [
+		('memory', '@fd'),
+	]),
+
+	# offers `buffer`, described by the `dserver_iosurface_gpu_buffer_t` at `info`, as the
+	# surface's GPU buffer. the first buffer offered is kept; the kept one is returned (as
+	# `published`, with its description written to `info`) and the caller counts as importing it.
+	('iosurface_publish_gpu_buffer', [
+		('surface_id', 'uint32_t'),
+		('buffer', '@fd'),
+		('info', 'void*', 'uint64_t'),
+		('info_size', 'uint64_t'),
+	], [
+		('published', '@fd'),
+	]),
+
+	# the surface's GPU buffer and its description (written to `info`); ENOENT if it has none
+	('iosurface_copy_gpu_buffer', [
+		('surface_id', 'uint32_t'),
+		('info', 'void*', 'uint64_t'),
+		('info_size', 'uint64_t'),
+	], [
+		('buffer', '@fd'),
+	]),
+
+	# records how the calling process uses the surface (DSERVER_IOSURFACE_USAGE_* bits, added to
+	# those recorded before)
+	('iosurface_set_usage', [
+		('surface_id', 'uint32_t'),
+		('usage', 'uint32_t'),
+	], []),
+
+	# the number of processes holding the surface, how many of them may read its memory, and
+	# DSERVER_IOSURFACE_STATE_* flags; ENOENT once no process holds it
+	('iosurface_get_state', [
+		('surface_id', 'uint32_t'),
+	], [
+		('holders', 'uint32_t'),
+		('memory_users', 'uint32_t'),
+		('flags', 'uint32_t'),
+	]),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

@@ -158,6 +158,35 @@
 
 #include <security/mac_mach_internal.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/duct-tape/hooks.internal.h>
+
+/*
+ * Whether the request can be handed back to the sender unchanged (see ipc_kmsg_copyout_pseudo()):
+ * only rights, no out-of-line memory, whose copyout would need new memory in the sender.
+ */
+static boolean_t
+dtape_kobject_request_restartable(ipc_kmsg_t request)
+{
+	mach_msg_body_t *body;
+	mach_msg_descriptor_t *dsc;
+
+	if (!(request->ikm_header->msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
+		return TRUE;
+	}
+
+	body = (mach_msg_body_t *)(request->ikm_header + 1);
+	dsc = (mach_msg_descriptor_t *)(body + 1);
+	for (mach_msg_size_t i = 0; i < body->msgh_descriptor_count; ++i) {
+		if (dsc[i].type.type != MACH_MSG_PORT_DESCRIPTOR) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+#endif /* __DARLING__ */
+
 extern char *proc_name_address(void *p);
 struct proc;
 extern int proc_pid(struct proc *p);
@@ -372,6 +401,17 @@ ipc_kobject_server(
 	int request_msgh_id = request->ikm_header->msgh_id;
 	natural_t ikot;
 	ipc_port_t port;
+#ifdef __DARLING__
+	dtape_thread_t *dthread = dtape_thread_for_xnu_thread(current_thread());
+	boolean_t restart_allowed = dthread && dthread->kobject_restart_allowed;
+
+	/* only the request the trap sends may be handed back, not messages the kernel sends while performing it */
+	if (restart_allowed) {
+		dthread->kobject_restart_allowed = false;
+		/* forget interruptions from before this request */
+		(void)dtape_hooks->current_thread_take_s2c_interrupted();
+	}
+#endif /* __DARLING__ */
 
 	reply = NULL;
 	port = request->ikm_header->msgh_remote_port;
@@ -510,6 +550,22 @@ skip_kobjcall:
 	} else {
 		kr = KERN_SUCCESS;
 	}
+
+#ifdef __DARLING__
+	/*
+	 * The routine failed, and a server-to-client call it needed (e.g. to map memory in the sender) was interrupted:
+	 * a signal is being delivered to the sending thread. XNU never fails such a call because of a signal,
+	 * so don't reply; hand the request back (it is intact when a routine fails) to be sent again once
+	 * the signal has been handled. The reply port right is still in the request.
+	 */
+	if (restart_allowed && ptr && kr != KERN_SUCCESS && kr != MIG_NO_REPLY &&
+	    dtape_hooks->current_thread_take_s2c_interrupted() && dtape_kobject_request_restartable(request)) {
+		reply->ikm_header->msgh_remote_port = IP_NULL;
+		ipc_kmsg_free(reply);
+		dthread->kobject_restart_requested = true;
+		return IKM_NULL;
+	}
+#endif /* __DARLING__ */
 
 msgdone:
 	/*

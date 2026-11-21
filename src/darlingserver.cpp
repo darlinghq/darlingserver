@@ -186,6 +186,22 @@ void setupUserHome(const char* prefix, uid_t originalUID)
 		unlink(buf);
 		symlink(buf2, buf);
 	}
+
+	// Give the home what a new macOS account gets: what it lacks of the user template. This is where
+	// Library/Preferences comes from, which applications write into without checking it exists.
+	snprintf(buf, sizeof(buf), "%s/Users/%s", prefix, login);
+	int homeFd = open(buf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	std::string templatePath = DarlingServer::Config::libexecPath() + "/System/Library/User Template";
+	int templateFd = open(templatePath.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (homeFd >= 0 && templateFd >= 0) {
+		DarlingServer::PrefixSetup::fillTree(templateFd, homeFd);
+	}
+	if (homeFd >= 0) {
+		close(homeFd);
+	}
+	if (templateFd >= 0) {
+		close(templateFd);
+	}
 }
 
 void setupCoredumpPattern(void)
@@ -219,6 +235,17 @@ static void wipeDir(const char* dirpath)
 		{
 			wipeDir(path);
 			rmdir(path);
+		}
+		else if (ent->d_type == DT_SOCK)
+		{
+			/* Leave sockets alone. wipeDir runs on every container start, and
+			 * /var/run is where out-of-container services put their
+			 * listeners - a host service binding a socket under the prefix has
+			 * it deleted out from under it at every boot, so a guest can never
+			 * connect to it. Nothing here owns a socket: the container's own
+			 * state in this directory is files and directories, and the one
+			 * socket the container itself needs (shellspawn.sock) is created
+			 * after this runs. */
 		}
 		else
 			unlink(path);

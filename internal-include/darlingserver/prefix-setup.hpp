@@ -77,6 +77,13 @@ namespace DarlingServer::PrefixSetup {
 	// instead of the lower owner, are dropped.
 	bool copyTree(int lowerFd, int upperFd, bool giveLowerOwners = true);
 
+	// Gives the tree at upperFd what it lacks of the tree below lowerFd (what a new account gets from the
+	// user template). Anything already there, a link included, is left alone and never followed or
+	// replaced, and only the missing entries are created, with the lower modes and times; the copy
+	// belongs to whoever makes it, as in copyTree without owners. Same descriptor-relative safety as
+	// copyTree. Returns false, after a message, on an error.
+	bool fillTree(int lowerFd, int upperFd);
+
 	// Looks up one of the user's directories (name is "DOWNLOAD", "MUSIC" and so on) in the contents
 	// of an xdg-user-dirs configuration file, user-dirs.dirs. Its lines have the form
 	// XDG_<NAME>_DIR="$HOME/<path>" or XDG_<NAME>_DIR="/<path>", with backslash escapes inside the

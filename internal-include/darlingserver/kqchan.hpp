@@ -76,10 +76,26 @@ namespace DarlingServer {
 		uint64_t _savedFilterFlags;
 		dtape_kqchan_mach_port_t* _dtapeKqchan = nullptr;
 
+		// inline delivery state (see dserver_kqchan_msgnum_mach_port_arm); guarded by _notificationMutex
+		bool _armed = false; // the client has sent an arm message
+		bool _awaitingRead = false; // no further events until the client reads the next one
+		uint32_t _lastArming = 0; // the client's `armed` value when we last processed the knote inline
+		bool _detached = false;
+		bool _detachReplyPending = false;
+		uint32_t _memoryOperations = 0; // microthreads that may access the client's memory for this channel
+		uint64_t _sharedState = 0;
+		uint64_t _defaultBuffer = 0;
+		uint64_t _defaultBufferSize = 0;
+		uint32_t _sequence = 0;
+
 		void _modify(uint64_t receiveBuffer, uint64_t receiveBufferSize, uint64_t savedFilterFlags, pid_t nstid);
 		void _read(uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid);
+		void _arm(uint64_t sharedState, uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid);
+		void _detach();
 
 		void _notify();
+		void _processInline();
+		void _finishMemoryOperation(bool reopen, bool awaitRead);
 
 		virtual void _processMessages();
 

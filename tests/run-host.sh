@@ -23,6 +23,7 @@
 #              children that make their own user namespaces, and the libexec override rule.
 #   thread_discovery  includes findThreadByStackHint() cut out of <source-root>/src/thread.cpp
 #              (tests/host/extract-static.sh) and runs it against the threads of a child process.
+#   iosurface_registry  links <source-root>/src/iosurface.cpp, compiled unchanged.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
 #   code_signing  links <source-root>/src/code-signing.cpp and trust-store.cpp with the parser and runs
 #              against tests/fixtures/codesign; also checks what tools/dc-trustcache.py writes.
@@ -85,6 +86,9 @@ case $test in
 	thread_discovery)
 		"$here/host/extract-static.sh" "$root/src/thread.cpp" findThreadByStackHint > "$work/thread_discovery.inc"
 		$cxx $flags -pthread -DTHREAD_DISCOVERY_INC="\"$work/thread_discovery.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
+		;;
+	iosurface_registry)
+		$cxx $flags -I"$root/include" -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/iosurface.cpp"
 		;;
 	platform_identity)
 		$cxx $flags -I"$root/include" -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/platform-identity.cpp" -lcrypto

@@ -59,6 +59,9 @@ typedef struct dtape_memory_region_info {
 	uintptr_t start_address;
 	uint64_t page_count;
 	uint64_t map_offset;
+	// device and inode that back the region; both zero if it is not backed by a file or shared memory object
+	uint64_t device;
+	uint64_t inode;
 	dtape_memory_protection_t protection;
 	bool shared;
 } dtape_memory_region_info_t;

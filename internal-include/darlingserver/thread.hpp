@@ -26,8 +26,10 @@
 #include <shared_mutex>
 #include <condition_variable>
 #include <stack>
+#include <deque>
 #include <queue>
 #include <atomic>
+#include <vector>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -96,6 +98,34 @@ namespace DarlingServer {
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
 		dtape_semaphore_t* _s2cReplySempahore = nullptr;
 		std::optional<Message> _s2cReply = std::nullopt;
+		// true from the moment an S2C call is sent until its reply is consumed or abandoned; guarded by `_rwlock`
+		bool _s2cCallInFlight = false;
+		// true while an S2C call that was sent, but whose reply we stopped waiting for (the wait was interrupted), is still unanswered.
+		// the client still performs the call and replies; that reply must be discarded when it arrives.
+		// no other S2C call is sent to the thread until then, so a reply can never be matched to the wrong call
+		// (the client may have been interrupted while servicing the call, and would then answer a newer call first); guarded by `_rwlock`
+		bool _s2cStaleReplyPending = false;
+		// whether that abandoned call was performed through the S2C interrupt (see `_s2cInterruptAbandoned`); guarded by `_rwlock`
+		bool _s2cStaleReplyUsedInterrupt = false;
+		// number of S2C interrupts we signalled but stopped waiting for; guarded by `_rwlock`
+		size_t _s2cInterruptAbandoned = 0;
+		// set by the S2C interrupt handler (S2CPerform) right before it gives the green light; guarded by `_rwlock`
+		bool _s2cInterruptEntered = false;
+		// the length of the mapping that the abandoned call (see `_s2cStaleReplyPending`) makes, if it is an mmap whose result
+		// must be undone (0 if there is nothing to undo); guarded by `_rwlock`
+		size_t _s2cStaleMappingLength = 0;
+		// whether that mapping is plain read-write anonymous memory placed by the client (see `_s2cReusableStaleMappings`); guarded by `_rwlock`
+		bool _s2cStaleMappingReusable = false;
+		// mappings made by abandoned mmap calls, unmapped before the next S2C call on this thread; guarded by `_rwlock`
+		std::vector<std::pair<uintptr_t, size_t>> _s2cStaleMappings;
+		// mappings made by abandoned mmap calls for fresh read-write anonymous memory anywhere in the task. a restarted call
+		// of this thread that needs such memory takes one (`_takeReusableStaleMapping()`) instead of mapping it again, so
+		// that a call interrupted again and again still gets further each time; the rest are unmapped like `_s2cStaleMappings`.
+		// guarded by `_rwlock`
+		std::vector<std::pair<uintptr_t, size_t>> _s2cReusableStaleMappings;
+		// set when an S2C wait of the current call on this thread is interrupted, so that the call can be restarted
+		// (see the `current_thread_take_s2c_interrupted` duct-tape hook); only used by the thread's own microthread
+		bool _s2cInterrupted = false;
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;
@@ -110,14 +140,16 @@ namespace DarlingServer {
 		std::optional<Message> _deferredReply = std::nullopt;
 
 		struct InterruptContext {
-			std::optional<Message> savedReply = std::nullopt;
+			// replies to send once the interrupt is over, in the order they were sent originally
+			std::deque<Message> savedReplies;
 			std::shared_ptr<Call> interruptedCall = nullptr;
 			StackPool::Stack savedStack;
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
 		std::queue<std::shared_ptr<Call>> _pendingInterrupts;
-		std::optional<Message> _pendingSavedReply = std::nullopt;
+		// replies the client pushed back for an interrupt_enter we haven't started handling yet (pending or in `_pendingInterrupts`)
+		std::deque<Message> _pendingSavedReplies;
 		bool _dead = false;
 		std::shared_ptr<Thread> _selfReference = nullptr;
 
@@ -126,7 +158,10 @@ namespace DarlingServer {
 
 		friend struct ::DTapeHooks;
 
-		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
+		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize, int& outErrno, size_t staleMappingLength = 0, bool staleMappingReusable = false);
+		void _s2cNoteStaleMapping(const Message& staleReply, size_t length, bool reusable);
+		void _s2cUndoStaleMappings();
+		uintptr_t _takeReusableStaleMapping(size_t length);
 
 		uintptr_t _mmap(uintptr_t address, size_t length, int protection, int flags, int fd, off_t offset, int& outErrno);
 		int _munmap(uintptr_t address, size_t length, int& outErrno);
@@ -263,6 +298,15 @@ namespace DarlingServer {
 		void pushCallReply(std::shared_ptr<Call> expectedCall, Message&& reply);
 
 		RunState getRunState() const;
+
+		/**
+		 * Reads the thread's name and its user and system CPU time (in nanoseconds) from Linux.
+		 *
+		 * The name is the Linux thread name (at most 15 characters), written NUL-terminated into `name`.
+		 *
+		 * @returns `true` if the thread's information could be read; `false` if the thread is gone.
+		 */
+		bool getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const;
 
 		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;

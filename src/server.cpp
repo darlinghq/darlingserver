@@ -36,6 +36,7 @@
 #include <sys/timerfd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/wait.h>
 
 #include <darlingserver/logging.hpp>
@@ -223,6 +224,10 @@ struct DTapeHooks {
 		return static_cast<dtape_thread_state_t>(static_cast<DarlingServer::Thread*>(thread_context)->getRunState());
 	};
 
+	static bool dtape_hook_thread_get_stats(void* thread_context, char* name, size_t name_size, uint64_t* user_time_ns, uint64_t* system_time_ns) {
+		return static_cast<DarlingServer::Thread*>(thread_context)->getStats(name, name_size, *user_time_ns, *system_time_ns);
+	};
+
 	static int dtape_hook_thread_send_signal(void* thread_context, int signal) {
 		try {
 			static_cast<DarlingServer::Thread*>(thread_context)->sendSignal(signal);
@@ -257,6 +262,24 @@ struct DTapeHooks {
 
 	static void dtape_hook_current_thread_set_bsd_retval(uint32_t retval) {
 		DarlingServer::Thread::currentThread()->_bsdReturnValue = retval;
+	};
+
+	static bool dtape_hook_current_thread_take_s2c_interrupted(void) {
+		auto thread = DarlingServer::Thread::currentThread();
+		if (!thread) {
+			return false;
+		}
+		bool interrupted = thread->_s2cInterrupted;
+		thread->_s2cInterrupted = false;
+		return interrupted;
+	};
+
+	static uintptr_t dtape_hook_current_thread_take_stale_mapping(size_t length) {
+		auto thread = DarlingServer::Thread::currentThread();
+		if (!thread) {
+			return 0;
+		}
+		return thread->_takeReusableStaleMapping(length);
 	};
 
 	static bool dtape_hook_task_read_memory(void* task_context, uintptr_t remote_address, void* local_buffer, size_t length) {
@@ -321,6 +344,8 @@ struct DTapeHooks {
 			memory_region_info->start_address = info.startAddress;
 			memory_region_info->page_count = info.pageCount;
 			memory_region_info->map_offset = info.mapOffset;
+			memory_region_info->device = info.device;
+			memory_region_info->inode = info.inode;
 			protection = info.protection;
 			memory_region_info->shared = info.shared;
 		} catch (...) {
@@ -358,6 +383,18 @@ struct DTapeHooks {
 		}
 	};
 
+	// the device and inode that identify the file behind a descriptor, in the same form
+	// as the `device` and `inode` of dtape_memory_region_info_t
+	static bool dtape_hook_fd_identity(int fd, uint64_t* device, uint64_t* inode) {
+		struct stat st;
+		if (fstat(fd, &st) < 0) {
+			return false;
+		}
+		*device = ((uint64_t)major(st.st_dev) << 32) | minor(st.st_dev);
+		*inode = st.st_ino;
+		return true;
+	};
+
 	static uintptr_t dtape_hook_task_map_file(void* task_context, int fd, size_t page_count, int protection, uintptr_t address_hint, size_t page_offset, dtape_memory_flags_t flags) {
 		try {
 			return static_cast<DarlingServer::Process*>(task_context)->mapFile(fd, page_count, protection, address_hint, page_offset, flags & dtape_memory_flag_fixed, flags & dtape_memory_flag_overwrite);
@@ -368,6 +405,14 @@ struct DTapeHooks {
 
 	static uintptr_t dtape_hook_task_get_next_region(void* task_context, uintptr_t address) {
 		return static_cast<DarlingServer::Process*>(task_context)->getNextRegion(address);
+	};
+
+	static bool dtape_hook_task_get_region_residency(void* task_context, uintptr_t start_address, uint64_t* private_pages, uint64_t* shared_pages) {
+		try {
+			return static_cast<DarlingServer::Process*>(task_context)->regionResidency(start_address, *private_pages, *shared_pages);
+		} catch (...) {
+			return false;
+		}
 	};
 
 	static bool dtape_hook_task_change_protection(void* task_context, uintptr_t address, size_t page_count, int protection) {
@@ -477,6 +522,7 @@ struct DTapeHooks {
 		.thread_lookup = dtape_hook_thread_lookup,
 		.thread_lookup_eternal = dtape_hook_thread_lookup_eternal,
 		.thread_get_state = dtape_hook_thread_get_state,
+		.thread_get_stats = dtape_hook_thread_get_stats,
 		.thread_send_signal = dtape_hook_thread_send_signal,
 		.thread_context_dispose = dtape_hook_thread_context_dispose,
 		.thread_eternal_id = dtape_hook_thread_eternal_id,
@@ -485,6 +531,8 @@ struct DTapeHooks {
 		.current_thread_interrupt_enable = dtape_hook_current_thread_interrupt_enable,
 		.current_thread_syscall_return = dtape_hook_current_thread_syscall_return,
 		.current_thread_set_bsd_retval = dtape_hook_current_thread_set_bsd_retval,
+		.current_thread_take_s2c_interrupted = dtape_hook_current_thread_take_s2c_interrupted,
+		.current_thread_take_stale_mapping = dtape_hook_current_thread_take_stale_mapping,
 
 		.task_read_memory = dtape_hook_task_read_memory,
 		.task_write_memory = dtape_hook_task_write_memory,
@@ -495,7 +543,9 @@ struct DTapeHooks {
 		.task_allocate_pages = dtape_hook_task_allocate_pages,
 		.task_free_pages = dtape_hook_task_free_pages,
 		.task_map_file = dtape_hook_task_map_file,
+		.fd_identity = dtape_hook_fd_identity,
 		.task_get_next_region = dtape_hook_task_get_next_region,
+		.task_get_region_residency = dtape_hook_task_get_region_residency,
 		.task_change_protection = dtape_hook_task_change_protection,
 		.task_sync_memory = dtape_hook_task_sync_memory,
 		.task_context_dispose = dtape_hook_task_context_dispose,
