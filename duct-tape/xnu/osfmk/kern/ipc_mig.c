@@ -475,6 +475,10 @@ kernel_mach_msg_rpc(
 			break;
 		}
 
+		if (mr == MACH_RCV_TIMED_OUT) {
+			continue;
+		}
+
 		assert(mr == MACH_RCV_INTERRUPTED);
 		assert(interruptible);
 		assert(reply == self->ith_rpc_reply);

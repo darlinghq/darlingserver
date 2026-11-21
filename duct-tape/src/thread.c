@@ -55,6 +55,7 @@ kern_return_t thread_set_state(register thread_t thread, int flavor, thread_stat
 kern_return_t thread_get_state(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* state_count);
 
 thread_t current_thread(void);
+static void dtape_thread_cancel_wait_timer_locked(thread_t xthread);
 
 dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* context) {
 	dtape_thread_t* thread = malloc(sizeof(dtape_thread_t));
@@ -334,6 +335,10 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 	mach_exception_data_type_t codes[EXCEPTION_CODE_MAX] = { 0, 0 };
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
+	thread_lock(&thread->xnu_thread);
+	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
+	thread_unlock(&thread->xnu_thread);
+
 	thread->processing_signal = true;
 
 	if (code == LINUX_SI_USER) {
@@ -524,6 +529,8 @@ static void dtape_thread_cancel_wait_timer_locked(thread_t xthread) {
 
 void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
+	// Cancel any pending wait timer of a timed wait that was interrupted or has completed.
+	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
 	// a wait that has already been ended by a wakeup keeps its result, as XNU's clear_wait() leaves a thread that is
 	// no longer waiting alone. the waker may already have completed the operation for this thread (e.g. handed a
 	// receive its message); reporting the wait as interrupted would lose that (the caller would receive again and
@@ -534,8 +541,7 @@ void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 		thread->interrupt_deferred = true;
 	} else {
 		// with TH_WAIT cleared, clear_wait_internal() only takes the thread off its wait queue (thread_unblock() isn't
-		// called), so cancel the timer of a timed wait here
-		dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
+		// called).
 		thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
 		thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
 		clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
