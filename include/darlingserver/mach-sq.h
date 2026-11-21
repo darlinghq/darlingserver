@@ -49,7 +49,7 @@ extern "C" {
 #endif
 
 #define DSQ_MAGIC        0x31515344u // "DSQ1"
-#define DSQ_VERSION      1
+#define DSQ_VERSION      2
 
 #define DSQ_SLOTS        512
 #define DSQ_TNODES       1024        // nodes of the task (in Q), indices [0, DSQ_TNODES)
@@ -71,7 +71,7 @@ extern "C" {
 // node flags
 #define DSQ_NODE_INLINE    0x1 // the message itself is in the node
 #define DSQ_NODE_TOKEN     0x2 // the message is a kmsg the server holds (aux = token id)
-#define DSQ_NODE_MADE_SEND 0x4 // the destination was MAKE_SEND (counted in the slot's `made` word)
+#define DSQ_NODE_MADE_SEND 0x4 // the destination was MAKE_SEND (counted in the deq word when it is dequeued)
 
 // rights a name table entry records
 #define DSQ_RIGHT_SEND    0x1
@@ -86,10 +86,17 @@ extern "C" {
 // S header flags
 #define DSQ_FLAG_POISONED 0x1 // the server found an inconsistency; nothing may use the region any more
 
-// head word (low 64 bits; the high 64 bits hold `made`):
+// head word:
 //   bits 0..30 seq (nodes ever published, mod 2^31), bit 31 closed, bits 32..47 top node, bits 48..63 epoch
 // deq word:
-//   bits 0..30 deq (nodes ever dequeued, mod 2^31), bit 31 closed, bits 32..63 the port's next seqno
+//   bits 0..31 deq (nodes ever dequeued, mod 2^32; its low 31 bits count in step with seq),
+//   bits 32..63 made (MAKE_SEND nodes ever dequeued, mod 2^32)
+// The port's next seqno is deq + the slot's seqno_base (S). The deq word has no closed bit: only the head
+// closes. The server closes a slot by closing the head and then changing the deq word, so a take that
+// read the old deq word fails; whoever reads the deq word reads the head after it, and a closed head
+// means the deq word read before it is no longer the queue's.
+// The make-send count of a port in the mode is ip_mscount + made + the MAKE_SEND nodes still queued
+// (dsq_snapshot()); every word is 64 bits, also on i386.
 #define DSQ_SEQ_MASK     0x7fffffffu
 #define DSQ_CLOSED       0x80000000u
 #define DSQ_H_SEQ(h)     ((uint32_t)(h) & DSQ_SEQ_MASK)
@@ -98,11 +105,11 @@ extern "C" {
 #define DSQ_H_MAKE(seq, closed, top, epoch) \
 	(((uint64_t)((seq) & DSQ_SEQ_MASK)) | ((closed) ? (uint64_t)DSQ_CLOSED : 0) | \
 	 ((uint64_t)((top) & 0xffffu) << 32) | ((uint64_t)((epoch) & 0xffffu) << 48))
-#define DSQ_D_DEQ(d)     ((uint32_t)(d) & DSQ_SEQ_MASK)
-#define DSQ_D_SEQNO(d)   ((uint32_t)((d) >> 32))
-#define DSQ_D_MAKE(deq, closed, seqno) \
-	(((uint64_t)((deq) & DSQ_SEQ_MASK)) | ((closed) ? (uint64_t)DSQ_CLOSED : 0) | ((uint64_t)(uint32_t)(seqno) << 32))
-#define DSQ_IS_CLOSED(w) (((uint32_t)(w) & DSQ_CLOSED) != 0)
+#define DSQ_D_DEQ(d)     ((uint32_t)(d) & DSQ_SEQ_MASK)   // compared with the head's seq
+#define DSQ_D_COUNT(d)   ((uint32_t)(d))                  // all 32 bits (for the seqno)
+#define DSQ_D_MADE(d)    ((uint32_t)((d) >> 32))
+#define DSQ_D_MAKE(count, made) ((uint64_t)(uint32_t)(count) | ((uint64_t)(uint32_t)(made) << 32))
+#define DSQ_IS_CLOSED(h) (((uint32_t)(h) & DSQ_CLOSED) != 0) // head words only
 #define DSQ_LEN(h, d)    ((DSQ_H_SEQ(h) - DSQ_D_DEQ(d)) & DSQ_SEQ_MASK)
 
 // "any epoch" for server publishes
@@ -163,7 +170,8 @@ typedef struct dsq_s_slot {
 	dsq_word_t context DSQ_ALIGN(8); // the port's context (for the trailer)
 	uint32_t close_reason; // DSQ_CLOSE_*, written before the slot closes
 	uint32_t gen;          // changes whenever the slot is given to another port
-	uint32_t pad[2];
+	uint32_t seqno_base;   // the port's next seqno is the deq word's deq + this (mod 2^32)
+	uint32_t pad;
 } DSQ_ALIGN(8) dsq_s_slot_t;
 
 typedef struct dsq_s_region {
@@ -174,13 +182,12 @@ typedef struct dsq_s_region {
 } DSQ_ALIGN(64) dsq_s_region_t;
 
 typedef struct dsq_q_slot {
-	dsq_word_t head DSQ_ALIGN(16); // see above
-	dsq_word_t made;            // MAKE_SEND nodes ever published (low 32 bits; changed only by a 128-bit publish)
-	dsq_word_t deq DSQ_ALIGN(8);  // see above
+	dsq_word_t head;            // see above
+	dsq_word_t deq;             // see above
 	uint32_t rcv_waiters;       // receivers waiting on the low half of `head`
 	uint32_t snd_waiters;       // senders waiting for room on the low half of `deq`
 	uint16_t hint[DSQ_HINTS];   // hint[seq % DSQ_HINTS] = the node published at seq (only a hint)
-	uint8_t pad[16];
+	uint8_t pad[24];
 } DSQ_ALIGN(64) dsq_q_slot_t;
 
 typedef struct dsq_q_region {
@@ -233,22 +240,38 @@ static inline uint64_t dsq_load(const volatile dsq_word_t* p)
 
 // Links node `index` (filled in completely by the caller) into `slot`'s queue.
 // `epoch`: the epoch the caller's rights belong to, or DSQ_EPOCH_ANY (server).
-// `qlimit`: UINT32_MAX for no limit. `make_send`: also count a MAKE_SEND (needs a 128-bit CAS).
-// `attempts`: 0 for no bound. On DSQ_OK, `*seq_out` (if not NULL) is the node's seq.
+// `qlimit`: UINT32_MAX for no limit. `attempts`: 0 for no bound. On DSQ_OK, `*seq_out` (if not NULL)
+// is the node's seq. A MAKE_SEND message is a node with DSQ_NODE_MADE_SEND: nothing else is counted here.
 int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epoch, uint32_t qlimit,
-		bool make_send, uint32_t attempts, uint32_t* seq_out);
+		uint32_t attempts, uint32_t* seq_out);
 
 // Finds the node at the head of `slot`'s queue without taking it. On DSQ_OK, `*deq_out` is the deq
 // word the caller passes to dsq_take() and `*index_out` the node; any other result has neither.
 int dsq_head(const dsq_view_t* v, uint32_t slot, uint64_t* deq_out, uint32_t* index_out);
 
-// Takes the head node found by dsq_head() (`deq` is the value it returned). On success the caller
-// owns the node and its seqno is DSQ_D_SEQNO(deq).
-bool dsq_take(const dsq_view_t* v, uint32_t slot, uint64_t deq);
+// Takes the head node found by dsq_head() (`deq` is the value it returned). `made_send`: the node's
+// DSQ_NODE_MADE_SEND flag, as the caller read it after dsq_head() (the node can't change while deq is
+// still `deq`, and the take succeeds only then). The take counts it in the same CAS, so there is no
+// moment at which a dequeued MAKE_SEND message is counted nowhere. On success the caller owns the node
+// and `*seqno_out` is its seqno.
+bool dsq_take(const dsq_view_t* v, uint32_t slot, uint64_t deq, bool made_send, uint32_t* seqno_out);
+
+// The seqno a deq word stands for (the next one the port gives out).
+uint32_t dsq_seqno(const dsq_view_t* v, uint32_t slot, uint64_t deq);
 
 // Server only: closes the slot (no publish or take succeeds afterwards) and returns both words as
-// they were at that point; the nodes [deq, seq) are then the caller's.
-void dsq_close(const dsq_view_t* v, uint32_t slot, uint64_t* head_out, uint64_t* made_out, uint64_t* deq_out);
+// they were at that point; the nodes [deq, seq) are then the caller's. Call it once per close: the
+// deq word is changed by it, so the values returned are the only record of the queue's last state.
+void dsq_close(const dsq_view_t* v, uint32_t slot, uint64_t* head_out, uint64_t* deq_out);
+
+// Server only (no server publish or take on the slot meanwhile): head and deq of an open slot as both
+// were at one instant, and the number of MAKE_SEND nodes of the task queued at that instant. It reads
+// deq, head, walks the queued nodes and reads deq again; when deq did not change, the pair was the state
+// of the queue when head was read, and the nodes it walked were queued (so unchanged) all along.
+// DSQ_CONTENDED: the task kept dequeuing for `attempts` rounds; DSQ_CLOSED_Q; DSQ_CORRUPT: a node
+// that should be queued is not.
+int dsq_snapshot(const dsq_view_t* v, uint32_t slot, uint32_t attempts, uint64_t* head_out,
+		uint64_t* deq_out, uint32_t* made_queued_out);
 
 // Server only: collects the nodes [deq, seq) of a closed slot in queue order into `out` (room for
 // DSQ_NODES entries). Returns how many it found; a node that can't be found ends the walk.

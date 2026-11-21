@@ -31,8 +31,7 @@ _Static_assert(sizeof(dsq_s_header_t) == 1024, "S header size");
 _Static_assert(sizeof(dsq_name_entry_t) == 12, "name entry size");
 _Static_assert(sizeof(dsq_s_slot_t) == 32, "S slot size");
 _Static_assert(sizeof(dsq_q_slot_t) == 64, "Q slot size");
-_Static_assert(offsetof(dsq_q_slot_t, made) == 8, "the 128-bit head is head + made");
-_Static_assert(offsetof(dsq_q_slot_t, deq) == 16, "Q slot layout");
+_Static_assert(offsetof(dsq_q_slot_t, deq) == 8, "Q slot layout");
 _Static_assert(DSQ_NODES < DSQ_NONE, "node indices fit in 16 bits");
 _Static_assert(DSQ_SLOTS <= 0x10000, "slot numbers fit in 16 bits");
 
@@ -53,19 +52,6 @@ static inline uint64_t dsq_tagged(uint32_t index, uint64_t previous)
 	return (uint64_t) (index & 0xffffu) | (((previous >> 32) + 1) << 32);
 }
 
-#if defined(__x86_64__)
-// a 128-bit compare-and-swap of head + made (cmpxchg16b; `p` is 16-byte aligned)
-static inline bool dsq_cas128(uint64_t* p, uint64_t* expected_lo, uint64_t* expected_hi, uint64_t lo, uint64_t hi)
-{
-	bool ok;
-	__asm__ __volatile__("lock cmpxchg16b %1"
-		: "=@ccz"(ok), "+m"(*(volatile uint64_t (*)[2]) p), "+a"(*expected_lo), "+d"(*expected_hi)
-		: "b"(lo), "c"(hi)
-		: "memory");
-	return ok;
-}
-#endif
-
 // the first 8 bytes of a node: seq | slot << 32 | next << 48
 static inline uint64_t dsq_node_key(const dsq_node_t* n)
 {
@@ -73,54 +59,33 @@ static inline uint64_t dsq_node_key(const dsq_node_t* n)
 }
 
 int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epoch, uint32_t qlimit,
-		bool make_send, uint32_t attempts, uint32_t* seq_out)
+		uint32_t attempts, uint32_t* seq_out)
 {
 	dsq_node_t* n = dsq_node(v, index);
 	if (n == NULL || slot >= DSQ_SLOTS)
 		return DSQ_CORRUPT;
 
-#if !defined(__x86_64__)
-	if (make_send)
-		return DSQ_UNSUPPORTED;
-#endif
-
 	dsq_q_slot_t* qs = &v->q->slots[slot];
 
 	for (uint32_t i = 0; attempts == 0 || i < attempts; i++)
 	{
+		// deq before head: deq only grows, so a length computed from an older deq is never too small,
+		// and an open head means deq was read before the slot closed
+		uint64_t d = (qlimit != UINT32_MAX) ? dsq_load(&qs->deq) : 0;
 		uint64_t h = dsq_load(&qs->head);
 		if (DSQ_IS_CLOSED(h))
 			return DSQ_CLOSED_Q;
 		if (epoch != DSQ_EPOCH_ANY && DSQ_H_EPOCH(h) != epoch)
 			return DSQ_STALE;
-		if (qlimit != UINT32_MAX)
-		{
-			// deq only grows, so a length computed from an older deq is never too small
-			uint64_t d = dsq_load(&qs->deq);
-			if (DSQ_IS_CLOSED(d))
-				return DSQ_CLOSED_Q;
-			if (DSQ_LEN(h, d) >= qlimit)
-				return DSQ_FULL;
-		}
+		if (qlimit != UINT32_MAX && DSQ_LEN(h, d) >= qlimit)
+			return DSQ_FULL;
 
 		uint32_t seq = DSQ_H_SEQ(h);
 		uint64_t key = (uint64_t) seq | ((uint64_t) slot << 32) | ((uint64_t) DSQ_H_TOP(h) << 48);
 		__atomic_store_n((dsq_word_t*) n, key, __ATOMIC_RELAXED);
 
 		uint64_t nh = DSQ_H_MAKE(seq + 1, false, index, DSQ_H_EPOCH(h));
-		bool ok;
-#if defined(__x86_64__)
-		if (make_send)
-		{
-			uint64_t hi = __atomic_load_n(&qs->made, __ATOMIC_RELAXED);
-			uint64_t lo = h;
-			ok = dsq_cas128(&qs->head, &lo, &hi, nh, hi + 1);
-		}
-		else
-#endif
-		ok = __atomic_compare_exchange_n(&qs->head, &h, nh, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
-
-		if (ok)
+		if (__atomic_compare_exchange_n(&qs->head, &h, nh, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
 		{
 			__atomic_store_n(&qs->hint[seq % DSQ_HINTS], (uint16_t) index, __ATOMIC_RELAXED);
 			if (seq_out != NULL)
@@ -137,10 +102,11 @@ int dsq_head(const dsq_view_t* v, uint32_t slot, uint64_t* deq_out, uint32_t* in
 		return DSQ_CORRUPT;
 
 	dsq_q_slot_t* qs = &v->q->slots[slot];
+	// deq before head (see mach-sq.h): an open head means `d` is still the queue's
 	uint64_t d = dsq_load(&qs->deq);
 	uint64_t h = dsq_load(&qs->head);
 
-	if (DSQ_IS_CLOSED(d) || DSQ_IS_CLOSED(h))
+	if (DSQ_IS_CLOSED(h))
 		return DSQ_CLOSED_Q;
 
 	uint32_t want = DSQ_D_DEQ(d);
@@ -177,22 +143,93 @@ int dsq_head(const dsq_view_t* v, uint32_t slot, uint64_t* deq_out, uint32_t* in
 	return DSQ_OK;
 }
 
-bool dsq_take(const dsq_view_t* v, uint32_t slot, uint64_t deq)
+uint32_t dsq_seqno(const dsq_view_t* v, uint32_t slot, uint64_t deq)
 {
-	dsq_q_slot_t* qs = &v->q->slots[slot];
-	uint64_t next = DSQ_D_MAKE(DSQ_D_DEQ(deq) + 1, false, DSQ_D_SEQNO(deq) + 1);
-	return __atomic_compare_exchange_n(&qs->deq, &deq, next, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+	return DSQ_D_COUNT(deq) + __atomic_load_n(&v->s->slots[slot].seqno_base, __ATOMIC_ACQUIRE);
 }
 
-void dsq_close(const dsq_view_t* v, uint32_t slot, uint64_t* head_out, uint64_t* made_out, uint64_t* deq_out)
+bool dsq_take(const dsq_view_t* v, uint32_t slot, uint64_t deq, bool made_send, uint32_t* seqno_out)
 {
 	dsq_q_slot_t* qs = &v->q->slots[slot];
-	uint64_t h = __atomic_fetch_or(&qs->head, (uint64_t) DSQ_CLOSED, __ATOMIC_ACQ_REL);
-	uint64_t d = __atomic_fetch_or(&qs->deq, (uint64_t) DSQ_CLOSED, __ATOMIC_ACQ_REL);
-	// no publish succeeds once head is closed, so `made` is final as well
-	*made_out = __atomic_load_n(&qs->made, __ATOMIC_ACQUIRE);
+	// read before the CAS: the slot's base is the one of this deq word only while the CAS can succeed
+	uint32_t seqno = dsq_seqno(v, slot, deq);
+	uint64_t next = DSQ_D_MAKE(DSQ_D_COUNT(deq) + 1, DSQ_D_MADE(deq) + (made_send ? 1 : 0));
+
+	if (!__atomic_compare_exchange_n(&qs->deq, &deq, next, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		return false;
+	*seqno_out = seqno;
+	return true;
+}
+
+void dsq_close(const dsq_view_t* v, uint32_t slot, uint64_t* head_out, uint64_t* deq_out)
+{
+	dsq_q_slot_t* qs = &v->q->slots[slot];
+	// head first: no publish succeeds afterwards, and a take reads head after deq. then any change of the
+	// deq word makes a take that read it before fail; the value it had is the queue's final state
+	uint64_t h = __atomic_fetch_or(&qs->head, (uint64_t) DSQ_CLOSED, __ATOMIC_SEQ_CST);
+	uint64_t d = __atomic_fetch_add(&qs->deq, 1, __ATOMIC_SEQ_CST);
 	*head_out = h | DSQ_CLOSED;
-	*deq_out = d | DSQ_CLOSED;
+	*deq_out = d;
+}
+
+int dsq_snapshot(const dsq_view_t* v, uint32_t slot, uint32_t attempts, uint64_t* head_out,
+		uint64_t* deq_out, uint32_t* made_queued_out)
+{
+	if (slot >= DSQ_SLOTS)
+		return DSQ_CORRUPT;
+
+	dsq_q_slot_t* qs = &v->q->slots[slot];
+
+	for (uint32_t i = 0; i < attempts; i++)
+	{
+		uint64_t d = dsq_load(&qs->deq);
+		uint64_t h = dsq_load(&qs->head);
+		uint32_t len = DSQ_LEN(h, d);
+		uint32_t index = DSQ_H_TOP(h);
+		uint32_t made = 0;
+		bool walked = true;
+
+		if (DSQ_IS_CLOSED(h))
+			return DSQ_CLOSED_Q;
+
+		if (len > DSQ_NODES)
+			walked = false;
+		// newest to oldest: seq - 1, ..., deq
+		for (uint32_t k = 0; walked && k < len; k++)
+		{
+			const dsq_node_t* n = dsq_node(v, index);
+			if (n == NULL)
+			{
+				walked = false;
+				break;
+			}
+			uint64_t key = dsq_node_key(n);
+			uint32_t want = (DSQ_H_SEQ(h) - 1 - k) & DSQ_SEQ_MASK;
+			if ((uint32_t) key != want || (uint16_t) (key >> 32) != slot)
+			{
+				walked = false;
+				break;
+			}
+			uint32_t flags = __atomic_load_n(&n->flags, __ATOMIC_RELAXED);
+			if (index < DSQ_TNODES && (flags & DSQ_NODE_INLINE) && (flags & DSQ_NODE_MADE_SEND))
+				made++;
+			index = (uint32_t) (key >> 48);
+		}
+
+		// the node reads come before the second deq read
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (dsq_load(&qs->deq) != d)
+			continue;
+		// deq stayed `d` from before head was read until after the walk, so the walk was of queued nodes
+		if (!walked)
+			return DSQ_CORRUPT;
+
+		*head_out = h;
+		*deq_out = d;
+		*made_queued_out = made;
+		return DSQ_OK;
+	}
+	return DSQ_CONTENDED;
 }
 
 uint32_t dsq_collect(const dsq_view_t* v, uint32_t slot, uint64_t head, uint64_t deq, uint16_t* out)
@@ -312,7 +349,7 @@ void dsq_region_init(const dsq_view_t* v)
 	for (uint32_t i = 0; i < DSQ_SLOTS; i++)
 	{
 		q->slots[i].head = DSQ_H_MAKE(0, true, DSQ_NONE, 0);
-		q->slots[i].deq = DSQ_D_MAKE(0, true, 0);
+		q->slots[i].deq = DSQ_D_MAKE(0, 0);
 		for (uint32_t k = 0; k < DSQ_HINTS; k++)
 			q->slots[i].hint[k] = DSQ_NONE;
 	}
@@ -333,11 +370,14 @@ uint32_t dsq_slot_open(const dsq_view_t* v, uint32_t slot, uint32_t seqno)
 
 	for (uint32_t k = 0; k < DSQ_HINTS; k++)
 		__atomic_store_n(&qs->hint[k], (uint16_t) DSQ_NONE, __ATOMIC_RELAXED);
-	__atomic_store_n(&qs->made, 0, __ATOMIC_RELAXED);
 
-	// seq continues, so no old head or deq value comes back; the queue is empty (deq == seq).
-	// head opens last: until then nothing can be published
-	__atomic_store_n(&qs->deq, DSQ_D_MAKE(DSQ_H_SEQ(h), false, seqno), __ATOMIC_RELEASE);
+	// seq and deq continue (deq to the next count that matches seq), so no old head or deq value comes
+	// back; the queue is empty (deq == seq), no MAKE_SEND message has been dequeued yet, and
+	// deq + seqno_base is the port's seqno. head opens last: until then nothing can be published or taken
+	uint32_t count = DSQ_D_COUNT(dsq_load(&qs->deq));
+	count += (DSQ_H_SEQ(h) - count) & DSQ_SEQ_MASK;
+	__atomic_store_n(&v->s->slots[slot].seqno_base, seqno - count, __ATOMIC_RELEASE);
+	__atomic_store_n(&qs->deq, DSQ_D_MAKE(count, 0), __ATOMIC_RELEASE);
 	__atomic_store_n(&qs->head, DSQ_H_MAKE(DSQ_H_SEQ(h), false, DSQ_NONE, epoch), __ATOMIC_RELEASE);
 	return epoch;
 }

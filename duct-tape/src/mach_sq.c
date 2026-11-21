@@ -67,6 +67,9 @@ typedef struct dtape_sq_slot {
 	uint32_t tokens_taken;
 	// closed, but its queue has not been moved to the port yet: whatever next has the port locked does that
 	bool closing;
+	// the words dsq_close() returned for that close (the only record of them; see mach-sq.h)
+	uint64_t closed_head;
+	uint64_t closed_deq;
 	struct ipc_kmsg_queue tokens;
 } dtape_sq_slot_t;
 
@@ -300,8 +303,8 @@ void dtape_sq_port_created(ipc_space_t space, mach_port_name_t name)
 			__atomic_store_n(&port->ip_sq, slot, __ATOMIC_RELEASE);
 		} else {
 			// the name table is full: the port stays normal
-			uint64_t h, made, d;
-			dsq_close(&region->view, slot->index, &h, &made, &d);
+			uint64_t h, d;
+			dsq_close(&region->view, slot->index, &h, &d);
 		}
 	}
 
@@ -313,22 +316,26 @@ out_space:
 	is_read_unlock(space);
 }
 
-// takes the head node of a slot the server has taken over, for a kmsg; NULL if the node is not a valid one
-static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32_t index)
+// whether a node (the server's copy of it) is a MAKE_SEND message of the task: the ones the port's
+// make-send count has to include
+static inline bool sq_node_made_send(const dsq_node_t* node, uint32_t index)
+{
+	return index < DSQ_TNODES && (node->flags & DSQ_NODE_INLINE) && (node->flags & DSQ_NODE_MADE_SEND);
+}
+
+// makes a kmsg of a node of a slot the server has taken (`node` is the server's one copy of node `index`:
+// the task can't change what is validated afterwards); NULL if the node is not a valid one
+static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32_t index, const dsq_node_t* copy)
 {
 	dtape_sq_region_t* region = slot->region;
-	dsq_node_t* shared = dsq_node(&region->view, index);
-	dsq_node_t node;
+	const dsq_node_t node = *copy;
 	ipc_kmsg_t kmsg = IKM_NULL;
-
-	// one copy: the task can't change what is validated afterwards
-	memcpy(&node, shared, sizeof(node));
 
 	if ((node.flags & DSQ_NODE_INLINE) && index < DSQ_TNODES) {
 		const dtape_sq_history_entry_t* tokens = sq_history(region, node.aux);
 		if (node.size >= DSQ_MSG_MIN && node.size <= DSQ_MSG_MAX) {
 			kmsg = dtape_kmsg_from_shared(port, slot->name, node.msg, node.size,
-			    (node.flags & DSQ_NODE_MADE_SEND) != 0, &tokens->sec_token, &tokens->audit_token);
+			    sq_node_made_send(&node, index), &tokens->sec_token, &tokens->audit_token);
 		}
 		if (!dsq_server_node_return(&region->view, index, SQ_ATTEMPTS)) {
 			dtape_log_warning("%d: could not give a node back to the task", region->task->saved_pid);
@@ -354,10 +361,9 @@ static void sq_close_for_later(dtape_sq_slot_t* slot)
 {
 	dtape_sq_region_t* region = slot->region;
 	dsq_q_slot_t* qslot = &region->view.q->slots[slot->index];
-	uint64_t h, made, d;
 
 	__atomic_store_n(&region->view.s->slots[slot->index].close_reason, DSQ_CLOSE_OTHER, __ATOMIC_RELEASE);
-	dsq_close(&region->view, slot->index, &h, &made, &d);
+	dsq_close(&region->view, slot->index, &slot->closed_head, &slot->closed_deq);
 	slot->closing = true;
 	sq_wake(region, &qslot->head);
 	sq_wake(region, &qslot->deq);
@@ -370,8 +376,9 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	dtape_sq_region_t* region;
 	dsq_q_slot_t* qslot;
 	uint16_t nodes[DSQ_NODES];
-	uint64_t h, made, d;
+	uint64_t h, d;
 	uint32_t len, found;
+	mach_port_mscount_t made;
 	bool corrupt = false;
 
 	if (!slot) {
@@ -383,10 +390,15 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	lck_spin_lock(&region->lock);
 
 	// a receiver woken by the close reads the reason
-	if (!slot->closing) {
+	if (slot->closing) {
+		h = slot->closed_head;
+		d = slot->closed_deq;
+	} else {
 		__atomic_store_n(&region->view.s->slots[slot->index].close_reason, reason, __ATOMIC_RELEASE);
+		dsq_close(&region->view, slot->index, &h, &d);
 	}
-	dsq_close(&region->view, slot->index, &h, &made, &d);
+	// the MAKE_SEND messages dequeued so far; the ones still queued are added below
+	made = DSQ_D_MADE(d);
 
 	len = DSQ_LEN(h, d);
 	if (len > DSQ_NODES) {
@@ -404,10 +416,15 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	// the queued messages go to the port's own queue, in order
 	for (uint32_t i = 0; i < len; i++) {
 		ipc_kmsg_t kmsg;
+		dsq_node_t node;
 		if (nodes[i] == DSQ_NONE) {
 			continue;
 		}
-		kmsg = sq_node_to_kmsg(slot, port, nodes[i]);
+		memcpy(&node, dsq_node(&region->view, nodes[i]), sizeof(node));
+		if (sq_node_made_send(&node, nodes[i])) {
+			made++;
+		}
+		kmsg = sq_node_to_kmsg(slot, port, nodes[i], &node);
 		if (kmsg == IKM_NULL) {
 			corrupt = true;
 			continue;
@@ -423,8 +440,10 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 		mqueue->imq_msgcount++;
 	}
 
-	mqueue->imq_seqno = DSQ_D_SEQNO(d);
-	port->ip_mscount += (mach_port_mscount_t) made;
+	// what the port's counts are once the queue is its own again: every message dequeued from the shared
+	// queue took a seqno, and every MAKE_SEND message published counts, dequeued or still queued
+	mqueue->imq_seqno = dsq_seqno(&region->view, slot->index, d);
+	port->ip_mscount += made;
 
 	if (corrupt) {
 		sq_poison(region, "inconsistent queue");
@@ -547,9 +566,9 @@ boolean_t dtape_sq_mqueue_send(ipc_port_t port, ipc_kmsg_t kmsg, mach_msg_option
 		goto leave;
 	}
 
-	h = dsq_load(&qslot->head);
 	d = dsq_load(&qslot->deq);
-	if (DSQ_IS_CLOSED(h) || DSQ_IS_CLOSED(d)) {
+	h = dsq_load(&qslot->head);
+	if (DSQ_IS_CLOSED(h)) {
 		// only the server closes a slot
 		if (!slot->closing) {
 			sq_poison(region, "a queue was closed by the task");
@@ -589,7 +608,7 @@ boolean_t dtape_sq_mqueue_send(ipc_port_t port, ipc_kmsg_t kmsg, mach_msg_option
 	}
 
 	ipc_kmsg_enqueue(&slot->tokens, kmsg);
-	result = dsq_publish(&region->view, slot->index, index, DSQ_EPOCH_ANY, UINT32_MAX, false, SQ_ATTEMPTS, NULL);
+	result = dsq_publish(&region->view, slot->index, index, DSQ_EPOCH_ANY, UINT32_MAX, SQ_ATTEMPTS, NULL);
 	if (result != DSQ_OK) {
 		ipc_kmsg_rmqueue(&slot->tokens, kmsg);
 		region->snode_free[region->snode_free_count++] = (uint16_t) index;
@@ -690,10 +709,13 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 			goto leave;
 		}
 
-		// the node is queued and doesn't change while it is: its fields are valid if deq is still `d`
-		dsq_node_t* node = dsq_node(&region->view, index);
-		uint32_t flags = __atomic_load_n(&node->flags, __ATOMIC_RELAXED);
+		// the node is queued and doesn't change while it is: the copy is valid if deq is still `d`
+		// afterwards, and it is all the server uses (what it counts is what it receives)
+		dsq_node_t node;
+		memcpy(&node, dsq_node(&region->view, index), sizeof(node));
+		uint32_t flags = node.flags;
 		mach_msg_size_t msize;
+		uint32_t seqno;
 
 		lck_spin_lock(&region->lock);
 		if ((flags & DSQ_NODE_TOKEN) && index >= DSQ_TNODES) {
@@ -705,7 +727,7 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 			}
 			msize = ipc_kmsg_copyout_size(first, thread->map);
 		} else if ((flags & DSQ_NODE_INLINE) && index < DSQ_TNODES) {
-			msize = __atomic_load_n(&node->size, __ATOMIC_RELAXED);
+			msize = node.size;
 		} else {
 			lck_spin_unlock(&region->lock);
 			if (dsq_load(&qslot->deq) != d) {
@@ -734,12 +756,12 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 			goto out;
 		}
 
-		if (!dsq_take(&region->view, slot->index, d)) {
+		if (!dsq_take(&region->view, slot->index, d, sq_node_made_send(&node, index), &seqno)) {
 			continue;
 		}
 
 		lck_spin_lock(&region->lock);
-		ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index);
+		ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, &node);
 		if (kmsg == IKM_NULL) {
 			sq_poison(region, "an invalid message");
 			lck_spin_unlock(&region->lock);
@@ -751,12 +773,11 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 			sq_wake(region, &qslot->deq);
 		}
 
-		// the message as built is what counts (the task could have changed its node meanwhile)
 		msize = ipc_kmsg_copyout_size(kmsg, thread->map);
 		too_large = msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(thread), option) > max_size;
 
 		thread->ith_kmsg = kmsg;
-		thread->ith_seqno = DSQ_D_SEQNO(d);
+		thread->ith_seqno = seqno;
 		thread->ith_msize = msize;
 		thread->ith_state = too_large ? MACH_RCV_TOO_LARGE : MACH_MSG_SUCCESS;
 		current_task()->messages_received++;
@@ -775,28 +796,46 @@ out:
 void dtape_sq_port_status(ipc_port_t port, mach_port_status_t* status)
 {
 	dtape_sq_slot_t* slot = sq_port_slot(port);
-	dsq_q_slot_t* qslot;
-	uint64_t h, made, d;
-	uint32_t len, tokens;
+	dtape_sq_region_t* region;
+	uint64_t h, d;
+	uint32_t len, tokens, made_queued;
+	bool closing;
+	int result = DSQ_CLOSED_Q;
 
 	if (!slot) {
 		return;
 	}
-	qslot = &slot->region->view.q->slots[slot->index];
+	region = slot->region;
 
-	// a snapshot of the words; nothing changes
-	d = dsq_load(&qslot->deq);
-	h = dsq_load(&qslot->head);
-	made = __atomic_load_n(&qslot->made, __ATOMIC_ACQUIRE);
-	tokens = slot->tokens_published - slot->tokens_taken;
-	len = DSQ_LEN(h, d);
-	if (len > port->ip_messages.imq_qlimit + tokens) {
-		len = port->ip_messages.imq_qlimit + tokens;
+	// the port lock keeps the server's own publishes and takes away, so only the task changes the words.
+	// the snapshot is the queue at one instant: the counts below are what XNU would report at that instant
+	lck_spin_lock(&region->lock);
+	closing = slot->closing;
+	lck_spin_unlock(&region->lock);
+	if (!closing) {
+		result = dsq_snapshot(&region->view, slot->index, SQ_ATTEMPTS, &h, &d, &made_queued);
 	}
 
+	if (result != DSQ_OK) {
+		// closed already, or the task kept dequeuing (or broke its queue): the port's own queue then
+		// has everything, and the counts are XNU's own
+		dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+		imq_lock(&port->ip_messages);
+		status->mps_seqno = port->ip_messages.imq_seqno;
+		status->mps_msgcount = port->ip_messages.imq_msgcount;
+		imq_unlock(&port->ip_messages);
+		status->mps_mscount = port->ip_mscount;
+		status->mps_srights = port->ip_srights > 0;
+		return;
+	}
+
+	tokens = slot->tokens_published - slot->tokens_taken;
+	len = DSQ_LEN(h, d);
+
 	status->mps_msgcount += len;
-	status->mps_seqno = DSQ_D_SEQNO(d);
-	status->mps_mscount += (mach_port_mscount_t) made;
+	status->mps_seqno = dsq_seqno(&region->view, slot->index, d);
+	// every MAKE_SEND message published so far: the dequeued ones and the queued ones
+	status->mps_mscount += DSQ_D_MADE(d) + made_queued;
 	// a queued message of the task's own holds a send right
 	if (len > tokens) {
 		status->mps_srights = TRUE;

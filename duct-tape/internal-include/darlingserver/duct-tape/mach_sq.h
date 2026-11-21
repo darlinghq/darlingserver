@@ -51,7 +51,9 @@ boolean_t dtape_sq_mqueue_send(struct ipc_port* port, struct ipc_kmsg* kmsg, mac
 boolean_t dtape_sq_mqueue_receive(struct ipc_mqueue* mqueue, mach_msg_option_t option, mach_msg_size_t max_size,
     mach_msg_timeout_t rcv_timeout, struct thread* thread);
 
-// mach_port_get_status_helper(): the counts of a port's queue as XNU would report them. port locked
+// mach_port_get_status_helper(): the counts of a port's queue as XNU would report them, all from one
+// instant of the shared queue; if the task keeps its queue too busy for that (or the queue is closed
+// already), the port leaves the mode and the counts are the port's own. port locked, mqueue not locked
 void dtape_sq_port_status(struct ipc_port* port, mach_port_status_t* status);
 
 // the number of messages queued on a port (for darlingserver's debug listings). nothing locked
