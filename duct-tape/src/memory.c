@@ -281,10 +281,17 @@ void dtape_vm_map_destroy(vm_map_t map) {
 };
 
 void vm_map_reference(vm_map_t map) {
+	if (map == VM_MAP_NULL) {
+		return;
+	}
 	os_ref_retain(&map->map_refcnt);
 };
 
 void vm_map_deallocate(vm_map_t map) {
+	// the generated Mach server stubs release every converted map, and a port that is not a task port converts to a null one
+	if (map == VM_MAP_NULL) {
+		return;
+	}
 	os_ref_release_live(&map->map_refcnt);
 };
 
@@ -1727,6 +1734,11 @@ kern_return_t mach_vm_remap_external(vm_map_t target_map, mach_vm_offset_t* addr
 	vm_map_copy_t mem_copy = NULL;
 	vm_map_address_t addr = 0;
 	bool dealloc = false;
+
+	// a port that is not a task port converts to a null map
+	if (target_map == VM_MAP_NULL || src_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	if (!copy) {
 		return mach_vm_remap_external_shared(target_map, address, size, mask, flags, src_map, memory_address, cur_protection, max_protection, inheritance);
