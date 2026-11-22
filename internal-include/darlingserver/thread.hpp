@@ -85,6 +85,14 @@ namespace DarlingServer {
 		StackPool::Stack _stack;
 		bool _suspended = false;
 		ucontext_t _resumeContext;
+		ucontext_t _topContext;
+		libsimple_lock_t* _unlockMeWhenSuspending = nullptr;
+		std::function<void()> _currentContinuation = nullptr;
+#if DSERVER_ASAN
+		void* _asanOldFakeStack = nullptr;
+		const void* _asanOldStackBottom = nullptr;
+		size_t _asanOldStackSize = 0;
+#endif
 		dtape_thread_t* _dtapeThread;
 		// atomic so that exec can reset it while holding only the process lock
 		std::atomic<uintptr_t> _cancelMarkedAddress = 0;
@@ -144,6 +152,8 @@ namespace DarlingServer {
 			std::deque<Message> savedReplies;
 			std::shared_ptr<Call> interruptedCall = nullptr;
 			StackPool::Stack savedStack;
+			std::function<void()> savedContinuation;
+			std::function<void()> continuation;
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
