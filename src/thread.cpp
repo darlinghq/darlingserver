@@ -47,6 +47,7 @@
 #include <assert.h>
 
 #include <limits>
+#include <utility>
 #include <sys/ptrace.h>
 #include <sys/user.h>
 #include <sys/wait.h>
@@ -89,9 +90,6 @@ static inline void darling_dserver_makecontext_arm64(ucontext_t* ucp, void (*fun
 
 static thread_local std::shared_ptr<DarlingServer::Thread> currentThreadVar = nullptr;
 static thread_local bool returningToThreadTop = false;
-static thread_local ucontext_t backToThreadTopContext;
-static thread_local libsimple_lock_t* unlockMeWhenSuspending = nullptr;
-static thread_local std::function<void()> currentContinuation = nullptr;
 
 /**
  * Our microthreads use cooperative multitasking, so we don't really use interrupts per-se.
@@ -102,12 +100,6 @@ static thread_local std::function<void()> currentContinuation = nullptr;
  * This is primarily of use for debugging duct-tape code and ensuring certain assumptions made in the duct-tape code hold true.
  */
 static thread_local uint64_t interruptDisableCount = 0;
-
-#if DSERVER_ASAN
-	static thread_local void* asanOldFakeStack = nullptr;
-	static thread_local const void* asanOldStackBottom = nullptr;
-	static thread_local size_t asanOldStackSize = 0;
-#endif
 
 static DarlingServer::Log threadLog("thread");
 
@@ -517,58 +509,61 @@ static const auto microthreadLog = DarlingServer::Log("microthread");
 
 // this runs in the context of the microthread (i.e. with the microthread's stack active)
 void DarlingServer::Thread::microthreadWorker() {
+	// The microthread can move to another host while processing a call. Its
+	// identity and return context belong to Thread, not to the host's TLS.
+	Thread* self = currentThread().get();
 #if DSERVER_ASAN
-	__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
-	asanOldFakeStack = nullptr;
+	__sanitizer_finish_switch_fiber(self->_asanOldFakeStack, &self->_asanOldStackBottom, &self->_asanOldStackSize);
+	self->_asanOldFakeStack = nullptr;
 #endif
 
-	currentContinuation = nullptr;
-	currentThreadVar->makePendingCallActive();
-	currentThreadVar->_activeCall->processCall();
+	self->_currentContinuation = nullptr;
+	self->makePendingCallActive();
+	self->_activeCall->processCall();
 
-	if (currentThreadVar->_handlingInterruptedCall) {
-		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
+	if (self->_handlingInterruptedCall) {
+		self->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack.base, currentThreadVar->_stack.size);
+		__sanitizer_start_switch_fiber(NULL, self->_stack.base, self->_stack.size);
 #endif
-		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+		setcontext(&self->_syscallReturnHereDuringInterrupt);
 	} else {
 #if DSERVER_ASAN
 		// we're exiting normally, so we might not re-enter this microthread; tell ASAN to drop the fake stack
-		__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+		__sanitizer_start_switch_fiber(NULL, self->_asanOldStackBottom, self->_asanOldStackSize);
 #endif
 
-		setcontext(&backToThreadTopContext);
+		setcontext(&self->_topContext);
 	}
 	__builtin_unreachable();
 };
 
 void DarlingServer::Thread::microthreadContinuation() {
+	Thread* self = currentThread().get();
 #if DSERVER_ASAN
-	__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
-	asanOldFakeStack = nullptr;
+	__sanitizer_finish_switch_fiber(self->_asanOldFakeStack, &self->_asanOldStackBottom, &self->_asanOldStackSize);
+	self->_asanOldFakeStack = nullptr;
 #endif
 
-	currentContinuation = currentThreadVar->_continuationCallback;
-	// FIXME: we probably should never see `currentContinuation == nullptr`
-	if (currentContinuation) {
-		currentThreadVar->_continuationCallback = nullptr;
-		currentContinuation();
-		currentContinuation = nullptr;
+	self->_currentContinuation = std::exchange(self->_continuationCallback, nullptr);
+	// FIXME: we probably should never see `_currentContinuation == nullptr`
+	if (self->_currentContinuation) {
+		self->_currentContinuation();
+		self->_currentContinuation = nullptr;
 	}
 
-	if (currentThreadVar->_handlingInterruptedCall) {
-		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
+	if (self->_handlingInterruptedCall) {
+		self->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-		__sanitizer_start_switch_fiber(NULL, currentThreadVar->_stack.base, currentThreadVar->_stack.size);
+		__sanitizer_start_switch_fiber(NULL, self->_stack.base, self->_stack.size);
 #endif
-		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+		setcontext(&self->_syscallReturnHereDuringInterrupt);
 	} else {
 #if DSERVER_ASAN
 		// see microthreadWorker()
-		__sanitizer_start_switch_fiber(NULL, asanOldStackBottom, asanOldStackSize);
+		__sanitizer_start_switch_fiber(NULL, self->_asanOldStackBottom, self->_asanOldStackSize);
 #endif
-		setcontext(&backToThreadTopContext);
+		setcontext(&self->_topContext);
 	}
 	__builtin_unreachable();
 };
@@ -613,15 +608,15 @@ void DarlingServer::Thread::doWork() {
 
 	_runningCondvar.notify_all();
 
-	getcontext(&backToThreadTopContext);
+	getcontext(&_topContext);
 
 	if (returningToThreadTop) {
 		// someone jumped back to the top of the microthread
 		// (that means either the microthread has been suspended or it has finished)
 
 #if DSERVER_ASAN
-		__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
-		asanOldFakeStack = nullptr;
+		__sanitizer_finish_switch_fiber(_asanOldFakeStack, &_asanOldStackBottom, &_asanOldStackSize);
+		_asanOldFakeStack = nullptr;
 #endif
 
 		_rwlock.lock();
@@ -643,6 +638,7 @@ void DarlingServer::Thread::doWork() {
 		if (!_pendingCallOverride && _pendingCall && _pendingCall->number() == Call::Number::InterruptEnter) {
 			_interrupts.emplace();
 			_interrupts.top().savedStack = _stack;
+			_interrupts.top().savedContinuation = std::exchange(_currentContinuation, nullptr);
 			_stack = StackPool::Stack();
 			_interruptedContinuation = _continuationCallback;
 			_continuationCallback = nullptr;
@@ -661,7 +657,7 @@ void DarlingServer::Thread::doWork() {
 			}
 			// we were in the middle of processing a call and we need to resume now
 			_suspended = false;
-			_resumeContext.uc_link = &backToThreadTopContext;
+			_resumeContext.uc_link = &_topContext;
 			_rwlock.unlock();
 
 			if (_continuationCallback) {
@@ -673,7 +669,7 @@ void DarlingServer::Thread::doWork() {
 				_resumeContext.uc_stack.ss_sp = _stack.base;
 				_resumeContext.uc_stack.ss_size = _stack.size;
 				_resumeContext.uc_stack.ss_flags = 0;
-				_resumeContext.uc_link = &backToThreadTopContext;
+				_resumeContext.uc_link = &_topContext;
 				makecontext(&_resumeContext, microthreadContinuation, 0);
 			} else {
 				// otherwise, we expect to have a valid stack to continue where we left off
@@ -681,7 +677,7 @@ void DarlingServer::Thread::doWork() {
 			}
 
 #if DSERVER_ASAN
-			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack.base, _stack.size);
+			__sanitizer_start_switch_fiber(&_asanOldFakeStack, _stack.base, _stack.size);
 #endif
 
 			setcontext(&_resumeContext);
@@ -705,11 +701,11 @@ void DarlingServer::Thread::doWork() {
 			newContext.uc_stack.ss_sp = _stack.base;
 			newContext.uc_stack.ss_size = _stack.size;
 			newContext.uc_stack.ss_flags = 0;
-			newContext.uc_link = &backToThreadTopContext;
+			newContext.uc_link = &_topContext;
 			makecontext(&newContext, microthreadWorker, 0);
 
 #if DSERVER_ASAN
-			__sanitizer_start_switch_fiber(&asanOldFakeStack, _stack.base, _stack.size);
+			__sanitizer_start_switch_fiber(&_asanOldFakeStack, _stack.base, _stack.size);
 #endif
 
 			setcontext(&newContext);
@@ -721,6 +717,9 @@ void DarlingServer::Thread::doWork() {
 
 doneWorking:
 	// we must be holding `_rwlock` when we get here
+	// Detach the unlock before publishing that another host may run us.
+	// Releasing it can wake a host that immediately suspends with a new lock.
+	libsimple_lock_t* unlockMe = std::exchange(_unlockMeWhenSuspending, nullptr);
 	if (_running) {
 		dtape_thread_exiting(_dtapeThread);
 		currentThreadVar = nullptr;
@@ -757,9 +756,8 @@ doneWorking:
 
 		_rwlock.unlock();
 	}
-	if (unlockMeWhenSuspending) {
-		libsimple_lock_unlock(unlockMeWhenSuspending);
-		unlockMeWhenSuspending = nullptr;
+	if (unlockMe) {
+		libsimple_lock_unlock(unlockMe);
 	}
 	_runningCondvar.notify_all();
 	if (canRelease) {
@@ -768,8 +766,8 @@ doneWorking:
 	return;
 };
 
-void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, libsimple_lock_t* unlockMe) {
-	if (this != currentThreadVar.get()) {
+[[gnu::noinline]] void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, libsimple_lock_t* unlockMe) {
+	if (this != currentThread().get()) {
 		throw std::runtime_error("Attempt to suspend thread other than current thread");
 	}
 
@@ -781,7 +779,7 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 	_suspended = true;
 	_rwlock.unlock();
 
-	unlockMeWhenSuspending = unlockMe;
+	_unlockMeWhenSuspending = unlockMe;
 
 	getcontext(&_resumeContext);
 
@@ -789,19 +787,19 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 	if (_suspended) {
 		if (continuationCallback) {
 			// when suspendeding with a continuation, the current continuation and call are discarded (since they can no longer be safely returned to)
-			currentContinuation = nullptr;
+			_currentContinuation = nullptr;
 
-			_continuationCallback = continuationCallback;
+			_continuationCallback = std::move(continuationCallback);
 		}
 		// jump back to the top of the microthread
 		_rwlock.unlock();
 
 #if DSERVER_ASAN
 		// if we have a continuation, we don't expect to come back here
-		__sanitizer_start_switch_fiber((continuationCallback) ? nullptr : &asanOldFakeStack, asanOldStackBottom, asanOldStackSize);
+		__sanitizer_start_switch_fiber((_continuationCallback) ? nullptr : &_asanOldFakeStack, _asanOldStackBottom, _asanOldStackSize);
 #endif
 
-		setcontext(&backToThreadTopContext);
+		setcontext(&_topContext);
 		__builtin_unreachable();
 	} else {
 		// we've been resumed
@@ -813,8 +811,8 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 		_rwlock.unlock();
 
 #if DSERVER_ASAN
-		__sanitizer_finish_switch_fiber(asanOldFakeStack, &asanOldStackBottom, &asanOldStackSize);
-		asanOldFakeStack = nullptr;
+		__sanitizer_finish_switch_fiber(_asanOldFakeStack, &_asanOldStackBottom, &_asanOldStackSize);
+		_asanOldFakeStack = nullptr;
 #endif
 	}
 };
@@ -843,7 +841,7 @@ void DarlingServer::Thread::terminate() {
 	_rwlock.lock();
 	_terminating = true;
 
-	if (currentThreadVar.get() == this) {
+	if (currentThread().get() == this) {
 		// if it's the current thread, just suspend it;
 		// when we return to the "top" of the microthread,
 		// doWork() will see that it's terminating and clean up
@@ -863,7 +861,9 @@ void DarlingServer::Thread::terminate() {
 	}
 };
 
-std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::currentThread() {
+// Returning a value prevents the compiler from treating this as a pure TLS
+// address computation and reusing that address after a microthread migrates.
+[[gnu::noinline]] std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::currentThread() {
 	return currentThreadVar;
 };
 
@@ -926,38 +926,39 @@ void DarlingServer::Thread::interruptEnable() {
 };
 
 void DarlingServer::Thread::syscallReturn(int resultCode) {
-	if (!currentThreadVar) {
+	Thread* self = currentThread().get();
+	if (!self) {
 		throw std::runtime_error("syscallReturn() called with no current thread");
 	}
 
 	{
-		auto call = (currentThreadVar->_interruptedForSignal) ? currentThreadVar->_interrupts.top().interruptedCall : currentThreadVar->_activeCall;
+		auto call = (self->_interruptedForSignal) ? self->_interrupts.top().interruptedCall : self->_activeCall;
 		if (!call || !call->isXNUTrap()) {
 			throw std::runtime_error("Attempt to return from syscall on thread with no active syscall");
 		}
 		if (call->isBSDTrap()) {
-			call->sendBSDReply(resultCode, currentThreadVar->_bsdReturnValue);
+			call->sendBSDReply(resultCode, self->_bsdReturnValue);
 		} else {
 			call->sendBasicReply(resultCode);
 		}
 	}
 
-	if (currentThreadVar->_interruptedForSignal) {
-		currentThreadVar->_didSyscallReturnDuringInterrupt = true;
+	if (self->_interruptedForSignal) {
+		self->_didSyscallReturnDuringInterrupt = true;
 #if DSERVER_ASAN
-		if (currentThreadVar->_handlingInterruptedCall) {
-			__sanitizer_start_switch_fiber(nullptr, currentThreadVar->_stack.base, currentThreadVar->_stack.size);
+		if (self->_handlingInterruptedCall) {
+			__sanitizer_start_switch_fiber(nullptr, self->_stack.base, self->_stack.size);
 		}
 #endif
-		setcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+		setcontext(&self->_syscallReturnHereDuringInterrupt);
 		__builtin_unreachable();
 	}
 
 	// jump back to the top of the thread
 #if DSERVER_ASAN
-	__sanitizer_start_switch_fiber(nullptr, asanOldStackBottom, asanOldStackSize);
+	__sanitizer_start_switch_fiber(nullptr, self->_asanOldStackBottom, self->_asanOldStackSize);
 #endif
-	setcontext(&backToThreadTopContext);
+	setcontext(&self->_topContext);
 	__builtin_unreachable();
 };
 
@@ -1829,7 +1830,7 @@ void DarlingServer::Thread::sendSignal(int signal) const {
 
 void DarlingServer::Thread::jumpToResume(void* stack, size_t stackSize) {
 #if DSERVER_ASAN
-	__sanitizer_start_switch_fiber(&asanOldFakeStack, stack, stackSize);
+	__sanitizer_start_switch_fiber(&_asanOldFakeStack, stack, stackSize);
 #endif
 	setcontext(&_resumeContext);
 	__builtin_unreachable();
@@ -1908,63 +1909,63 @@ void DarlingServer::Thread::_scheduleRelease() {
 	});
 };
 
-static thread_local std::function<void()> interruptedContinuation = nullptr;
-
 void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
 	// FIXME: this currently does not work properly if the thread was suspended waiting for a lock
+	Thread* self = currentThread().get();
+	auto& interrupt = self->_interrupts.top();
 
 	{
-		std::unique_lock lock(currentThreadVar->_rwlock);
+		std::unique_lock lock(self->_rwlock);
 
 		// replies the client pushed back before this interrupt was entered were sent before anything saved since
-		auto& savedReplies = currentThreadVar->_interrupts.top().savedReplies;
-		while (!currentThreadVar->_pendingSavedReplies.empty()) {
-			savedReplies.push_front(std::move(currentThreadVar->_pendingSavedReplies.back()));
-			currentThreadVar->_pendingSavedReplies.pop_back();
+		auto& savedReplies = interrupt.savedReplies;
+		while (!self->_pendingSavedReplies.empty()) {
+			savedReplies.push_front(std::move(self->_pendingSavedReplies.back()));
+			self->_pendingSavedReplies.pop_back();
 		}
 
-		currentThreadVar->_interruptedForSignal = true;
+		self->_interruptedForSignal = true;
 
-		interruptedContinuation = currentThreadVar->_interruptedContinuation;
-		currentThreadVar->_interruptedContinuation = nullptr;
+		interrupt.continuation = std::exchange(self->_interruptedContinuation, nullptr);
 	}
 
-	dtape_thread_sigexc_enter(currentThreadVar->_dtapeThread);
+	dtape_thread_sigexc_enter(self->_dtapeThread);
 
-	currentThreadVar->_didSyscallReturnDuringInterrupt = false;
-	getcontext(&currentThreadVar->_syscallReturnHereDuringInterrupt);
+	self->_didSyscallReturnDuringInterrupt = false;
+	getcontext(&self->_syscallReturnHereDuringInterrupt);
 
-	if (!currentThreadVar->_didSyscallReturnDuringInterrupt) {
-		if (interruptedContinuation) {
-			interruptedContinuation();
-		} else if (currentThreadVar->_interrupts.top().interruptedCall) {
-			currentThreadVar->_handlingInterruptedCall = true;
-			currentThreadVar->_pendingCallOverride = true;
-			currentThreadVar->jumpToResume(currentThreadVar->_interrupts.top().savedStack.base, currentThreadVar->_interrupts.top().savedStack.size);
+	if (!self->_didSyscallReturnDuringInterrupt) {
+		if (interrupt.continuation) {
+			interrupt.continuation();
+		} else if (interrupt.interruptedCall) {
+			self->_handlingInterruptedCall = true;
+			self->_pendingCallOverride = true;
+			self->jumpToResume(interrupt.savedStack.base, interrupt.savedStack.size);
 		}
-	} else if (currentThreadVar->_handlingInterruptedCall) {
+	} else if (self->_handlingInterruptedCall) {
 #if DSERVER_ASAN
 		const void* dummy;
 		size_t dummy2;
 		__sanitizer_finish_switch_fiber(nullptr, &dummy, &dummy2);
 #endif
 
-		currentThreadVar->_handlingInterruptedCall = false;
-		currentThreadVar->_pendingCallOverride = false;
+		self->_handlingInterruptedCall = false;
+		self->_pendingCallOverride = false;
 	}
 
-	interruptedContinuation = nullptr;
+	interrupt.continuation = nullptr;
 
 	{
-		std::unique_lock lock(currentThreadVar->_rwlock);
+		std::unique_lock lock(self->_rwlock);
 
-		if (currentThreadVar->_interrupts.top().savedStack.isValid()) {
-			stackPool.free(currentThreadVar->_interrupts.top().savedStack);
+		if (interrupt.savedStack.isValid()) {
+			stackPool.free(interrupt.savedStack);
 		}
+		interrupt.savedContinuation = nullptr;
 
-		currentThreadVar->_interruptedForSignal = false;
-		currentThreadVar->_interrupts.top().interruptedCall = nullptr;
+		self->_interruptedForSignal = false;
+		interrupt.interruptedCall = nullptr;
 	}
 
-	dtape_thread_sigexc_enter2(currentThreadVar->_dtapeThread);
+	dtape_thread_sigexc_enter2(self->_dtapeThread);
 };

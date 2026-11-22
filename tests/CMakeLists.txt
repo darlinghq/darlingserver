@@ -103,6 +103,13 @@ add_custom_command(
 	VERBATIM
 )
 add_custom_command(
+	OUTPUT ${gen}/microthread.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh ${host}/microthread-inc.sh ${root} ${gen}/microthread.inc
+	DEPENDS ${host}/microthread-inc.sh ${host}/extract-static.sh ${root}/src/thread.cpp
+	VERBATIM
+)
+add_custom_command(
 	OUTPUT ${gen}/process_maps.inc
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/process_maps.inc
@@ -156,6 +163,10 @@ target_compile_definitions(dserver_launchd_handshake_test PRIVATE LAUNCHD_HANDSH
 
 dserver_host_test(thread_discovery SOURCES ${host}/thread_discovery_test.cpp ${gen}/thread_discovery.inc)
 target_compile_definitions(dserver_thread_discovery_test PRIVATE THREAD_DISCOVERY_INC="${gen}/thread_discovery.inc")
+
+dserver_host_test(microthread_migration SOURCES ${host}/microthread_migration_test.cpp ${gen}/microthread.inc)
+target_compile_options(dserver_microthread_migration_test PRIVATE -O2)
+target_compile_definitions(dserver_microthread_migration_test PRIVATE MICROTHREAD_INC="${gen}/microthread.inc")
 
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
 target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)
