@@ -10,6 +10,7 @@
 #include <mach/port.h>
 
 struct ipc_port;
+struct ipc_pset;
 struct ipc_mqueue;
 struct ipc_kmsg;
 struct ipc_space;
@@ -21,6 +22,26 @@ struct dtape_task;
 // puts the port in shared-queue mode if the space is the current task's, the task has a region,
 // and the port is a plain one. nothing locked
 void dtape_sq_port_created(struct ipc_space* space, mach_port_name_t name);
+
+// a port set was just created with mach_port_allocate(). puts it in the mode under the same conditions as a port.
+// nothing locked
+void dtape_sq_set_created(struct ipc_space* space, mach_port_name_t name);
+
+// ipc_pset_add(): `port` joins `pset` (both locked, no mqueue locked), before XNU links them. Both in the mode: the
+// port becomes a member without leaving it. Otherwise the one that is in the mode leaves (the set takes all its
+// members with it)
+void dtape_sq_pset_add(struct ipc_pset* pset, struct ipc_port* port);
+
+// ipc_pset_remove(): `port` leaves `pset` (both locked); and ipc_pset_remove_from_all(): the port leaves its sets
+void dtape_sq_pset_remove(struct ipc_pset* pset, struct ipc_port* port);
+void dtape_sq_port_removed_from_sets(struct ipc_port* port);
+
+// ipc_pset_destroy(): the set is destroyed (locked); its members stay in the mode
+void dtape_sq_pset_destroyed(struct ipc_pset* pset);
+
+// takes the set and its members out of the mode and moves the members' queues to their ports (a knote on the set is
+// being attached). the space locked; no port, set or mqueue lock held
+void dtape_sq_pset_leave(struct ipc_pset* pset);
 
 // takes the port out of shared-queue mode, if it is in it: its queued messages move to its ipc_mqueue
 // (in order, with the seqno and make-send count they imply) and its local waiters are woken.

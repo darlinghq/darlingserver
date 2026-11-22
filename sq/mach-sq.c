@@ -29,9 +29,10 @@ _Static_assert(sizeof(dsq_node_t) == DSQ_NODE_SIZE, "node size");
 _Static_assert(offsetof(dsq_node_t, msg) == DSQ_NODE_HEADER, "node header size");
 _Static_assert(sizeof(dsq_s_header_t) == 1024, "S header size");
 _Static_assert(sizeof(dsq_name_entry_t) == 12, "name entry size");
-_Static_assert(sizeof(dsq_s_slot_t) == 32, "S slot size");
+_Static_assert(sizeof(dsq_s_slot_t) == 40, "S slot size");
 _Static_assert(sizeof(dsq_q_slot_t) == 64, "Q slot size");
 _Static_assert(offsetof(dsq_q_slot_t, deq) == 8, "Q slot layout");
+_Static_assert(DSQ_SET_WORDS * 32 == DSQ_SLOTS, "set bitmaps cover every slot");
 _Static_assert(DSQ_NODES < DSQ_NONE, "node indices fit in 16 bits");
 _Static_assert(DSQ_SLOTS <= 0x10000, "slot numbers fit in 16 bits");
 
@@ -58,20 +59,44 @@ static inline uint64_t dsq_node_key(const dsq_node_t* n)
 	return __atomic_load_n((const dsq_word_t*) n, __ATOMIC_ACQUIRE);
 }
 
+// whether the node published at `seq` (the newest queued node when it is looked at through a head with `seq`)
+// is still queued when deq is `d`: only nodes with seq >= deq are
+static inline bool dsq_still_queued(uint32_t seq_after, uint64_t d)
+{
+	return ((seq_after - 1 - DSQ_D_DEQ(d)) & DSQ_SEQ_MASK) < DSQ_NODES;
+}
+
+uint32_t dsq_stamp_next(const dsq_view_t* v)
+{
+	for (;;)
+	{
+		uint32_t s = __atomic_add_fetch(&v->q->stamp, 1, __ATOMIC_RELAXED);
+		if (s != 0)
+			return s;
+	}
+}
+
 int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epoch, uint32_t qlimit,
-		uint32_t attempts, uint32_t* seq_out)
+		uint32_t attempts, uint32_t* seq_out, uint32_t* set_out)
 {
 	dsq_node_t* n = dsq_node(v, index);
 	if (n == NULL || slot >= DSQ_SLOTS)
 		return DSQ_CORRUPT;
 
 	dsq_q_slot_t* qs = &v->q->slots[slot];
+	const dsq_s_slot_t* ss = &v->s->slots[slot];
+	uint32_t stamp = 0;
+
+	if (set_out != NULL)
+		*set_out = DSQ_NONE;
 
 	for (uint32_t i = 0; attempts == 0 || i < attempts; i++)
 	{
+		// a port in a set: the message gets the ready run of its queue (below)
+		bool in_set = __atomic_load_n(&ss->set_slot, __ATOMIC_ACQUIRE) < DSQ_SLOTS;
 		// deq before head: deq only grows, so a length computed from an older deq is never too small,
 		// and an open head means deq was read before the slot closed
-		uint64_t d = (qlimit != UINT32_MAX) ? dsq_load(&qs->deq) : 0;
+		uint64_t d = (qlimit != UINT32_MAX || in_set) ? dsq_load(&qs->deq) : 0;
 		uint64_t h = dsq_load(&qs->head);
 		if (DSQ_IS_CLOSED(h))
 			return DSQ_CLOSED_Q;
@@ -81,15 +106,54 @@ int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epo
 			return DSQ_FULL;
 
 		uint32_t seq = DSQ_H_SEQ(h);
+		uint32_t run = 0;
+
+		if (in_set)
+		{
+			if (DSQ_LEN(h, d) == 0)
+			{
+				// empty: a new run (the port becomes ready now)
+				if (stamp == 0)
+					stamp = dsq_stamp_next(v);
+				run = stamp;
+			}
+			else
+			{
+				// the queue continues its run: that of its newest node. the node is read while it is queued (deq
+				// read again after the node, and still <= its seq), so it is the node's own value
+				const dsq_node_t* top = dsq_node(v, DSQ_H_TOP(h));
+				if (top == NULL)
+					continue;
+				uint64_t key = dsq_node_key(top);
+				if ((uint32_t) key != ((seq - 1) & DSQ_SEQ_MASK) || (uint16_t) (key >> 32) != slot)
+					continue;
+				run = __atomic_load_n(&top->run, __ATOMIC_RELAXED);
+				__atomic_thread_fence(__ATOMIC_ACQUIRE);
+				if (!dsq_still_queued(seq, dsq_load(&qs->deq)))
+					continue;
+			}
+		}
+		__atomic_store_n(&n->run, run, __ATOMIC_RELAXED);
+
 		uint64_t key = (uint64_t) seq | ((uint64_t) slot << 32) | ((uint64_t) DSQ_H_TOP(h) << 48);
 		__atomic_store_n((dsq_word_t*) n, key, __ATOMIC_RELAXED);
 
 		uint64_t nh = DSQ_H_MAKE(seq + 1, false, index, DSQ_H_EPOCH(h));
-		if (__atomic_compare_exchange_n(&qs->head, &h, nh, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		if (__atomic_compare_exchange_n(&qs->head, &h, nh, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
 		{
 			__atomic_store_n(&qs->hint[seq % DSQ_HINTS], (uint16_t) index, __ATOMIC_RELAXED);
 			if (seq_out != NULL)
 				*seq_out = seq;
+
+			// the set's receivers: its word changes after the message is queued. the load is after the
+			// CAS in the total order, and a join of the server stores set_slot before it changes the word
+			uint32_t set = __atomic_load_n(&ss->set_slot, __ATOMIC_SEQ_CST);
+			if (set < DSQ_SLOTS)
+			{
+				__atomic_add_fetch(&v->q->slots[set].setword, 1, __ATOMIC_SEQ_CST);
+				if (set_out != NULL)
+					*set_out = set;
+			}
 			return DSQ_OK;
 		}
 	}
@@ -172,6 +236,8 @@ void dsq_close(const dsq_view_t* v, uint32_t slot, uint64_t* head_out, uint64_t*
 	// deq word makes a take that read it before fail; the value it had is the queue's final state
 	uint64_t h = __atomic_fetch_or(&qs->head, (uint64_t) DSQ_CLOSED, __ATOMIC_SEQ_CST);
 	uint64_t d = __atomic_fetch_add(&qs->deq, 1, __ATOMIC_SEQ_CST);
+	// a set slot's receivers wait on setword
+	__atomic_add_fetch(&qs->setword, 1, __ATOMIC_SEQ_CST);
 	*head_out = h | DSQ_CLOSED;
 	*deq_out = d;
 }
@@ -261,6 +327,137 @@ uint32_t dsq_collect(const dsq_view_t* v, uint32_t slot, uint64_t head, uint64_t
 		index = (uint32_t) (key >> 48);
 	}
 	return found;
+}
+
+// --- port sets -----------------------------------------------------------------------------------------
+
+static inline bool dsq_prio_before(uint32_t a, uint32_t b)
+{
+	return (int32_t) (a - b) < 0;
+}
+
+void dsq_set_enter(const dsq_view_t* v, uint32_t set)
+{
+	__atomic_add_fetch(&v->q->slots[set].inflight, 1, __ATOMIC_SEQ_CST);
+}
+
+void dsq_set_exit(const dsq_view_t* v, uint32_t set)
+{
+	__atomic_sub_fetch(&v->q->slots[set].inflight, 1, __ATOMIC_SEQ_CST);
+}
+
+bool dsq_set_has_member(const dsq_view_t* v, uint32_t set, uint32_t member)
+{
+	if (set >= DSQ_SLOTS || member >= DSQ_SLOTS)
+		return false;
+	return (__atomic_load_n(&v->s->members[set][member / 32], __ATOMIC_SEQ_CST) & (1u << (member % 32))) != 0;
+}
+
+int dsq_set_select(const dsq_view_t* v, uint32_t set, uint32_t epoch, dsq_set_pick_t* pick)
+{
+	if (set >= DSQ_SLOTS)
+		return DSQ_CORRUPT;
+
+	const dsq_q_slot_t* qs = &v->q->slots[set];
+	uint64_t h = dsq_load(&qs->head);
+	bool found = false;
+	bool retry = false;
+
+	if (DSQ_IS_CLOSED(h))
+		return DSQ_CLOSED_Q;
+	if (epoch != DSQ_EPOCH_ANY && DSQ_H_EPOCH(h) != epoch)
+		return DSQ_STALE;
+
+	for (uint32_t w = 0; w < DSQ_SET_WORDS; w++)
+	{
+		uint32_t bits = __atomic_load_n(&v->s->members[set][w], __ATOMIC_SEQ_CST);
+		while (bits != 0)
+		{
+			uint32_t m = w * 32 + (uint32_t) __builtin_ctz(bits);
+			bits &= bits - 1;
+
+			bool settled = false;
+			for (unsigned int attempt = 0; attempt < 4 && !settled; attempt++)
+			{
+				uint64_t d;
+				uint32_t index;
+				int r = dsq_head(v, m, DSQ_EPOCH_ANY, &d, &index);
+
+				if (r == DSQ_RETRY)
+				{
+					retry = true;
+					continue;
+				}
+				// empty, closed (it is leaving the mode) or anything else: nothing from this member
+				settled = true;
+				if (r != DSQ_OK)
+					break;
+
+				const dsq_node_t* n = dsq_node(v, index);
+				uint32_t run = __atomic_load_n(&n->run, __ATOMIC_RELAXED);
+				uint32_t flags = __atomic_load_n(&n->flags, __ATOMIC_RELAXED);
+				uint32_t size = __atomic_load_n(&n->size, __ATOMIC_RELAXED);
+				uint32_t aux = __atomic_load_n(&n->aux, __ATOMIC_RELAXED);
+				uint32_t floor = __atomic_load_n(&v->s->slots[m].floor, __ATOMIC_RELAXED);
+				__atomic_thread_fence(__ATOMIC_ACQUIRE);
+				if (dsq_load(&v->q->slots[m].deq) != d)
+				{
+					// the node was taken meanwhile (what was read may belong to another message)
+					settled = false;
+					continue;
+				}
+
+				uint32_t prio = (run == 0 || dsq_prio_before(run, floor)) ? floor : run;
+				if (!found || dsq_prio_before(prio, pick->prio))
+				{
+					pick->member = m;
+					pick->deq = d;
+					pick->index = index;
+					pick->flags = flags;
+					pick->size = size;
+					pick->aux = aux;
+					pick->prio = prio;
+					found = true;
+				}
+			}
+			if (!settled)
+				retry = true;
+		}
+	}
+
+	if (found)
+		return DSQ_OK;
+	return retry ? DSQ_RETRY : DSQ_EMPTY;
+}
+
+bool dsq_set_take(const dsq_view_t* v, uint32_t set, const dsq_set_pick_t* pick, bool made_send, uint32_t* seqno_out)
+{
+	// still a member, after the caller has counted itself in (dsq_set_enter()): a server that removed the member
+	// before that sees no one inside, and one that removed it later closes the member, which fails the CAS below
+	if (!dsq_set_has_member(v, set, pick->member))
+		return false;
+	return dsq_take(v, pick->member, pick->deq, made_send, seqno_out);
+}
+
+void dsq_set_member_add(const dsq_view_t* v, uint32_t set, uint32_t member, uint32_t floor)
+{
+	// the port's own fields first: a sender that sees the set stamps its messages above the floor, and one that
+	// does not leaves them with run 0, which is ordered by the floor
+	__atomic_store_n(&v->s->slots[member].floor, floor, __ATOMIC_RELEASE);
+	__atomic_store_n(&v->s->slots[member].set_slot, (uint16_t) set, __ATOMIC_SEQ_CST);
+	__atomic_fetch_or(&v->s->members[set][member / 32], 1u << (member % 32), __ATOMIC_SEQ_CST);
+	__atomic_add_fetch(&v->q->slots[set].setword, 1, __ATOMIC_SEQ_CST);
+}
+
+bool dsq_set_member_remove(const dsq_view_t* v, uint32_t set, uint32_t member)
+{
+	bool quiet;
+
+	__atomic_fetch_and(&v->s->members[set][member / 32], ~(1u << (member % 32)), __ATOMIC_SEQ_CST);
+	quiet = __atomic_load_n(&v->q->slots[set].inflight, __ATOMIC_SEQ_CST) == 0;
+	__atomic_store_n(&v->s->slots[member].set_slot, (uint16_t) DSQ_NONE, __ATOMIC_SEQ_CST);
+	__atomic_add_fetch(&v->q->slots[set].setword, 1, __ATOMIC_SEQ_CST);
+	return quiet;
 }
 
 static void dsq_push_chain(dsq_word_t* top, uint16_t* next, uint32_t first, uint32_t last)
@@ -356,6 +553,7 @@ void dsq_region_init(const dsq_view_t* v)
 		q->slots[i].deq = DSQ_D_MAKE(0, 0);
 		for (uint32_t k = 0; k < DSQ_HINTS; k++)
 			q->slots[i].hint[k] = DSQ_NONE;
+		s->slots[i].set_slot = DSQ_NONE;
 	}
 
 	for (uint32_t i = 0; i < DSQ_TNODES; i++)
@@ -383,6 +581,11 @@ uint32_t dsq_slot_open(const dsq_view_t* v, uint32_t slot, uint32_t seqno)
 	uint32_t count = DSQ_D_COUNT(dsq_load(&qs->deq));
 	count += (seq - count) & DSQ_SEQ_MASK;
 	__atomic_store_n(&v->s->slots[slot].seqno_base, seqno - count, __ATOMIC_RELEASE);
+	// not in a set; for a set slot the word moves on, so a stale waiter's futex word no longer matches either
+	__atomic_store_n(&v->s->slots[slot].set_slot, (uint16_t) DSQ_NONE, __ATOMIC_RELEASE);
+	__atomic_store_n(&v->s->slots[slot].floor, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&v->s->slots[slot].kind, (uint16_t) DSQ_KIND_PORT, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&qs->setword, 1, __ATOMIC_SEQ_CST);
 	__atomic_store_n(&qs->deq, DSQ_D_MAKE(count, 0), __ATOMIC_RELEASE);
 	__atomic_store_n(&qs->head, DSQ_H_MAKE(seq, false, DSQ_NONE, epoch), __ATOMIC_RELEASE);
 	return epoch;

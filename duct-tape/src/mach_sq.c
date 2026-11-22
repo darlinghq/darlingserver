@@ -47,7 +47,9 @@
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_port.h>
+#include <ipc/ipc_pset.h>
 #include <ipc/ipc_mqueue.h>
+#include <kern/waitq.h>
 #include <ipc/ipc_kmsg.h>
 #include <mach/mach_traps.h>
 
@@ -60,7 +62,10 @@ typedef struct dtape_sq_slot {
 	struct dtape_sq_region* region;
 	uint32_t index;
 	uint32_t next_free;
-	ipc_port_t port;            // NULL while the slot is free
+	ipc_port_t port;            // NULL while the slot is free (and for a set slot)
+	ipc_pset_t pset;            // a set slot: its port set; NULL otherwise
+	// a member port: the slot of the set it is in the mode with (the set's bitmap in S says the same)
+	struct dtape_sq_slot* set;
 	mach_port_name_t name;      // the receive right's name
 	uint32_t rights;            // DSQ_RIGHT_* recorded in the name table
 	uint32_t tokens_published;  // token ids: published in id order, and taken in that order too
@@ -97,6 +102,11 @@ static inline dtape_sq_slot_t* sq_port_slot(ipc_port_t port)
 	return __atomic_load_n(&port->ip_sq, __ATOMIC_ACQUIRE);
 }
 
+static inline dtape_sq_slot_t* sq_pset_slot(ipc_pset_t pset)
+{
+	return __atomic_load_n(&pset->ips_sq, __ATOMIC_ACQUIRE);
+}
+
 // wakes the task's threads waiting on a queue word (the futex word is its low half)
 static void sq_wake_count(dtape_sq_region_t* region, uint64_t* word, int count)
 {
@@ -124,7 +134,7 @@ static void sq_poison(dtape_sq_region_t* region, const char* why)
 	// every slot closes now; each port's queue moves to the port the next time the server has it locked
 	for (uint32_t i = 0; i < DSQ_SLOTS; i++) {
 		dtape_sq_slot_t* slot = &region->slots[i];
-		if (slot->port != IP_NULL && !slot->closing) {
+		if ((slot->port != IP_NULL || slot->pset != NULL) && !slot->closing) {
 			sq_close_for_later(slot);
 		}
 	}
@@ -217,7 +227,7 @@ void dtape_sq_task_destroy(dtape_task_t* task)
 
 	// the space has been terminated, so every port has left the mode
 	for (uint32_t i = 0; i < DSQ_SLOTS; i++) {
-		if (region->slots[i].port != IP_NULL) {
+		if (region->slots[i].port != IP_NULL || region->slots[i].pset != NULL) {
 			dtape_log_error("%d: a port is still in shared-queue mode after its space was terminated", task->saved_pid);
 		}
 	}
@@ -227,14 +237,21 @@ void dtape_sq_task_destroy(dtape_task_t* task)
 	free(region);
 }
 
+// mk_timer ports (kernel objects whose only message is the kernel's expiry message, with one preallocated kmsg) take
+// part: they are the timer of CF's run loops, which waits for it in a set with its other ports
+static bool sq_port_is_timer(ipc_port_t port)
+{
+	return ip_is_kobject(port) && ip_kotype(port) == IKOT_TIMER;
+}
+
 static bool sq_port_eligible(ipc_port_t port)
 {
 	return ip_active(port) &&
-	       !ip_is_kobject(port) &&
+	       (!ip_is_kobject(port) || sq_port_is_timer(port)) &&
 	       !port->ip_specialreply &&
 	       !port->ip_impdonation &&
 	       !port->ip_tempowner &&
-	       !IP_PREALLOC(port) &&
+	       (!IP_PREALLOC(port) || sq_port_is_timer(port)) &&
 	       !ip_enforce_msg_filtering(port) &&
 	       port->ip_in_pset == 0 &&
 	       port->ip_sync_link_state == PORT_SYNC_LINK_ANY &&
@@ -283,7 +300,8 @@ void dtape_sq_port_created(ipc_space_t space, mach_port_name_t name)
 	if (!region->poisoned && region->free_slot != UINT32_MAX) {
 		dtape_sq_slot_t* slot = &region->slots[region->free_slot];
 		dsq_s_slot_t* sslot = &region->view.s->slots[slot->index];
-		uint32_t rights = DSQ_RIGHT_RECEIVE | ((entry->ie_bits & MACH_PORT_TYPE_SEND) ? DSQ_RIGHT_SEND : 0);
+		uint32_t rights = DSQ_RIGHT_RECEIVE | ((entry->ie_bits & MACH_PORT_TYPE_SEND) ? DSQ_RIGHT_SEND : 0) |
+		                  (sq_port_is_timer(port) ? DSQ_RIGHT_NOSEND : 0);
 		uint32_t epoch;
 
 		sslot->name = name;
@@ -300,6 +318,8 @@ void dtape_sq_port_created(ipc_space_t space, mach_port_name_t name)
 			slot->rights = rights;
 			slot->tokens_published = 0;
 			slot->tokens_taken = 0;
+			slot->pset = NULL;
+			slot->set = NULL;
 			__atomic_store_n(&port->ip_sq, slot, __ATOMIC_RELEASE);
 		} else {
 			// the name table is full: the port stays normal
@@ -369,6 +389,84 @@ static void sq_close_for_later(dtape_sq_slot_t* slot)
 	sq_wake(region, &qslot->deq);
 }
 
+// ---- port sets ------------------------------------------------------------------------------------------
+
+// `member` is no longer a member of its set (region locked). The set's bitmap, the member's S fields and the
+// server's link are cleared; the set's receivers are woken.
+static void sq_member_unlink_locked(dtape_sq_slot_t* member)
+{
+	dtape_sq_slot_t* set = member->set;
+	dtape_sq_region_t* region = member->region;
+
+	if (!set) {
+		return;
+	}
+	(void) dsq_set_member_remove(&region->view, set->index, member->index);
+	member->set = NULL;
+}
+
+// takes the set slot and every member's slot out of the mode (region locked): a set the task can't receive on
+// through the region can't have members whose queues are in it. Only closes; the queues of the members move to
+// their ports when each next gets a server operation, and all of them when the server next receives on the set
+// (sq_set_drain_members()).
+static void sq_set_close_all_for_later(dtape_sq_slot_t* set)
+{
+	dtape_sq_region_t* region = set->region;
+	dsq_q_slot_t* qslot = &region->view.q->slots[set->index];
+
+	if (set->closing) {
+		return;
+	}
+	__atomic_store_n(&region->view.s->slots[set->index].close_reason, DSQ_CLOSE_OTHER, __ATOMIC_RELEASE);
+	dsq_close(&region->view, set->index, &set->closed_head, &set->closed_deq);
+	set->closing = true;
+	sq_wake(region, (uint64_t*) &qslot->setword);
+
+	for (uint32_t w = 0; w < DSQ_SET_WORDS; w++) {
+		uint32_t bits = __atomic_load_n(&region->view.s->members[set->index][w], __ATOMIC_ACQUIRE);
+		while (bits != 0) {
+			dtape_sq_slot_t* member = &region->slots[w * 32 + (uint32_t) __builtin_ctz(bits)];
+			bits &= bits - 1;
+			if (member->port != IP_NULL && !member->closing) {
+				sq_close_for_later(member);
+			}
+		}
+	}
+}
+
+// the set slot is no longer needed (region locked): free it
+static void sq_set_finalize_locked(dtape_sq_slot_t* set)
+{
+	dtape_sq_region_t* region = set->region;
+
+	for (uint32_t w = 0; w < DSQ_SET_WORDS; w++) {
+		uint32_t bits = __atomic_load_n(&region->view.s->members[set->index][w], __ATOMIC_ACQUIRE);
+		while (bits != 0) {
+			dtape_sq_slot_t* member = &region->slots[w * 32 + (uint32_t) __builtin_ctz(bits)];
+			bits &= bits - 1;
+			if (member->set == set) {
+				sq_member_unlink_locked(member);
+			}
+		}
+	}
+	if (!set->closing) {
+		uint64_t h, d;
+		__atomic_store_n(&region->view.s->slots[set->index].close_reason, DSQ_CLOSE_DESTROYED, __ATOMIC_RELEASE);
+		dsq_close(&region->view, set->index, &h, &d);
+		sq_wake(region, (uint64_t*) &region->view.q->slots[set->index].setword);
+	}
+	dsq_name_remove(&region->view, set->name);
+	if (set->pset != NULL) {
+		__atomic_store_n(&set->pset->ips_sq, NULL, __ATOMIC_RELEASE);
+	}
+	set->pset = NULL;
+	set->name = MACH_PORT_NULL;
+	set->rights = 0;
+	set->closing = false;
+	set->next_free = region->free_slot;
+	region->free_slot = set->index;
+}
+
 void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 {
 	dtape_sq_slot_t* slot = sq_port_slot(port);
@@ -388,6 +486,12 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	qslot = &region->view.q->slots[slot->index];
 
 	lck_spin_lock(&region->lock);
+
+	// a member of a set: the set can't be received on through the region without it, unless the port is
+	// only going away (destroyed, or its receive right moves), which is a removal from the set
+	if (slot->set != NULL && reason != DSQ_CLOSE_DESTROYED && reason != DSQ_CLOSE_MOVED) {
+		sq_set_close_all_for_later(slot->set);
+	}
 
 	// a receiver woken by the close reads the reason
 	if (slot->closing) {
@@ -452,6 +556,7 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	sq_wake(region, &qslot->head);
 	sq_wake(region, &qslot->deq);
 
+	sq_member_unlink_locked(slot);
 	dsq_name_remove(&region->view, slot->name);
 	slot->port = IP_NULL;
 	slot->name = MACH_PORT_NULL;
@@ -462,6 +567,20 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	region->free_slot = slot->index;
 
 	lck_spin_unlock(&region->lock);
+
+	if (len > 0 && port->ip_in_pset != 0) {
+		// the port is in sets of XNU's: its messages are in its queue now, and the sets have to know (the
+		// port is posted to them, as ipc_mqueue_post() does when a message arrives)
+		uint64_t reserved_prepost = 0;
+		spl_t th_spl;
+		thread_t th = waitq_wakeup64_identify_locked(&mqueue->imq_wait_queue, IPC_MQUEUE_RECEIVE, THREAD_AWAKENED,
+		    &th_spl, &reserved_prepost, WAITQ_ALL_PRIORITIES, WAITQ_KEEP_LOCKED);
+		if (th != THREAD_NULL) {
+			// nothing waits on a port that was in the mode
+			thread_unlock(th);
+			splx(th_spl);
+		}
+	}
 }
 
 void dtape_sq_port_leave(ipc_port_t port, uint32_t reason)
@@ -472,6 +591,291 @@ void dtape_sq_port_leave(ipc_port_t port, uint32_t reason)
 	imq_lock(&port->ip_messages);
 	dtape_sq_port_leave_locked(port, reason);
 	imq_unlock(&port->ip_messages);
+}
+
+// ---- port sets ------------------------------------------------------------------------------------------
+
+void dtape_sq_set_created(ipc_space_t space, mach_port_name_t name)
+{
+	task_t xtask = current_task();
+	dtape_task_t* task;
+	dtape_sq_region_t* region;
+	ipc_entry_t entry;
+	ipc_pset_t pset;
+
+	if (!xtask || xtask->itk_space != space) {
+		return;
+	}
+	task = dtape_task_for_xnu_task(xtask);
+	region = __atomic_load_n(&task->sq_region, __ATOMIC_ACQUIRE);
+	if (!region || region->poisoned) {
+		return;
+	}
+
+	is_read_lock(space);
+	if (!is_active(space)) {
+		goto out_space;
+	}
+	entry = ipc_entry_lookup(space, name);
+	if (entry == IE_NULL || (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) == 0) {
+		goto out_space;
+	}
+	pset = ips_object_to_pset(entry->ie_object);
+
+	ips_lock(pset);
+	if (!ips_active(pset) || sq_pset_slot(pset)) {
+		goto out_pset;
+	}
+
+	lck_spin_lock(&region->lock);
+	if (!region->poisoned && region->free_slot != UINT32_MAX) {
+		dtape_sq_slot_t* slot = &region->slots[region->free_slot];
+		dsq_s_slot_t* sslot = &region->view.s->slots[slot->index];
+		uint32_t rights = DSQ_RIGHT_RECEIVE | DSQ_RIGHT_SET;
+		uint32_t epoch;
+
+		sslot->name = name;
+		sslot->qlimit = 0;
+		__atomic_store_n(&sslot->context, 0, __ATOMIC_RELAXED);
+		sslot->close_reason = DSQ_CLOSE_NONE;
+		__atomic_store_n(&sslot->gen, sslot->gen + 1, __ATOMIC_RELEASE);
+
+		epoch = dsq_slot_open(&region->view, slot->index, 0);
+		__atomic_store_n(&sslot->kind, (uint16_t) DSQ_KIND_SET, __ATOMIC_RELEASE);
+		if (dsq_name_set(&region->view, name, slot->index, rights, epoch)) {
+			region->free_slot = slot->next_free;
+			slot->port = IP_NULL;
+			slot->pset = pset;
+			slot->set = NULL;
+			slot->name = name;
+			slot->rights = rights;
+			slot->tokens_published = 0;
+			slot->tokens_taken = 0;
+			__atomic_store_n(&pset->ips_sq, slot, __ATOMIC_RELEASE);
+		} else {
+			// the name table is full: the set stays normal
+			uint64_t h, d;
+			dsq_close(&region->view, slot->index, &h, &d);
+		}
+	}
+	lck_spin_unlock(&region->lock);
+out_pset:
+	ips_unlock(pset);
+out_space:
+	is_read_unlock(space);
+}
+
+// `port` and `pset` locked (ipc_pset_add(), before the link is made)
+void dtape_sq_pset_add(ipc_pset_t pset, ipc_port_t port)
+{
+	dtape_sq_slot_t* pslot = sq_pset_slot(pset);
+	dtape_sq_slot_t* mslot = sq_port_slot(port);
+
+	if (!pslot && !mslot) {
+		return;
+	}
+
+	if (pslot && mslot && pslot->region == mslot->region) {
+		dtape_sq_region_t* region = pslot->region;
+		bool joined = false;
+
+		lck_spin_lock(&region->lock);
+		if (mslot->set == pslot) {
+			// already a member: XNU answers that
+			lck_spin_unlock(&region->lock);
+			return;
+		}
+		// not a member of another set, and nothing is leaving the mode. (a thread that waits on the port itself
+		// goes on doing so: the port's own word changes at every publish too)
+		if (!region->poisoned && !pslot->closing && !mslot->closing && mslot->set == NULL) {
+			dsq_set_member_add(&region->view, pslot->index, mslot->index, dsq_stamp_next(&region->view));
+			mslot->set = pslot;
+			joined = true;
+		}
+		lck_spin_unlock(&region->lock);
+		if (joined) {
+			// a receiver that is waiting looks again: the port may have messages
+			if (__atomic_load_n(&region->view.q->slots[pslot->index].rcv_waiters, __ATOMIC_ACQUIRE) != 0) {
+				sq_wake(region, (uint64_t*) &region->view.q->slots[pslot->index].setword);
+			}
+			return;
+		}
+	}
+
+	// every other combination: a set can only be received on through the region if all its members are in it
+	if (mslot) {
+		dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+	}
+	if (pslot) {
+		lck_spin_lock(&pslot->region->lock);
+		sq_set_close_all_for_later(pslot);
+		lck_spin_unlock(&pslot->region->lock);
+	}
+}
+
+// `port` leaves its set `pslot` (the port and the set locked)
+static void sq_pset_member_removed(ipc_port_t port, dtape_sq_slot_t* mslot, dtape_sq_slot_t* pslot)
+{
+	dtape_sq_region_t* region = mslot->region;
+	bool quiet;
+
+	lck_spin_lock(&region->lock);
+	if (mslot->set != pslot) {
+		lck_spin_unlock(&region->lock);
+		return;
+	}
+	quiet = dsq_set_member_remove(&region->view, pslot->index, mslot->index);
+	mslot->set = NULL;
+	lck_spin_unlock(&region->lock);
+
+	if (!quiet) {
+		// a thread of the task was looking for a message and may still take one from this port: the port leaves
+		// the mode, which makes such a take fail
+		dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+	}
+}
+
+void dtape_sq_pset_remove(ipc_pset_t pset, ipc_port_t port)
+{
+	dtape_sq_slot_t* pslot = sq_pset_slot(pset);
+	dtape_sq_slot_t* mslot = sq_port_slot(port);
+
+	if (pslot && mslot) {
+		sq_pset_member_removed(port, mslot, pslot);
+	}
+}
+
+void dtape_sq_port_removed_from_sets(ipc_port_t port)
+{
+	dtape_sq_slot_t* mslot = sq_port_slot(port);
+	dtape_sq_slot_t* pslot;
+
+	if (!mslot) {
+		return;
+	}
+	lck_spin_lock(&mslot->region->lock);
+	pslot = mslot->set;
+	lck_spin_unlock(&mslot->region->lock);
+	if (pslot) {
+		sq_pset_member_removed(port, mslot, pslot);
+	}
+}
+
+void dtape_sq_pset_destroyed(ipc_pset_t pset)
+{
+	dtape_sq_slot_t* pslot = sq_pset_slot(pset);
+
+	if (!pslot) {
+		return;
+	}
+	// the members stay in the mode as plain ports
+	lck_spin_lock(&pslot->region->lock);
+	sq_set_finalize_locked(pslot);
+	lck_spin_unlock(&pslot->region->lock);
+}
+
+// the priority of the oldest message in a closed member's queue (0 if it has none)
+static uint32_t sq_member_closed_prio(dtape_sq_region_t* region, dtape_sq_slot_t* member)
+{
+	uint16_t nodes[DSQ_NODES];
+	uint32_t len = DSQ_LEN(member->closed_head, member->closed_deq);
+	uint32_t floor = __atomic_load_n(&region->view.s->slots[member->index].floor, __ATOMIC_RELAXED);
+
+	if (!member->closing || len == 0 || len > DSQ_NODES) {
+		return 0;
+	}
+	for (uint32_t i = 0; i < len; i++) {
+		nodes[i] = DSQ_NONE;
+	}
+	if (dsq_collect(&region->view, member->index, member->closed_head, member->closed_deq, nodes) == 0 ||
+	    nodes[0] == DSQ_NONE) {
+		return floor;
+	}
+	uint32_t run = dsq_node(&region->view, nodes[0])->run;
+	return (run == 0 || (int32_t) (run - floor) < 0) ? floor : run;
+}
+
+// Moves the queues of the members of a set that has left the mode to their ports (the server holds no lock of any
+// port or set), the member that was ready longest first, so that XNU's own receive on the set finds the members
+// preposted in the order the shared queue would have served them. Then the set's slot is free.
+static void sq_set_drain_members(ipc_pset_t pset)
+{
+	struct entry {
+		ipc_port_t port;
+		dtape_sq_slot_t* slot;
+		uint32_t prio;
+	} members[DSQ_SLOTS];
+	dtape_sq_slot_t* pslot = sq_pset_slot(pset);
+	dtape_sq_region_t* region;
+	uint32_t count = 0;
+
+	if (!pslot) {
+		return;
+	}
+	region = pslot->region;
+
+	lck_spin_lock(&region->lock);
+	if (!pslot->closing) {
+		lck_spin_unlock(&region->lock);
+		return;
+	}
+	for (uint32_t w = 0; w < DSQ_SET_WORDS; w++) {
+		uint32_t bits = __atomic_load_n(&region->view.s->members[pslot->index][w], __ATOMIC_ACQUIRE);
+		while (bits != 0) {
+			dtape_sq_slot_t* member = &region->slots[w * 32 + (uint32_t) __builtin_ctz(bits)];
+			bits &= bits - 1;
+			if (member->port != IP_NULL) {
+				ip_reference(member->port);
+				members[count].port = member->port;
+				members[count].slot = member;
+				members[count].prio = sq_member_closed_prio(region, member);
+				count++;
+			}
+		}
+	}
+	lck_spin_unlock(&region->lock);
+
+	// insertion sort, by priority (wrapping compare)
+	for (uint32_t i = 1; i < count; i++) {
+		struct entry e = members[i];
+		uint32_t k = i;
+		while (k > 0 && (int32_t) (e.prio - members[k - 1].prio) < 0) {
+			members[k] = members[k - 1];
+			k--;
+		}
+		members[k] = e;
+	}
+
+	for (uint32_t i = 0; i < count; i++) {
+		ipc_port_t port = members[i].port;
+		ip_lock(port);
+		imq_lock(&port->ip_messages);
+		if (sq_port_slot(port) == members[i].slot) {
+			dtape_sq_port_leave_locked(port, DSQ_CLOSE_OTHER);
+		}
+		imq_unlock(&port->ip_messages);
+		ip_unlock(port);
+		ip_release(port);
+	}
+
+	lck_spin_lock(&region->lock);
+	if (sq_pset_slot(pset) == pslot && pslot->closing) {
+		sq_set_finalize_locked(pslot);
+	}
+	lck_spin_unlock(&region->lock);
+}
+
+void dtape_sq_pset_leave(ipc_pset_t pset)
+{
+	dtape_sq_slot_t* pslot = sq_pset_slot(pset);
+
+	if (!pslot) {
+		return;
+	}
+	lck_spin_lock(&pslot->region->lock);
+	sq_set_close_all_for_later(pslot);
+	lck_spin_unlock(&pslot->region->lock);
+	sq_set_drain_members(pset);
 }
 
 void dtape_sq_entry_modified(ipc_space_t space, mach_port_name_t name, ipc_entry_t entry)
@@ -501,6 +905,8 @@ void dtape_sq_entry_modified(ipc_space_t space, mach_port_name_t name, ipc_entry
 	         ((entry->ie_bits & MACH_PORT_TYPE_SEND) ? DSQ_RIGHT_SEND : 0);
 
 	lck_spin_lock(&region->lock);
+	// not a right: how the port is used (mk_timer)
+	rights |= slot->rights & DSQ_RIGHT_NOSEND;
 	if (slot->port == port && slot->name == name && slot->rights != rights && !slot->closing) {
 		// the task's lookups see the new rights together with the next epoch, and a publish made with the
 		// old rights succeeds only before the epoch changes, i.e. before this call returns
@@ -550,7 +956,7 @@ boolean_t dtape_sq_mqueue_send(ipc_port_t port, ipc_kmsg_t kmsg, mach_msg_option
 	dsq_q_slot_t* qslot;
 	dsq_node_t* node;
 	uint64_t h, d;
-	uint32_t len, index;
+	uint32_t len, index, set = DSQ_NONE;
 	boolean_t full, kernel_full;
 	int result;
 
@@ -608,7 +1014,7 @@ boolean_t dtape_sq_mqueue_send(ipc_port_t port, ipc_kmsg_t kmsg, mach_msg_option
 	}
 
 	ipc_kmsg_enqueue(&slot->tokens, kmsg);
-	result = dsq_publish(&region->view, slot->index, index, DSQ_EPOCH_ANY, UINT32_MAX, SQ_ATTEMPTS, NULL);
+	result = dsq_publish(&region->view, slot->index, index, DSQ_EPOCH_ANY, UINT32_MAX, SQ_ATTEMPTS, NULL, &set);
 	if (result != DSQ_OK) {
 		ipc_kmsg_rmqueue(&slot->tokens, kmsg);
 		region->snode_free[region->snode_free_count++] = (uint16_t) index;
@@ -619,6 +1025,9 @@ boolean_t dtape_sq_mqueue_send(ipc_port_t port, ipc_kmsg_t kmsg, mach_msg_option
 	if (__atomic_load_n(&qslot->rcv_waiters, __ATOMIC_ACQUIRE) != 0) {
 		// one message, one receiver
 		sq_wake_count(region, &qslot->head, 1);
+	}
+	if (set != DSQ_NONE && __atomic_load_n(&region->view.q->slots[set].rcv_waiters, __ATOMIC_ACQUIRE) != 0) {
+		sq_wake_count(region, (uint64_t*) &region->view.q->slots[set].setword, 1);
 	}
 
 	current_task()->messages_sent++;
@@ -633,6 +1042,211 @@ done:
 leave:
 	lck_spin_unlock(&region->lock);
 	dtape_sq_port_leave_locked(port, DSQ_CLOSE_OTHER);
+	return FALSE;
+}
+
+enum {
+	SQ_R_HANDLED, // the thread's receive state is set
+	SQ_R_RETRY,   // the queue changed under the receive: look again
+	SQ_R_LEAVE,   // the queue (or its set) leaves the mode
+};
+
+// Receives for `thread` the node `index`, which was the head of the queue of `slot` when its deq word was `d`.
+// A receive on a set passes the pick (and the set's slot): the take then also needs the port to still be a member.
+// The port and its mqueue are locked.
+static int sq_receive_node(dtape_sq_slot_t* slot, ipc_port_t port, const dsq_set_pick_t* pick, uint32_t set,
+    uint64_t d, uint32_t index, mach_msg_option_t option, mach_msg_size_t max_size, thread_t thread)
+{
+	ipc_mqueue_t mqueue = &port->ip_messages;
+	dtape_sq_region_t* region = slot->region;
+	dsq_q_slot_t* qslot = &region->view.q->slots[slot->index];
+	dsq_node_t node;
+	uint32_t flags;
+	mach_msg_size_t msize;
+	uint32_t seqno;
+	boolean_t too_large;
+	bool taken;
+
+	// the node is queued and doesn't change while it is: the copy is valid if deq is still `d` afterwards, and
+	// it is all the server uses (what it counts is what it receives)
+	memcpy(&node, dsq_node(&region->view, index), sizeof(node));
+	flags = node.flags;
+
+	lck_spin_lock(&region->lock);
+	if ((flags & DSQ_NODE_TOKEN) && index >= DSQ_TNODES) {
+		ipc_kmsg_t first = ipc_kmsg_queue_first(&slot->tokens);
+		if (first == IKM_NULL) {
+			sq_poison(region, "a token without a message");
+			lck_spin_unlock(&region->lock);
+			return SQ_R_LEAVE;
+		}
+		msize = ipc_kmsg_copyout_size(first, thread->map);
+	} else if ((flags & DSQ_NODE_INLINE) && index < DSQ_TNODES) {
+		msize = node.size;
+	} else {
+		lck_spin_unlock(&region->lock);
+		if (dsq_load(&qslot->deq) != d) {
+			return SQ_R_RETRY;
+		}
+		lck_spin_lock(&region->lock);
+		sq_poison(region, "a node of an unknown kind");
+		lck_spin_unlock(&region->lock);
+		return SQ_R_LEAVE;
+	}
+	lck_spin_unlock(&region->lock);
+
+	if (dsq_load(&qslot->deq) != d) {
+		return SQ_R_RETRY;
+	}
+
+	too_large = msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(thread), option) > max_size;
+	if (too_large && (option & MACH_RCV_LARGE)) {
+		// left queued, as ipc_mqueue_select_on_thread() does; the receiver learns the member's name
+		thread->ith_receiver_name = mqueue->imq_receiver_name;
+		thread->ith_kmsg = IKM_NULL;
+		thread->ith_msize = msize;
+		thread->ith_seqno = 0;
+		thread->ith_state = MACH_RCV_TOO_LARGE;
+		return SQ_R_HANDLED;
+	}
+
+	if (pick != NULL) {
+		taken = dsq_set_take(&region->view, set, pick, sq_node_made_send(&node, index), &seqno);
+	} else {
+		taken = dsq_take(&region->view, slot->index, d, sq_node_made_send(&node, index), &seqno);
+	}
+	if (!taken) {
+		return SQ_R_RETRY;
+	}
+
+	lck_spin_lock(&region->lock);
+	ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, &node);
+	if (kmsg == IKM_NULL) {
+		sq_poison(region, "an invalid message");
+		lck_spin_unlock(&region->lock);
+		return SQ_R_LEAVE;
+	}
+	lck_spin_unlock(&region->lock);
+
+	if (__atomic_load_n(&qslot->snd_waiters, __ATOMIC_ACQUIRE) != 0) {
+		sq_wake(region, &qslot->deq);
+	}
+
+	msize = ipc_kmsg_copyout_size(kmsg, thread->map);
+	too_large = msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(thread), option) > max_size;
+
+	thread->ith_kmsg = kmsg;
+	thread->ith_seqno = seqno;
+	thread->ith_msize = msize;
+	thread->ith_state = too_large ? MACH_RCV_TOO_LARGE : MACH_MSG_SUCCESS;
+	current_task()->messages_received++;
+	return SQ_R_HANDLED;
+}
+
+// the receive was a wait the task does itself (mach_msg_sq_receive) and there is nothing to receive
+static void sq_receive_wait_locally(dtape_thread_t* dthread, thread_t thread)
+{
+	dthread->sq_local_wait_result = true;
+	thread->ith_kmsg = IKM_NULL;
+	thread->ith_seqno = 0;
+	thread->ith_state = MACH_RCV_TIMED_OUT;
+}
+
+// ipc_mqueue_receive() on a set of the mode: the member that has been ready longest gives its first message
+static boolean_t sq_set_receive(ipc_mqueue_t mqueue, mach_msg_option_t option, mach_msg_size_t max_size,
+    mach_msg_timeout_t rcv_timeout, thread_t thread, dtape_thread_t* dthread, bool local_wait)
+{
+	ipc_pset_t pset = ips_from_mq(mqueue);
+	dtape_sq_slot_t* pslot = sq_pset_slot(pset);
+	dtape_sq_region_t* region;
+
+	if (!pslot) {
+		return FALSE;
+	}
+	region = pslot->region;
+
+	if (option & MACH_PEEK_MSG) {
+		goto leave;
+	}
+
+	for (uint32_t attempt = 0; attempt < SQ_ATTEMPTS; attempt++) {
+		dsq_set_pick_t pick;
+		dtape_sq_slot_t* member;
+		ipc_port_t port;
+		bool usable;
+		int result, r;
+
+		lck_spin_lock(&region->lock);
+		usable = !region->poisoned && !pslot->closing;
+		lck_spin_unlock(&region->lock);
+		if (!usable) {
+			goto leave;
+		}
+
+		// from here to the take, a removal of a member has to see this receive (see dsq_set_member_remove())
+		dsq_set_enter(&region->view, pslot->index);
+		result = dsq_set_select(&region->view, pslot->index, DSQ_EPOCH_ANY, &pick);
+		if (result == DSQ_RETRY) {
+			dsq_set_exit(&region->view, pslot->index);
+			continue;
+		}
+		if (result == DSQ_EMPTY) {
+			dsq_set_exit(&region->view, pslot->index);
+			if ((option & MACH_RCV_TIMEOUT) && rcv_timeout == 0) {
+				// XNU's own path finds no member preposted (the members' queues are in the region) and times out
+				return FALSE;
+			}
+			if (local_wait && dthread) {
+				sq_receive_wait_locally(dthread, thread);
+				return TRUE;
+			}
+			// a receive that would block in the server: the set leaves the mode and the receive blocks normally
+			goto leave;
+		}
+		if (result != DSQ_OK) {
+			dsq_set_exit(&region->view, pslot->index);
+			lck_spin_lock(&region->lock);
+			if (!(result == DSQ_CLOSED_Q && pslot->closing)) {
+				sq_poison(region, result == DSQ_CLOSED_Q ? "a queue was closed by the task" : "inconsistent queue");
+			}
+			lck_spin_unlock(&region->lock);
+			goto leave;
+		}
+
+		member = &region->slots[pick.member];
+		lck_spin_lock(&region->lock);
+		port = member->port;
+		usable = port != IP_NULL && !member->closing && member->set == pslot;
+		if (usable) {
+			ip_reference(port);
+		}
+		lck_spin_unlock(&region->lock);
+		if (!usable) {
+			dsq_set_exit(&region->view, pslot->index);
+			continue;
+		}
+
+		ip_lock(port);
+		imq_lock(&port->ip_messages);
+		r = SQ_R_RETRY;
+		if (sq_port_slot(port) == member && ip_active(port) && !member->closing) {
+			r = sq_receive_node(member, port, &pick, pslot->index, pick.deq, pick.index, option, max_size, thread);
+		}
+		imq_unlock(&port->ip_messages);
+		ip_unlock(port);
+		ip_release(port);
+		dsq_set_exit(&region->view, pslot->index);
+
+		if (r == SQ_R_HANDLED) {
+			return TRUE;
+		}
+		if (r == SQ_R_LEAVE) {
+			goto leave;
+		}
+	}
+
+leave:
+	dtape_sq_pset_leave(pset);
 	return FALSE;
 }
 
@@ -654,7 +1268,7 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 	}
 
 	if (imq_is_set(mqueue)) {
-		return FALSE;
+		return sq_set_receive(mqueue, option, max_size, rcv_timeout, thread, dthread, local_wait);
 	}
 	port = ip_from_mq(mqueue);
 	if (!sq_port_slot(port)) {
@@ -688,12 +1302,9 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 				// XNU's own path finds the (empty) port queue and times out
 				goto out;
 			}
-			if (local_wait) {
+			if (local_wait && dthread) {
 				// the task waits for the queue itself (see the mach_msg_sq_receive call)
-				dthread->sq_local_wait_result = true;
-				thread->ith_kmsg = IKM_NULL;
-				thread->ith_seqno = 0;
-				thread->ith_state = MACH_RCV_TIMED_OUT;
+				sq_receive_wait_locally(dthread, thread);
 				handled = TRUE;
 				goto out;
 			}
@@ -709,80 +1320,15 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 			goto leave;
 		}
 
-		// the node is queued and doesn't change while it is: the copy is valid if deq is still `d`
-		// afterwards, and it is all the server uses (what it counts is what it receives)
-		dsq_node_t node;
-		memcpy(&node, dsq_node(&region->view, index), sizeof(node));
-		uint32_t flags = node.flags;
-		mach_msg_size_t msize;
-		uint32_t seqno;
-
-		lck_spin_lock(&region->lock);
-		if ((flags & DSQ_NODE_TOKEN) && index >= DSQ_TNODES) {
-			ipc_kmsg_t first = ipc_kmsg_queue_first(&slot->tokens);
-			if (first == IKM_NULL) {
-				sq_poison(region, "a token without a message");
-				lck_spin_unlock(&region->lock);
-				goto leave;
-			}
-			msize = ipc_kmsg_copyout_size(first, thread->map);
-		} else if ((flags & DSQ_NODE_INLINE) && index < DSQ_TNODES) {
-			msize = node.size;
-		} else {
-			lck_spin_unlock(&region->lock);
-			if (dsq_load(&qslot->deq) != d) {
-				continue;
-			}
-			lck_spin_lock(&region->lock);
-			sq_poison(region, "a node of an unknown kind");
-			lck_spin_unlock(&region->lock);
-			goto leave;
-		}
-		lck_spin_unlock(&region->lock);
-
-		if (dsq_load(&qslot->deq) != d) {
+		int r = sq_receive_node(slot, port, NULL, DSQ_NONE, d, index, option, max_size, thread);
+		if (r == SQ_R_RETRY) {
 			continue;
 		}
-
-		boolean_t too_large = msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(thread), option) > max_size;
-		if (too_large && (option & MACH_RCV_LARGE)) {
-			// left queued, as ipc_mqueue_select_on_thread() does
-			thread->ith_receiver_name = mqueue->imq_receiver_name;
-			thread->ith_kmsg = IKM_NULL;
-			thread->ith_msize = msize;
-			thread->ith_seqno = 0;
-			thread->ith_state = MACH_RCV_TOO_LARGE;
+		if (r == SQ_R_HANDLED) {
 			handled = TRUE;
 			goto out;
 		}
-
-		if (!dsq_take(&region->view, slot->index, d, sq_node_made_send(&node, index), &seqno)) {
-			continue;
-		}
-
-		lck_spin_lock(&region->lock);
-		ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, &node);
-		if (kmsg == IKM_NULL) {
-			sq_poison(region, "an invalid message");
-			lck_spin_unlock(&region->lock);
-			goto leave;
-		}
-		lck_spin_unlock(&region->lock);
-
-		if (__atomic_load_n(&qslot->snd_waiters, __ATOMIC_ACQUIRE) != 0) {
-			sq_wake(region, &qslot->deq);
-		}
-
-		msize = ipc_kmsg_copyout_size(kmsg, thread->map);
-		too_large = msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(thread), option) > max_size;
-
-		thread->ith_kmsg = kmsg;
-		thread->ith_seqno = seqno;
-		thread->ith_msize = msize;
-		thread->ith_state = too_large ? MACH_RCV_TOO_LARGE : MACH_MSG_SUCCESS;
-		current_task()->messages_received++;
-		handled = TRUE;
-		goto out;
+		goto leave;
 	}
 
 leave:

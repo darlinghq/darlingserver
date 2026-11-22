@@ -49,20 +49,21 @@ extern "C" {
 #endif
 
 #define DSQ_MAGIC        0x31515344u // "DSQ1"
-#define DSQ_VERSION      2
+#define DSQ_VERSION      3
 
 #define DSQ_SLOTS        512
 #define DSQ_TNODES       1024        // nodes of the task (in Q), indices [0, DSQ_TNODES)
 #define DSQ_SNODES       256         // nodes of the server (in S), indices [DSQ_TNODES, DSQ_NODES)
 #define DSQ_NODES        (DSQ_TNODES + DSQ_SNODES)
+#define DSQ_SET_WORDS    (DSQ_SLOTS / 32) // 32-bit words of a set's member bitmap
 #define DSQ_NAMES        1024        // name table entries (a power of two)
 #define DSQ_TOKEN_HISTORY 8          // audit token history entries (a power of two)
 #define DSQ_HINTS        8           // hint ring entries per slot (a power of two)
 #define DSQ_NONE         0xffffu     // "no node"
 
 #define DSQ_NODE_SIZE    256
-#define DSQ_NODE_HEADER  16
-#define DSQ_MSG_MAX      (DSQ_NODE_SIZE - DSQ_NODE_HEADER) // largest message a node holds (240)
+#define DSQ_NODE_HEADER  20
+#define DSQ_MSG_MAX      (DSQ_NODE_SIZE - DSQ_NODE_HEADER) // largest message a node holds (236)
 #define DSQ_MSG_MIN      24          // a user-space message header
 
 // the largest trailer a receive can ask for (mach_msg_max_trailer_t as darlingserver copies it out)
@@ -76,6 +77,12 @@ extern "C" {
 // rights a name table entry records
 #define DSQ_RIGHT_SEND    0x1
 #define DSQ_RIGHT_RECEIVE 0x2
+#define DSQ_RIGHT_SET     0x4 // the name is a port set (with DSQ_RIGHT_RECEIVE): a set slot, no queue of its own
+#define DSQ_RIGHT_NOSEND  0x8 // user sends to this name always go to the server (a mk_timer port)
+
+// S slot kinds
+#define DSQ_KIND_PORT 0
+#define DSQ_KIND_SET  1
 
 // close reasons (S slot `close_reason`)
 #define DSQ_CLOSE_NONE      0
@@ -134,6 +141,7 @@ typedef struct dsq_node {
 	uint16_t flags; // DSQ_NODE_*
 	uint16_t size;  // INLINE: the message size; TOKEN: the kmsg's user-visible size (at most 0xffff)
 	uint32_t aux;   // INLINE: token history generation at send; TOKEN: token id
+	uint32_t run;   // the ready run of its port in a set (a stamp); 0 if the port was in no set at publish
 	uint8_t msg[DSQ_MSG_MAX];
 } DSQ_ALIGN(8) dsq_node_t;
 
@@ -171,6 +179,9 @@ typedef struct dsq_s_slot {
 	uint32_t close_reason; // DSQ_CLOSE_*, written before the slot closes
 	uint32_t gen;          // changes whenever the slot is given to another port
 	uint32_t seqno_base;   // the port's next seqno is the deq word's deq + this (mod 2^32)
+	uint16_t set_slot;     // a port: the set slot it is a member of (DSQ_NONE: none)
+	uint16_t kind;         // DSQ_KIND_*
+	uint32_t floor;        // a member: its priority is at least this stamp (set when it joined the set)
 	uint32_t pad;
 } DSQ_ALIGN(8) dsq_s_slot_t;
 
@@ -178,6 +189,8 @@ typedef struct dsq_s_region {
 	dsq_s_header_t hdr;
 	dsq_name_entry_t names[DSQ_NAMES];
 	dsq_s_slot_t slots[DSQ_SLOTS];
+	// the members of each set slot: bit m of members[set] is set while port slot m is a member
+	uint32_t members[DSQ_SLOTS][DSQ_SET_WORDS];
 	dsq_node_t nodes[DSQ_SNODES];
 } DSQ_ALIGN(64) dsq_s_region_t;
 
@@ -187,7 +200,10 @@ typedef struct dsq_q_slot {
 	uint32_t rcv_waiters;       // receivers waiting on the low half of `head`
 	uint32_t snd_waiters;       // senders waiting for room on the low half of `deq`
 	uint16_t hint[DSQ_HINTS];   // hint[seq % DSQ_HINTS] = the node published at seq (only a hint)
-	uint8_t pad[24];
+	uint32_t setword;           // futex word of a set slot's receivers: changes at every publish on a member, at every
+	                            // membership change and at the close
+	uint32_t inflight;          // a set slot: threads between looking for a message and having taken it (or not)
+	uint8_t pad[16];
 } DSQ_ALIGN(64) dsq_q_slot_t;
 
 typedef struct dsq_q_region {
@@ -196,6 +212,8 @@ typedef struct dsq_q_region {
 	dsq_word_t free_top DSQ_ALIGN(64);
 	// nodes the server has taken from the task's queues and gives back (pushed by the server only)
 	dsq_word_t returned_top DSQ_ALIGN(64);
+	// ready-order stamps (never 0, wrapping): incremented by the task and by the server
+	uint32_t stamp DSQ_ALIGN(64);
 	uint16_t free_next[DSQ_TNODES] DSQ_ALIGN(64);
 	dsq_node_t nodes[DSQ_TNODES] DSQ_ALIGN(64);
 } DSQ_ALIGN(64) dsq_q_region_t;
@@ -242,8 +260,10 @@ static inline uint64_t dsq_load(const volatile dsq_word_t* p)
 // `epoch`: the epoch the caller's rights belong to, or DSQ_EPOCH_ANY (server).
 // `qlimit`: UINT32_MAX for no limit. `attempts`: 0 for no bound. On DSQ_OK, `*seq_out` (if not NULL)
 // is the node's seq. A MAKE_SEND message is a node with DSQ_NODE_MADE_SEND: nothing else is counted here.
+// A port that is a member of a set gives the node its ready run (a stamp), and the set's word changes after the
+// publish: `*set_out` (if not NULL) is the set slot whose `setword` changed, whose receivers the caller wakes, or DSQ_NONE.
 int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epoch, uint32_t qlimit,
-		uint32_t attempts, uint32_t* seq_out);
+		uint32_t attempts, uint32_t* seq_out, uint32_t* set_out);
 
 // Finds the node at the head of `slot`'s queue without taking it. On DSQ_OK, `*deq_out` is the deq
 // word the caller passes to dsq_take() and `*index_out` the node; any other result has neither.
@@ -275,6 +295,44 @@ void dsq_close(const dsq_view_t* v, uint32_t slot, uint64_t* head_out, uint64_t*
 // that should be queued is not.
 int dsq_snapshot(const dsq_view_t* v, uint32_t slot, uint32_t attempts, uint64_t* head_out,
 		uint64_t* deq_out, uint32_t* made_queued_out);
+
+// --- port sets ----------------------------------------------------------------------------------------
+
+typedef struct dsq_set_pick {
+	uint32_t member;  // the member's slot
+	uint64_t deq;     // its deq word (what dsq_set_take() passes to dsq_take())
+	uint32_t index;   // its head node
+	uint32_t flags;   // the node's flags, size and aux, read while deq still had that value
+	uint32_t size;
+	uint32_t aux;
+	uint32_t prio;
+} dsq_set_pick_t;
+
+// The next stamp (never 0).
+uint32_t dsq_stamp_next(const dsq_view_t* v);
+
+// A thread that looks for a message in set slot `set` and may take it does so between these two calls.
+void dsq_set_enter(const dsq_view_t* v, uint32_t set);
+void dsq_set_exit(const dsq_view_t* v, uint32_t set);
+
+// Finds the message a receive on the set takes: the head of the member that has been ready longest (the member
+// with the smallest priority, see the design). DSQ_OK: `*pick` is filled in; DSQ_EMPTY: no member has a message;
+// DSQ_CLOSED_Q / DSQ_STALE: of the set slot (`epoch` as for dsq_head()); DSQ_RETRY: a member kept changing, try again.
+int dsq_set_select(const dsq_view_t* v, uint32_t set, uint32_t epoch, dsq_set_pick_t* pick);
+
+// Takes the picked node (see dsq_take()). False: the member is not in the set any more, or the take lost.
+bool dsq_set_take(const dsq_view_t* v, uint32_t set, const dsq_set_pick_t* pick, bool made_send, uint32_t* seqno_out);
+
+// Server only (serialized by the caller): `member` joins `set` with priority floor `floor`; the set's word changes.
+void dsq_set_member_add(const dsq_view_t* v, uint32_t set, uint32_t member, uint32_t floor);
+
+// Server only: `member` leaves `set`; the set's word changes. Returns false if a thread of the task was inside its
+// look for a message at that moment: it may still take from `member`, so the caller has to close the member's slot
+// as well (which makes every such take fail).
+bool dsq_set_member_remove(const dsq_view_t* v, uint32_t set, uint32_t member);
+
+// whether `member` is a member of `set`
+bool dsq_set_has_member(const dsq_view_t* v, uint32_t set, uint32_t member);
 
 // Server only: collects the nodes [deq, seq) of a closed slot in queue order into `out` (room for
 // DSQ_NODES entries). Returns how many it found; a node that can't be found ends the walk.
