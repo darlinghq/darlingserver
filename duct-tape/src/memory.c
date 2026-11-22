@@ -281,10 +281,17 @@ void dtape_vm_map_destroy(vm_map_t map) {
 };
 
 void vm_map_reference(vm_map_t map) {
+	if (map == VM_MAP_NULL) {
+		return;
+	}
 	os_ref_retain(&map->map_refcnt);
 };
 
 void vm_map_deallocate(vm_map_t map) {
+	// the generated Mach server stubs release every converted map, and a port that is not a task port converts to a null one
+	if (map == VM_MAP_NULL) {
+		return;
+	}
 	os_ref_release_live(&map->map_refcnt);
 };
 
