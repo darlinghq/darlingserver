@@ -117,6 +117,9 @@ typedef usimple_lock_data_t     simple_lock_data_t;
 
 #ifdef  MACH_KERNEL_PRIVATE
 
+#ifndef __DARLING__
+/* Darling's usimple_lock wraps its spin lock; use kern/simple_lock.h's
+ * usimple_lock operations rather than treating the wrapper as lck_spin_t. */
 #define MACHINE_SIMPLE_LOCK
 
 extern void     arm_usimple_lock_init(simple_lock_t, __unused unsigned short);
@@ -144,6 +147,7 @@ extern void     arm_usimple_lock_init(simple_lock_t, __unused unsigned short);
 #define simple_lock_addr(l)             (&(l))
 #define simple_lock_assert(l, t) lck_spin_assert(l,t)
 #define kdp_simple_lock_is_acquired(l) kdp_lck_spin_is_acquired(l)
+#endif /* !__DARLING__ */
 
 #endif  /* MACH_KERNEL_PRIVATE */
 #endif  /* KERNEL_PRIVATE */

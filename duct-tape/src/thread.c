@@ -5,6 +5,7 @@
 #include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/log.h>
 #include <darlingserver/duct-tape/psynch.h>
+#include <darlingserver/duct-tape/memory.h>
 
 #include <kern/thread.h>
 #include <kern/ipc_tt.h>
