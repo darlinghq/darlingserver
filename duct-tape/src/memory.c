@@ -1728,6 +1728,11 @@ kern_return_t mach_vm_remap_external(vm_map_t target_map, mach_vm_offset_t* addr
 	vm_map_address_t addr = 0;
 	bool dealloc = false;
 
+	// a port that is not a task port converts to a null map
+	if (target_map == VM_MAP_NULL || src_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	if (!copy) {
 		return mach_vm_remap_external_shared(target_map, address, size, mask, flags, src_map, memory_address, cur_protection, max_protection, inheritance);
 	}
