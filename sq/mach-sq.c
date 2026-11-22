@@ -96,7 +96,7 @@ int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epo
 	return DSQ_CONTENDED;
 }
 
-int dsq_head(const dsq_view_t* v, uint32_t slot, uint64_t* deq_out, uint32_t* index_out)
+int dsq_head(const dsq_view_t* v, uint32_t slot, uint32_t epoch, uint64_t* deq_out, uint32_t* index_out)
 {
 	if (slot >= DSQ_SLOTS)
 		return DSQ_CORRUPT;
@@ -108,6 +108,10 @@ int dsq_head(const dsq_view_t* v, uint32_t slot, uint64_t* deq_out, uint32_t* in
 
 	if (DSQ_IS_CLOSED(h))
 		return DSQ_CLOSED_Q;
+	// the slot may have been closed and given to another port since the caller looked its name up (the
+	// close is over, the head is open again): `d` and `h` are then not the caller's queue
+	if (epoch != DSQ_EPOCH_ANY && DSQ_H_EPOCH(h) != epoch)
+		return DSQ_STALE;
 
 	uint32_t want = DSQ_D_DEQ(d);
 	uint32_t len = DSQ_LEN(h, d);
@@ -371,14 +375,16 @@ uint32_t dsq_slot_open(const dsq_view_t* v, uint32_t slot, uint32_t seqno)
 	for (uint32_t k = 0; k < DSQ_HINTS; k++)
 		__atomic_store_n(&qs->hint[k], (uint16_t) DSQ_NONE, __ATOMIC_RELAXED);
 
-	// seq and deq continue (deq to the next count that matches seq), so no old head or deq value comes
-	// back; the queue is empty (deq == seq), no MAKE_SEND message has been dequeued yet, and
+	// seq and deq continue (seq one further, so the futex word of a receiver that waited on the previous
+	// port's open head no longer matches; deq to the count that matches seq), so no old head or deq value
+	// comes back; the queue is empty (deq == seq), no MAKE_SEND message has been dequeued yet, and
 	// deq + seqno_base is the port's seqno. head opens last: until then nothing can be published or taken
+	uint32_t seq = (DSQ_H_SEQ(h) + 1) & DSQ_SEQ_MASK;
 	uint32_t count = DSQ_D_COUNT(dsq_load(&qs->deq));
-	count += (DSQ_H_SEQ(h) - count) & DSQ_SEQ_MASK;
+	count += (seq - count) & DSQ_SEQ_MASK;
 	__atomic_store_n(&v->s->slots[slot].seqno_base, seqno - count, __ATOMIC_RELEASE);
 	__atomic_store_n(&qs->deq, DSQ_D_MAKE(count, 0), __ATOMIC_RELEASE);
-	__atomic_store_n(&qs->head, DSQ_H_MAKE(DSQ_H_SEQ(h), false, DSQ_NONE, epoch), __ATOMIC_RELEASE);
+	__atomic_store_n(&qs->head, DSQ_H_MAKE(seq, false, DSQ_NONE, epoch), __ATOMIC_RELEASE);
 	return epoch;
 }
 

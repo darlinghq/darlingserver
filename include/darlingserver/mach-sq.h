@@ -247,7 +247,10 @@ int dsq_publish(const dsq_view_t* v, uint32_t slot, uint32_t index, uint32_t epo
 
 // Finds the node at the head of `slot`'s queue without taking it. On DSQ_OK, `*deq_out` is the deq
 // word the caller passes to dsq_take() and `*index_out` the node; any other result has neither.
-int dsq_head(const dsq_view_t* v, uint32_t slot, uint64_t* deq_out, uint32_t* index_out);
+// `epoch`: the epoch the caller's name table entry belongs to, or DSQ_EPOCH_ANY (server). A slot with
+// another epoch (a right of the name changed, or the slot was given to another port) is not the caller's
+// queue: DSQ_STALE.
+int dsq_head(const dsq_view_t* v, uint32_t slot, uint32_t epoch, uint64_t* deq_out, uint32_t* index_out);
 
 // Takes the head node found by dsq_head() (`deq` is the value it returned). `made_send`: the node's
 // DSQ_NODE_MADE_SEND flag, as the caller read it after dsq_head() (the node can't change while deq is
@@ -290,7 +293,9 @@ bool dsq_server_node_return(const dsq_view_t* v, uint32_t index, uint32_t attemp
 void dsq_region_init(const dsq_view_t* v);
 
 // Server only: makes `slot` usable for a new port: an empty open queue, the given seqno and a new
-// epoch (returned). The previous port of the slot must have been closed.
+// epoch (returned). The previous port of the slot must have been closed. The head's seq (the futex word
+// of a receiver) moves on by one, so a receiver that read the previous port's open head and is about to
+// wait finds the word changed, whatever the slot did in between.
 uint32_t dsq_slot_open(const dsq_view_t* v, uint32_t slot, uint32_t seqno);
 
 // Server only: moves the slot to a new epoch (bounded CAS); false if it would have to wait for T

@@ -678,7 +678,7 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 	for (uint32_t attempt = 0; attempt < SQ_ATTEMPTS; attempt++) {
 		uint64_t d;
 		uint32_t index;
-		int result = dsq_head(&region->view, slot->index, &d, &index);
+		int result = dsq_head(&region->view, slot->index, DSQ_EPOCH_ANY, &d, &index);
 
 		if (result == DSQ_RETRY) {
 			continue;
