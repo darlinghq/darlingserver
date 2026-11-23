@@ -187,8 +187,9 @@ endif()
 target_include_directories(darlingserver_dc_codesign PUBLIC ${LIBXML2_INCLUDE_DIR})
 target_link_libraries(darlingserver_dc_codesign PUBLIC
 	${OPENSSL_CRYPTO_LIBRARY}
-	${LIBXML2_LIBRARY}
+	${CMAKE_DL_LIBS}
 )
+# libxml2 itself is opened at run time (src/codesign/dc_entitlements.c): only its headers are needed here
 
 if (DSERVER_BIONIC)
 	# Bionic has no usable ucontext functions or POSIX semaphores of its own on

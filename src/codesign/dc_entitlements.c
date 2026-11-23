@@ -22,6 +22,7 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 
+#include <dlfcn.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -29,10 +30,52 @@
 
 static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 
+// libxml2 is loaded at run time rather than linked: its soname changed from libxml2.so.2 to libxml2.so.16
+// in 2.14, so a binary linked on one distribution would not start on another. The functions used here and the
+// layouts of xmlNode, xmlDoc and xmlDtd are the same in both.
+static struct {
+	void (*InitParser)(void);
+	int (*IsBlankNode)(const xmlNode*);
+	int (*StrEqual)(const xmlChar*, const xmlChar*);
+	xmlNode* (*DocGetRootElement)(const xmlDoc*);
+	xmlChar* (*NodeGetContent)(const xmlNode*);
+	xmlDoc* (*ReadMemory)(const char*, int, const char*, const char*, int);
+	void (*FreeDoc)(xmlDoc*);
+	xmlFreeFunc* Free;
+} lx;
+
 static void init_parser(void) {
+	static const char* const sonames[] = { "libxml2.so.2", "libxml2.so.16" };
+	void* lib = NULL;
+
+	for (size_t i = 0; !lib && i < sizeof(sonames) / sizeof(*sonames); ++i) {
+		lib = dlopen(sonames[i], RTLD_NOW | RTLD_LOCAL);
+	}
+	if (!lib) {
+		return;
+	}
+
+#define LX(field, name) (*(void**)&lx.field = dlsym(lib, name))
+	if (!LX(InitParser, "xmlInitParser") || !LX(IsBlankNode, "xmlIsBlankNode") || !LX(StrEqual, "xmlStrEqual") ||
+		!LX(DocGetRootElement, "xmlDocGetRootElement") || !LX(NodeGetContent, "xmlNodeGetContent") ||
+		!LX(ReadMemory, "xmlReadMemory") || !LX(FreeDoc, "xmlFreeDoc") || !LX(Free, "xmlFree")) {
+		lx.ReadMemory = NULL;
+		return;
+	}
+#undef LX
+
 	// makes the parser safe to use from several threads at once
-	xmlInitParser();
+	lx.InitParser();
 }
+
+#define xmlIsBlankNode lx.IsBlankNode
+#define xmlStrEqual lx.StrEqual
+#define xmlDocGetRootElement lx.DocGetRootElement
+#define xmlNodeGetContent lx.NodeGetContent
+#define xmlReadMemory lx.ReadMemory
+#define xmlFreeDoc lx.FreeDoc
+#undef xmlFree
+#define xmlFree (*lx.Free)
 
 // skips the nodes that carry no data between elements: comments, processing instructions and whitespace
 static xmlNode* next_element(xmlNode* node) {
@@ -187,6 +230,9 @@ int dc_cs_entitlements_lookup(const uint8_t* xml, size_t length, const char* con
 	}
 
 	pthread_once(&init_once, init_parser);
+	if (!lx.ReadMemory) {
+		return -1;
+	}
 
 	// no XML_PARSE_NOENT (entity substitution) and no XML_PARSE_DTDLOAD (external DTDs); keep libxml2's size limits
 	xmlDoc* document = xmlReadMemory((const char*)xml, (int)length, "entitlements.plist", NULL, XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
