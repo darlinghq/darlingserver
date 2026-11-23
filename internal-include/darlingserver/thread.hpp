@@ -30,6 +30,7 @@
 #include <queue>
 #include <atomic>
 #include <vector>
+#include <optional>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -283,7 +284,7 @@ namespace DarlingServer {
 		 */
 		int setPendingSignal(int signal);
 
-		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
+		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress, const std::optional<dtape_exception_state_t>& exceptionState);
 
 		void handleSignal(int signal);
 

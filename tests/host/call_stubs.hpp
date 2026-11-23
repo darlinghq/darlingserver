@@ -23,14 +23,24 @@
 #include <vector>
 
 #define DSERVER_CALL_UNMANAGED_FLAG 0x80000000U
-enum : uint32_t { dserver_callnum_checkin = 1, dserver_callnum_dummy = 2, dserver_callnum_s2c = 0xdead, dserver_callnum_push_reply = 0xbadca11, dserver_callnum_dbg = 0x80000003U };
-#define DSERVER_VALID_CALLNUM_CASES case dserver_callnum_checkin: case dserver_callnum_dummy: case dserver_callnum_dbg:
-#define DSERVER_CONSTRUCT_CASES CALL_CASE(dummy, DummyCall) CALL_CASE(dbg, DbgCall)
+enum : uint32_t { dserver_callnum_checkin = 1, dserver_callnum_dummy = 2, dserver_callnum_sigprocess = 4, dserver_callnum_s2c = 0xdead, dserver_callnum_push_reply = 0xbadca11, dserver_callnum_dbg = 0x80000003U };
+#define DSERVER_VALID_CALLNUM_CASES case dserver_callnum_checkin: case dserver_callnum_dummy: case dserver_callnum_sigprocess: case dserver_callnum_dbg:
+#define DSERVER_CONSTRUCT_CASES CALL_CASE(dummy, DummyCall) CALL_CASE(sigprocess, SigprocessCall) CALL_CASE(dbg, DbgCall)
 
 typedef struct { uint32_t number; pid_t pid; pid_t tid; uint32_t architecture; } dserver_rpc_callhdr_t;
 typedef struct { dserver_rpc_callhdr_t header; struct { int lifetime_listener_pipe; uint64_t stack_hint; bool is_fork; } body; } dserver_rpc_call_checkin_t;
 typedef struct { dserver_rpc_callhdr_t header; } dserver_rpc_call_dummy_t;
 typedef struct { dserver_rpc_callhdr_t header; } dserver_rpc_call_dbg_t;
+// the sigprocess call as scripts/generate-rpc-wrappers.py lays it out
+typedef struct { dserver_rpc_callhdr_t header; struct {
+	int32_t bsd_signal_number, linux_signal_number, sender_pid, code;
+	uint64_t signal_address __attribute__((aligned(8)));
+	uint64_t thread_state __attribute__((aligned(8)));
+	uint64_t float_state __attribute__((aligned(8)));
+	uint64_t exception_fault_address __attribute__((aligned(8)));
+	uint32_t exception_trapno, exception_err;
+	bool has_exception_state;
+} body; } dserver_rpc_call_sigprocess_t;
 typedef struct { dserver_rpc_callhdr_t header; uint64_t reply; uint64_t reply_size; } dserver_rpc_call_push_reply_t;
 
 static const char* dserver_callnum_to_string(uint32_t) { return "call"; }
@@ -167,6 +177,10 @@ namespace DarlingServer {
 	};
 	struct DummyCall : Call {
 		DummyCall(std::shared_ptr<Thread>, dserver_rpc_call_dummy_t*, Message&&) {}
+	};
+	struct SigprocessCall : Call {
+		dserver_rpc_call_sigprocess_t call;
+		SigprocessCall(std::shared_ptr<Thread>, dserver_rpc_call_sigprocess_t* c, Message&&): call(*c) {}
 	};
 }
 

@@ -1126,8 +1126,9 @@ int DarlingServer::Thread::setPendingSignal(int signal) {
 	return pendingSignal;
 };
 
-void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
+void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress, const std::optional<dtape_exception_state_t>& exceptionState) {
 	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	dtape_thread_set_exception_state(_dtapeThread, exceptionState ? &*exceptionState : nullptr);
 
 	{
 		std::unique_lock lock(_rwlock);

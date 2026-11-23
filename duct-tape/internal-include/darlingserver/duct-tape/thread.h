@@ -32,6 +32,10 @@ typedef struct dtape_thread_user_state {
 	arm_unified_thread_state_t thread_state;
 	arm_neon_state64_t float_state;
 #endif
+
+	// the exception state of the signal frame, if the guest supplied it
+	bool has_exception_state;
+	dtape_exception_state_t exception_state;
 } dtape_thread_user_state_t;
 
 typedef LIST_HEAD(dtape_thread_user_state_head, dtape_thread_user_state) dtape_thread_user_state_head_t;
