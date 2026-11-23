@@ -40,6 +40,8 @@ enum { kThreadWaitNone = 0 };
 
 struct thread {
 	int sched_flags;
+	int ast;
+	boolean_t active;
 	int state;
 	boolean_t at_safe_point;
 	wait_result_t wait_result;
@@ -66,18 +68,25 @@ static void thread_unlock(thread_t thread) {
 		lock_errors++;
 }
 
-// stand-in for the waitq code: wakes the thread if it is waiting
+// stand-in for the waitq code: wakes the thread if it is waiting, unless it waits uninterruptibly
 static kern_return_t clear_wait_internal(thread_t thread, wait_result_t result) {
 	clear_wait_calls++;
 	if (thread->lock_depth != 1)
 		lock_errors++;
+	if (result == THREAD_INTERRUPTED && (thread->state & TH_UNINT))
+		return KERN_FAILURE;
 	if (!(thread->state & TH_WAIT))
 		return KERN_NOT_WAITING;
-	thread->state &= ~TH_WAIT;
+	thread->state &= ~(TH_WAIT | TH_UNINT);
 	thread->at_safe_point = 0;
 	thread->wait_result = result;
 	return KERN_SUCCESS;
 }
+
+#define THREAD_NULL ((thread_t)NULL)
+#define dtape_stub_safe(...) ((void)0)
+#define thread_ast_set(thread, reason) ((thread)->ast |= (reason))
+#define thread_ast_clear(thread, reason) ((thread)->ast &= ~(reason))
 
 #include PTHREAD_CANCEL_FNS_INC
 
@@ -86,6 +95,7 @@ static int fails;
 
 static void reset(dtape_thread_t* t) {
 	memset(t, 0, sizeof(*t));
+	t->xnu_thread.active = 1;
 	clear_wait_calls = 0;
 }
 
@@ -193,12 +203,56 @@ static void test_return_to_user(void) {
 	CHECK(t.xnu_thread.sched_flags == 0 && t.xnu_thread.lock_depth == 0, "return: no-op without a pending abort");
 }
 
+// xnu's thread_abort(): ends the interruptible wait the thread is blocked in, abort-safe or not, and makes every
+// later interruptible wait that would block end at once, until the thread's call replies; uninterruptible waits
+// are left alone. AST_APC tells loops that retry an interrupted wait to give up.
+static void test_thread_abort(void) {
+	dtape_thread_t t;
+	reset(&t);
+
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_INTERRUPTIBLE) == THREAD_WAITING, "abort: setup: interruptible wait starts");
+	CHECK(thread_abort(&t.xnu_thread) == KERN_SUCCESS, "abort: succeeds on a blocked thread");
+	CHECK(t.xnu_thread.wait_result == THREAD_INTERRUPTED && !(t.xnu_thread.state & TH_WAIT),
+		"abort: an interruptible wait (not abort-safe) is interrupted");
+	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == TH_SFLAG_ABORT && (t.xnu_thread.ast & AST_APC),
+		"abort: the abort stays pending, with AST_APC");
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_INTERRUPTIBLE) == THREAD_INTERRUPTED, "abort: the next interruptible wait is interrupted");
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_ABORTSAFE) == THREAD_INTERRUPTED, "abort: ... and so is the next abort-safe one");
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_UNINT) == THREAD_WAITING, "abort: an uninterruptible wait starts");
+	CHECK(thread_abort(&t.xnu_thread) == KERN_SUCCESS && (t.xnu_thread.state & TH_WAIT) && t.xnu_thread.wait_result == THREAD_WAITING,
+		"abort: an uninterruptible wait is not interrupted");
+	t.xnu_thread.state = 0;
+	dtape_thread_returning_to_user(&t);
+	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == 0 && !(t.xnu_thread.ast & AST_APC),
+		"abort: the returning-to-user hook (run when a call replies) clears it");
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_INTERRUPTIBLE) == THREAD_WAITING, "abort: a later wait blocks");
+
+	reset(&t);
+	CHECK(thread_abort(&t.xnu_thread) == KERN_SUCCESS, "abort: succeeds on a running thread");
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_INTERRUPTIBLE) == THREAD_INTERRUPTED, "abort: its next interruptible wait is interrupted");
+
+	// a pending safe abort only ends abort-safe waits; thread_abort() makes it a full one
+	reset(&t);
+	CHECK(thread_abort_safely(&t.xnu_thread) == KERN_SUCCESS, "abort: setup: safe abort on a running thread");
+	CHECK(thread_mark_wait_locked(&t.xnu_thread, THREAD_INTERRUPTIBLE) == THREAD_WAITING, "abort: setup: safe abort leaves an interruptible wait");
+	CHECK(thread_abort(&t.xnu_thread) == KERN_SUCCESS && t.xnu_thread.wait_result == THREAD_INTERRUPTED,
+		"abort: after a safe abort, the interruptible wait is interrupted");
+	CHECK((t.xnu_thread.sched_flags & TH_SFLAG_ABORTED_MASK) == TH_SFLAG_ABORT && (t.xnu_thread.ast & AST_APC),
+		"abort: the safe abort becomes a full one, with AST_APC");
+
+	reset(&t);
+	t.xnu_thread.active = 0;
+	CHECK(thread_abort(&t.xnu_thread) == KERN_TERMINATED && t.xnu_thread.sched_flags == 0, "abort: KERN_TERMINATED for an inactive thread");
+	CHECK(thread_abort(THREAD_NULL) == KERN_INVALID_ARGUMENT, "abort: KERN_INVALID_ARGUMENT for no thread");
+}
+
 int main(void) {
 	test_running_target();
 	test_blocked_target();
 	test_disabled();
 	test_testcancel();
 	test_return_to_user();
+	test_thread_abort();
 	CHECK(lock_errors == 0, "the thread lock is held (not recursively) around every flag update");
 	printf("%s\n", fails ? "RESULT: FAIL" : "RESULT: PASS");
 	return fails ? 1 : 0;

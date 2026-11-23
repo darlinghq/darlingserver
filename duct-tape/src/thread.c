@@ -191,8 +191,10 @@ void dtape_thread_destroy(dtape_thread_t* thread) {
 };
 
 void dtape_thread_entering(dtape_thread_t* thread) {
-	// if the thread is entering, it cannot be waiting
-	thread->xnu_thread.state &= ~(TH_WAIT | TH_UNINT);
+	// a running thread is not waiting.
+	// TH_UNINT stays: a thread resumed although nobody ended its wait is still on the wait queue and goes back to
+	// waiting (see thread_block_parameter()), and that wait must still not be interrupted. ending a wait clears it.
+	thread->xnu_thread.state &= ~TH_WAIT;
 	thread->xnu_thread.state |= TH_RUN;
 	thread->xnu_thread.block_hint = kThreadWaitNone;
 };
@@ -753,7 +755,8 @@ wait_result_t thread_mark_wait_locked(thread_t thread, wait_interrupt_t interrup
 	if (interruptible == THREAD_UNINT ||
 	    !(thread->sched_flags & TH_SFLAG_ABORT) ||
 	    (!at_safe_point && (thread->sched_flags & TH_SFLAG_ABORTSAFELY))) {
-		thread->state = TH_WAIT;
+		// TH_UNINT keeps clear_wait_internal(THREAD_INTERRUPTED) (e.g. from thread_abort()) from ending the wait
+		thread->state = (interruptible == THREAD_UNINT) ? (TH_WAIT | TH_UNINT) : TH_WAIT;
 		thread->at_safe_point = at_safe_point;
 		thread->wait_result = THREAD_WAITING;
 		thread->block_hint = thread->pending_block_hint;
@@ -1425,8 +1428,31 @@ kern_return_t act_set_state_from_user(thread_t thread, int flavor, thread_state_
 };
 
 kern_return_t thread_abort(thread_t thread) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// adapted from XNU's thread_abort() and act_abort() in osfmk/kern/thread_act.c.
+	// like thread_abort_safely(), this only interrupts waits inside darlingserver; a wait the thread makes
+	// itself (e.g. a sleep, which is a Linux nanosleep in libsystem_kernel) continues.
+	kern_return_t result = KERN_SUCCESS;
+
+	if (thread == THREAD_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	thread_lock(thread);
+	if (!thread->active) {
+		result = KERN_TERMINATED;
+	} else {
+		// an abort that is already pending becomes a full one
+		thread->sched_flags |= TH_SFLAG_ABORT;
+		thread->sched_flags &= ~TH_SFLAG_ABORTSAFELY;
+		// AST_APC makes waits that retry after an interruption give up instead (e.g. the wait for an
+		// exception handler's reply in mach_msg_rpc_from_kernel()). thread_abort_safely() doesn't set it,
+		// so a promoted safe abort needs it too.
+		thread_ast_set(thread, AST_APC);
+		clear_wait_internal(thread, THREAD_INTERRUPTED);
+	}
+	thread_unlock(thread);
+
+	return result;
 };
 
 kern_return_t thread_abort_safely(thread_t thread) {
@@ -1460,6 +1486,7 @@ void dtape_thread_returning_to_user(dtape_thread_t* thread) {
 
 	thread_lock(xthread);
 	xthread->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
+	thread_ast_clear(xthread, AST_APC);
 	thread_unlock(xthread);
 };
 
