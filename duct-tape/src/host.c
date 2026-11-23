@@ -5,6 +5,8 @@
 
 #include <libsimple/lock.h>
 
+#include <darlingserver/duct-tape/processor.h>
+
 // Linux sysinfo (from the sysinfo man page)
 struct sysinfo {
 	long uptime;
@@ -360,9 +362,27 @@ kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t inf
 			return KERN_SUCCESS;
 		}
 
-		case HOST_CPU_LOAD_INFO:
-			dtape_stub_safe("HOST_CPU_LOAD_INFO");
-			return KERN_INVALID_ARGUMENT;
+		case HOST_CPU_LOAD_INFO: {
+			host_cpu_load_info_t load_info = (host_cpu_load_info_t)info;
+			uint32_t ticks[4];
+
+			if (*count < HOST_CPU_LOAD_INFO_COUNT) {
+				return KERN_FAILURE;
+			}
+
+			if (!dtape_cpu_load_ticks(-1, ticks)) {
+				return KERN_FAILURE;
+			}
+
+			load_info->cpu_ticks[CPU_STATE_USER] = ticks[CPU_STATE_USER];
+			load_info->cpu_ticks[CPU_STATE_SYSTEM] = ticks[CPU_STATE_SYSTEM];
+			load_info->cpu_ticks[CPU_STATE_IDLE] = ticks[CPU_STATE_IDLE];
+			load_info->cpu_ticks[CPU_STATE_NICE] = ticks[CPU_STATE_NICE];
+
+			*count = HOST_CPU_LOAD_INFO_COUNT;
+
+			return KERN_SUCCESS;
+		}
 
 		default:
 			dtape_stub_safe();

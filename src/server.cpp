@@ -18,6 +18,7 @@
  */
 
 #include <cstdint>
+#include <algorithm>
 #include <darlingserver/server.hpp>
 #include <sys/socket.h>
 #include <stdexcept>
@@ -316,6 +317,28 @@ struct DTapeHooks {
 		return process->_dtapeTask;
 	};
 
+	static size_t dtape_hook_task_list(dtape_task_t** tasks, size_t capacity) {
+		auto processes = DarlingServer::processRegistry().copyEntries();
+		// the registry is unordered; the creation order is the eternal ID order
+		std::sort(processes.begin(), processes.end(), [](const auto& a, const auto& b) {
+			return a->eternalID() < b->eternalID();
+		});
+		auto kernelProcess = DarlingServer::Process::kernelProcess();
+		size_t count = 0;
+		for (const auto& process: processes) {
+			// the server's own kernel task stands for no process of the guest
+			if (!process->_dtapeTask || process == kernelProcess) {
+				continue;
+			}
+			if (count < capacity) {
+				dtape_task_retain(process->_dtapeTask);
+				tasks[count] = process->_dtapeTask;
+			}
+			++count;
+		}
+		return count;
+	};
+
 	static bool dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
 		DarlingServer::Process::MemoryInfo info;
 		try {
@@ -538,6 +561,7 @@ struct DTapeHooks {
 		.task_write_memory = dtape_hook_task_write_memory,
 		.task_lookup = dtape_hook_task_lookup,
 		.task_lookup_eternal = dtape_hook_task_lookup_eternal,
+		.task_list = dtape_hook_task_list,
 		.task_get_memory_info = dtape_hook_task_get_memory_info,
 		.task_get_memory_region_info = dtape_hook_task_get_memory_region_info,
 		.task_allocate_pages = dtape_hook_task_allocate_pages,
