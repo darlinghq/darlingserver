@@ -235,6 +235,28 @@ namespace DarlingServer {
 		bool is64Bit() const;
 		Architecture architecture() const;
 
+		// CPU time of the threads of the process, in nanoseconds (Linux counts it in clock ticks)
+		struct CPUTimes {
+			// threads that have exited
+			uint64_t terminatedUserNs;
+			uint64_t terminatedSystemNs;
+			// threads that are still running
+			uint64_t liveUserNs;
+			uint64_t liveSystemNs;
+		};
+
+		// counters of events Linux keeps for the process
+		struct EventCounts {
+			uint64_t faults;
+			uint64_t pageins;
+			// of the threads that still exist
+			uint64_t contextSwitches;
+		};
+
+		// false if the process is gone
+		bool cpuTimes(CPUTimes& times) const;
+		bool eventCounts(EventCounts& counts) const;
+
 		MemoryInfo memoryInfo() const;
 		MemoryRegionInfo memoryRegionInfo(uintptr_t address) const;
 		// counts the resident pages of the mapping that starts at `startAddress`, split into pages only this process

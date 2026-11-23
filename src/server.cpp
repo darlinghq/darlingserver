@@ -339,6 +339,29 @@ struct DTapeHooks {
 		return count;
 	};
 
+	static bool dtape_hook_task_get_cpu_times(void* task_context, dtape_task_cpu_times_t* cpu_times) {
+		DarlingServer::Process::CPUTimes times;
+		if (!static_cast<DarlingServer::Process*>(task_context)->cpuTimes(times)) {
+			return false;
+		}
+		cpu_times->terminated_user_ns = times.terminatedUserNs;
+		cpu_times->terminated_system_ns = times.terminatedSystemNs;
+		cpu_times->live_user_ns = times.liveUserNs;
+		cpu_times->live_system_ns = times.liveSystemNs;
+		return true;
+	};
+
+	static bool dtape_hook_task_get_event_counts(void* task_context, dtape_task_event_counts_t* event_counts) {
+		DarlingServer::Process::EventCounts counts;
+		if (!static_cast<DarlingServer::Process*>(task_context)->eventCounts(counts)) {
+			return false;
+		}
+		event_counts->faults = counts.faults;
+		event_counts->pageins = counts.pageins;
+		event_counts->context_switches = counts.contextSwitches;
+		return true;
+	};
+
 	static bool dtape_hook_task_get_memory_info(void* task_context, dtape_memory_info_t* memory_info) {
 		DarlingServer::Process::MemoryInfo info;
 		try {
@@ -563,6 +586,8 @@ struct DTapeHooks {
 		.task_lookup_eternal = dtape_hook_task_lookup_eternal,
 		.task_list = dtape_hook_task_list,
 		.task_get_memory_info = dtape_hook_task_get_memory_info,
+		.task_get_cpu_times = dtape_hook_task_get_cpu_times,
+		.task_get_event_counts = dtape_hook_task_get_event_counts,
 		.task_get_memory_region_info = dtape_hook_task_get_memory_region_info,
 		.task_allocate_pages = dtape_hook_task_allocate_pages,
 		.task_free_pages = dtape_hook_task_free_pages,

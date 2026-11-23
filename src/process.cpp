@@ -29,6 +29,8 @@
 #include <kern/cs_blobs.h>
 
 #include <fstream>
+#include <sstream>
+#include <dirent.h>
 #include <cstdio>
 #include <cstring>
 
@@ -518,6 +520,134 @@ DarlingServer::Process::Architecture DarlingServer::Process::architecture() cons
 
 void DarlingServer::Process::logToStream(Log::Stream& stream) const {
 	stream << "[P:" << _pid << "(" << _nspid << ")]";
+};
+
+// the fields of /proc/<pid>/stat and /proc/<pid>/task/<tid>/stat that we use
+struct ProcStat {
+	unsigned long long minorFaults;
+	unsigned long long majorFaults;
+	// in clock ticks
+	unsigned long long userTime;
+	unsigned long long systemTime;
+};
+
+static bool readProcStat(const std::string& path, ProcStat& stat) {
+	std::ifstream file(path);
+	std::string line;
+	if (!std::getline(file, line)) {
+		return false;
+	}
+
+	// the command name is parenthesized and may itself contain spaces and parentheses, so parse after the last ')';
+	// the fields after it start with the state (field 3)
+	auto endOfComm = line.rfind(')');
+	if (endOfComm == std::string::npos) {
+		return false;
+	}
+
+	std::istringstream fields(line.substr(endOfComm + 1));
+	std::string field;
+	stat = {};
+	for (int index = 3; index <= 15; ++index) {
+		if (!(fields >> field)) {
+			return false;
+		}
+		unsigned long long value = std::strtoull(field.c_str(), nullptr, 10);
+		if (index == 10) {
+			stat.minorFaults = value;
+		} else if (index == 12) {
+			stat.majorFaults = value;
+		} else if (index == 14) {
+			stat.userTime = value;
+		} else if (index == 15) {
+			stat.systemTime = value;
+		}
+	}
+	return true;
+};
+
+// calls `callback` with the ID of each thread of the host process; false if the threads can't be listed
+template<class F>
+static bool forEachHostThread(pid_t pid, F callback) {
+	DIR* dir = opendir(("/proc/" + std::to_string(pid) + "/task").c_str());
+	if (!dir) {
+		return false;
+	}
+	while (auto entry = readdir(dir)) {
+		char* end = nullptr;
+		unsigned long tid = std::strtoul(entry->d_name, &end, 10);
+		if (end != entry->d_name && *end == '\0') {
+			callback(static_cast<pid_t>(tid));
+		}
+	}
+	closedir(dir);
+	return true;
+};
+
+bool DarlingServer::Process::cpuTimes(CPUTimes& times) const {
+	if (_pid < 0 || isDead()) {
+		return false;
+	}
+
+	long ticksPerSecond = sysconf(_SC_CLK_TCK);
+	if (ticksPerSecond <= 0) {
+		ticksPerSecond = 100;
+	}
+	uint64_t nsPerTick = 1000000000ULL / ticksPerSecond;
+
+	// the threads first, so that time they use in between does not count as that of exited threads
+	unsigned long long liveUser = 0;
+	unsigned long long liveSystem = 0;
+	if (!forEachHostThread(_pid, [&](pid_t tid) {
+		ProcStat stat;
+		if (readProcStat("/proc/" + std::to_string(_pid) + "/task/" + std::to_string(tid) + "/stat", stat)) {
+			liveUser += stat.userTime;
+			liveSystem += stat.systemTime;
+		}
+	})) {
+		return false;
+	}
+
+	// the process-wide counters also include the time of the threads that have exited
+	ProcStat total;
+	if (!readProcStat("/proc/" + std::to_string(_pid) + "/stat", total)) {
+		return false;
+	}
+
+	times.liveUserNs = liveUser * nsPerTick;
+	times.liveSystemNs = liveSystem * nsPerTick;
+	times.terminatedUserNs = (total.userTime > liveUser) ? (total.userTime - liveUser) * nsPerTick : 0;
+	times.terminatedSystemNs = (total.systemTime > liveSystem) ? (total.systemTime - liveSystem) * nsPerTick : 0;
+	return true;
+};
+
+bool DarlingServer::Process::eventCounts(EventCounts& counts) const {
+	if (_pid < 0 || isDead()) {
+		return false;
+	}
+
+	ProcStat total;
+	if (!readProcStat("/proc/" + std::to_string(_pid) + "/stat", total)) {
+		return false;
+	}
+
+	counts.faults = total.minorFaults + total.majorFaults;
+	// the faults that had to read from storage
+	counts.pageins = total.majorFaults;
+	counts.contextSwitches = 0;
+
+	forEachHostThread(_pid, [&](pid_t tid) {
+		std::ifstream status("/proc/" + std::to_string(_pid) + "/task/" + std::to_string(tid) + "/status");
+		std::string line;
+		while (std::getline(status, line)) {
+			unsigned long long value = 0;
+			if (sscanf(line.c_str(), "voluntary_ctxt_switches: %llu", &value) == 1 || sscanf(line.c_str(), "nonvoluntary_ctxt_switches: %llu", &value) == 1) {
+				counts.contextSwitches += value;
+			}
+		}
+	});
+
+	return true;
 };
 
 DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {

@@ -65,6 +65,8 @@ typedef dtape_task_t* (*dtape_hook_task_lookup_eternal_f)(dtape_eternal_id_t eid
 // as long as there is room for them (`capacity` entries), and returns the number of live tasks (which may exceed `capacity`)
 typedef size_t (*dtape_hook_task_list_f)(dtape_task_t** tasks, size_t capacity);
 typedef bool (*dtape_hook_task_get_memory_info_f)(void* task_context, dtape_memory_info_t* memory_info);
+typedef bool (*dtape_hook_task_get_cpu_times_f)(void* task_context, dtape_task_cpu_times_t* cpu_times);
+typedef bool (*dtape_hook_task_get_event_counts_f)(void* task_context, dtape_task_event_counts_t* event_counts);
 typedef bool (*dtape_hook_task_get_memory_region_info_f)(void* task_context, uintptr_t address, dtape_memory_region_info_t* memory_region_info);
 typedef uintptr_t (*dtape_hook_task_allocate_pages_f)(void* task_context, size_t page_count, int protection, uintptr_t address_hint, dtape_memory_flags_t flags);
 typedef int (*dtape_hook_task_free_pages_f)(void* task_context, uintptr_t address, size_t page_count);
@@ -137,6 +139,8 @@ typedef struct dtape_hooks {
 	dtape_hook_task_lookup_eternal_f task_lookup_eternal;
 	dtape_hook_task_list_f task_list;
 	dtape_hook_task_get_memory_info_f task_get_memory_info;
+	dtape_hook_task_get_cpu_times_f task_get_cpu_times;
+	dtape_hook_task_get_event_counts_f task_get_event_counts;
 	dtape_hook_task_get_memory_region_info_f task_get_memory_region_info;
 	dtape_hook_task_allocate_pages_f task_allocate_pages;
 	dtape_hook_task_free_pages_f task_free_pages;
