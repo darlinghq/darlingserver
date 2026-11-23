@@ -225,8 +225,22 @@ void* dtape_thread_context(dtape_thread_t* thread) {
 	return thread->context;
 };
 
-int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address) {
+// The caller's buffers have its build architecture's layout, not the task's under an emulator
+// (x86_64 code in an arm64 task); with no conversion, the state is not transferred.
+static bool dtape_thread_user_state_matches_task(dtape_task_t* task, dserver_rpc_architecture_t caller_architecture) {
+	if (caller_architecture == task->architecture) {
+		return true;
+	}
+	dtape_log_debug("caller architecture %d differs from task architecture %d: thread state transfer skipped", caller_architecture, task->architecture);
+	return false;
+};
+
+int dtape_thread_load_state_from_user(dtape_thread_t* thread, dserver_rpc_architecture_t caller_architecture, uintptr_t thread_state_address, uintptr_t float_state_address) {
 	dtape_task_t* task = dtape_task_for_thread(thread);
+
+	if (!dtape_thread_user_state_matches_task(task, caller_architecture)) {
+		return 0;
+	}
 
 #if __x86_64__ || __i386__
 	if (task->architecture == dserver_rpc_architecture_x86_64) {
@@ -272,8 +286,12 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 	return 0;
 };
 
-int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address) {
+int dtape_thread_save_state_to_user(dtape_thread_t* thread, dserver_rpc_architecture_t caller_architecture, uintptr_t thread_state_address, uintptr_t float_state_address) {
 	dtape_task_t* task = dtape_task_for_thread(thread);
+
+	if (!dtape_thread_user_state_matches_task(task, caller_architecture)) {
+		return 0;
+	}
 
 #if __x86_64__ || __i386__
 	if (task->architecture == dserver_rpc_architecture_x86_64) {

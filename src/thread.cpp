@@ -1095,15 +1095,15 @@ std::shared_ptr<DarlingServer::Thread> DarlingServer::Thread::threadForPort(uint
 	return thread->shared_from_this();
 };
 
-void DarlingServer::Thread::loadStateFromUser(uint64_t threadState, uint64_t floatState) {
-	int ret = dtape_thread_load_state_from_user(_dtapeThread, threadState, floatState);
+void DarlingServer::Thread::loadStateFromUser(dserver_rpc_architecture_t callerArchitecture, uint64_t threadState, uint64_t floatState) {
+	int ret = dtape_thread_load_state_from_user(_dtapeThread, callerArchitecture, threadState, floatState);
 	if (ret != 0) {
 		throw std::system_error(-ret, std::generic_category());
 	}
 };
 
-void DarlingServer::Thread::saveStateToUser(uint64_t threadState, uint64_t floatState) {
-	int ret = dtape_thread_save_state_to_user(_dtapeThread, threadState, floatState);
+void DarlingServer::Thread::saveStateToUser(dserver_rpc_architecture_t callerArchitecture, uint64_t threadState, uint64_t floatState) {
+	int ret = dtape_thread_save_state_to_user(_dtapeThread, callerArchitecture, threadState, floatState);
 	if (ret != 0) {
 		throw std::system_error(-ret, std::generic_category());
 	}
@@ -1126,8 +1126,8 @@ int DarlingServer::Thread::setPendingSignal(int signal) {
 	return pendingSignal;
 };
 
-void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
-	loadStateFromUser(threadStateAddress, floatStateAddress);
+void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
+	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
 
 	{
 		std::unique_lock lock(_rwlock);
@@ -1147,7 +1147,7 @@ void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNu
 		_processingSignal = false;
 	}
 
-	saveStateToUser(threadStateAddress, floatStateAddress);
+	saveStateToUser(callerArchitecture, threadStateAddress, floatStateAddress);
 };
 
 void DarlingServer::Thread::handleSignal(int signal) {
@@ -1816,11 +1816,11 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 	}
 };
 
-void DarlingServer::Thread::waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
-	loadStateFromUser(threadStateAddress, floatStateAddress);
+void DarlingServer::Thread::waitWhileUserSuspended(dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
+	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
 	dtape_thread_wait_while_user_suspended(_dtapeThread);
 	try {
-		saveStateToUser(threadStateAddress, floatStateAddress);
+		saveStateToUser(callerArchitecture, threadStateAddress, floatStateAddress);
 	} catch (std::system_error e) {
 		// if we fail to save the state back to the process, that likely means the process died or was killed while waiting.
 		// it's nothing to worry about. just log it and move on.
