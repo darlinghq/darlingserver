@@ -448,17 +448,20 @@ static void sq_close_for_later(dtape_sq_slot_t* slot)
 // ---- port sets ------------------------------------------------------------------------------------------
 
 // `member` is no longer a member of its set (region locked). The set's bitmap, the member's S fields and the
-// server's link are cleared; the set's receivers are woken.
-static void sq_member_unlink_locked(dtape_sq_slot_t* member)
+// server's link are cleared; the set's receivers are woken. False if a thread of the task was looking for a
+// message in the set at that moment (see dsq_set_member_remove()): it may still take one from `member`.
+static bool sq_member_unlink_locked(dtape_sq_slot_t* member)
 {
 	dtape_sq_slot_t* set = member->set;
 	dtape_sq_region_t* region = member->region;
+	bool quiet;
 
 	if (!set) {
-		return;
+		return true;
 	}
-	(void) dsq_set_member_remove(&region->view, set->index, member->index);
+	quiet = dsq_set_member_remove(&region->view, set->index, member->index);
 	member->set = NULL;
+	return quiet;
 }
 
 // takes the set slot and every member's slot out of the mode (region locked): a set the task can't receive on
@@ -500,8 +503,11 @@ static void sq_set_finalize_locked(dtape_sq_slot_t* set)
 		while (bits != 0) {
 			dtape_sq_slot_t* member = &region->slots[w * 32 + (uint32_t) __builtin_ctz(bits)];
 			bits &= bits - 1;
-			if (member->set == set) {
-				sq_member_unlink_locked(member);
+			// a thread of the task that is taking a message from the member through the set right now would
+			// take it after the set is gone: the member leaves the mode instead, which makes that take fail
+			// (as an extract does, sq_pset_member_removed())
+			if (member->set == set && !sq_member_unlink_locked(member) && !member->closing) {
+				sq_close_for_later(member);
 			}
 		}
 	}
@@ -612,7 +618,7 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	sq_wake(region, &qslot->head);
 	sq_wake(region, &qslot->deq);
 
-	sq_member_unlink_locked(slot);
+	(void) sq_member_unlink_locked(slot);
 	dsq_name_remove(&region->view, slot->name);
 	slot->port = IP_NULL;
 	slot->name = MACH_PORT_NULL;
