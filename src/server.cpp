@@ -323,11 +323,9 @@ struct DTapeHooks {
 		std::sort(processes.begin(), processes.end(), [](const auto& a, const auto& b) {
 			return a->eternalID() < b->eternalID();
 		});
-		auto kernelProcess = DarlingServer::Process::kernelProcess();
 		size_t count = 0;
 		for (const auto& process: processes) {
-			// the server's own kernel task stands for no process of the guest
-			if (!process->_dtapeTask || process == kernelProcess) {
+			if (!process->_dtapeTask) {
 				continue;
 			}
 			if (count < capacity) {

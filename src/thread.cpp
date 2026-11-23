@@ -1715,6 +1715,15 @@ bool DarlingServer::Thread::getStats(char* name, size_t nameSize, uint64_t& user
 		return false;
 	}
 
+	// the threads of the kernel task are not threads of Linux, so Linux has no times for them
+	// (the CPU time of the server is accounted to the task, see Process::cpuTimes())
+	if (process == Process::kernelProcess()) {
+		userTimeNs = 0;
+		systemTimeNs = 0;
+		name[0] = '\0';
+		return true;
+	}
+
 	std::string base = "/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id());
 	std::string line;
 
@@ -1771,6 +1780,11 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 	auto process = this->process();
 	if (!process || isDead()) {
 		return RunState::Dead;
+	}
+
+	// the threads of the kernel task are not threads of Linux: they run when the server has work for them
+	if (process == Process::kernelProcess()) {
+		return RunState::Interruptible;
 	}
 
 	std::ifstream file("/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(id()) + "/stat");

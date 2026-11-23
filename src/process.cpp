@@ -584,8 +584,13 @@ static bool forEachHostThread(pid_t pid, F callback) {
 	return true;
 };
 
+// the host process whose /proc entries describe this task: the server itself for the kernel task
+pid_t DarlingServer::Process::statisticsPID() const {
+	return (_pid < 0) ? getpid() : _pid;
+};
+
 bool DarlingServer::Process::cpuTimes(CPUTimes& times) const {
-	if (_pid < 0 || isDead()) {
+	if (isDead()) {
 		return false;
 	}
 
@@ -596,11 +601,12 @@ bool DarlingServer::Process::cpuTimes(CPUTimes& times) const {
 	uint64_t nsPerTick = 1000000000ULL / ticksPerSecond;
 
 	// the threads first, so that time they use in between does not count as that of exited threads
+	// (the threads of the kernel task are not threads of Linux: all time of the server is that of the task)
 	unsigned long long liveUser = 0;
 	unsigned long long liveSystem = 0;
-	if (!forEachHostThread(_pid, [&](pid_t tid) {
+	if (_pid >= 0 && !forEachHostThread(statisticsPID(), [&](pid_t tid) {
 		ProcStat stat;
-		if (readProcStat("/proc/" + std::to_string(_pid) + "/task/" + std::to_string(tid) + "/stat", stat)) {
+		if (readProcStat("/proc/" + std::to_string(statisticsPID()) + "/task/" + std::to_string(tid) + "/stat", stat)) {
 			liveUser += stat.userTime;
 			liveSystem += stat.systemTime;
 		}
@@ -610,7 +616,7 @@ bool DarlingServer::Process::cpuTimes(CPUTimes& times) const {
 
 	// the process-wide counters also include the time of the threads that have exited
 	ProcStat total;
-	if (!readProcStat("/proc/" + std::to_string(_pid) + "/stat", total)) {
+	if (!readProcStat("/proc/" + std::to_string(statisticsPID()) + "/stat", total)) {
 		return false;
 	}
 
@@ -622,12 +628,12 @@ bool DarlingServer::Process::cpuTimes(CPUTimes& times) const {
 };
 
 bool DarlingServer::Process::eventCounts(EventCounts& counts) const {
-	if (_pid < 0 || isDead()) {
+	if (isDead()) {
 		return false;
 	}
 
 	ProcStat total;
-	if (!readProcStat("/proc/" + std::to_string(_pid) + "/stat", total)) {
+	if (!readProcStat("/proc/" + std::to_string(statisticsPID()) + "/stat", total)) {
 		return false;
 	}
 
@@ -636,8 +642,8 @@ bool DarlingServer::Process::eventCounts(EventCounts& counts) const {
 	counts.pageins = total.majorFaults;
 	counts.contextSwitches = 0;
 
-	forEachHostThread(_pid, [&](pid_t tid) {
-		std::ifstream status("/proc/" + std::to_string(_pid) + "/task/" + std::to_string(tid) + "/status");
+	forEachHostThread(statisticsPID(), [&](pid_t tid) {
+		std::ifstream status("/proc/" + std::to_string(statisticsPID()) + "/task/" + std::to_string(tid) + "/status");
 		std::string line;
 		while (std::getline(status, line)) {
 			unsigned long long value = 0;
@@ -656,7 +662,7 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 	}
 
 	MemoryInfo info {};
-	std::ifstream file("/proc/" + std::to_string(_pid) + "/statm");
+	std::ifstream file("/proc/" + std::to_string(statisticsPID()) + "/statm");
 
 	if (!(file >> info.virtualSize >> info.residentSize)) {
 		// the process died after the check above
@@ -678,7 +684,7 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 	uint64_t rssAnon = 0, rssFile = 0, rssShmem = 0, vmSwap = 0, vmHwm = 0;
 	bool haveBreakdown = false;
 	{
-		std::ifstream status("/proc/" + std::to_string(_pid) + "/status");
+		std::ifstream status("/proc/" + std::to_string(statisticsPID()) + "/status");
 		std::string line;
 		while (std::getline(status, line)) {
 			unsigned long long kb = 0;

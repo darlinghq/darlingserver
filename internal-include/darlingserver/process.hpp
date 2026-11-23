@@ -253,6 +253,9 @@ namespace DarlingServer {
 			uint64_t contextSwitches;
 		};
 
+		// the host process whose statistics describe this task (the server itself for the kernel task)
+		pid_t statisticsPID() const;
+
 		// false if the process is gone
 		bool cpuTimes(CPUTimes& times) const;
 		bool eventCounts(EventCounts& counts) const;
