@@ -911,10 +911,22 @@ mach_port_msgcount_t dtape_sq_port_message_count(ipc_port_t port)
 	mach_port_msgcount_t count = port->ip_messages.imq_msgcount;
 
 	if (slot) {
-		dsq_q_slot_t* qslot = &slot->region->view.q->slots[slot->index];
-		uint64_t d = dsq_load(&qslot->deq);
-		uint64_t h = dsq_load(&qslot->head);
-		uint32_t len = DSQ_LEN(h, d);
+		dtape_sq_region_t* region = slot->region;
+		dsq_q_slot_t* qslot = &region->view.q->slots[slot->index];
+		uint64_t h, d;
+		uint32_t len;
+
+		lck_spin_lock(&region->lock);
+		if (slot->closing) {
+			// the close changed the deq word: the queue is what the close left
+			h = slot->closed_head;
+			d = slot->closed_deq;
+		} else {
+			d = dsq_load(&qslot->deq);
+			h = dsq_load(&qslot->head);
+		}
+		lck_spin_unlock(&region->lock);
+		len = DSQ_LEN(h, d);
 		count += (len > DSQ_NODES) ? DSQ_NODES : len;
 	}
 	return count;
