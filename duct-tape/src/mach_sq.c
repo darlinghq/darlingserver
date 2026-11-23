@@ -487,13 +487,16 @@ void dtape_sq_entry_modified(ipc_space_t space, mach_port_name_t name, ipc_entry
 		return;
 	}
 	port = ip_object_to_port(entry->ie_object);
-	slot = sq_port_slot(port);
-	if (!slot) {
+	if (!sq_port_slot(port) || space->is_task == TASK_NULL) {
 		return;
 	}
-	region = slot->region;
-	// a name in another task's space (a send right to the port) is not the one the region describes
-	if (region->task->xnu_task.itk_space != space) {
+
+	// Only the region of this space's own task describes its names. A port in the mode that this space only
+	// has a send right to belongs to another task's region, which that task's teardown may free at any time
+	// (nothing here locks that task), so its slot is not looked at: the slot is used only if it lies in this
+	// space's region. The space is locked and active, so its task, and with it the region, stays.
+	region = __atomic_load_n(&dtape_task_for_xnu_task(space->is_task)->sq_region, __ATOMIC_ACQUIRE);
+	if (!region) {
 		return;
 	}
 
@@ -501,6 +504,14 @@ void dtape_sq_entry_modified(ipc_space_t space, mach_port_name_t name, ipc_entry
 	         ((entry->ie_bits & MACH_PORT_TYPE_SEND) ? DSQ_RIGHT_SEND : 0);
 
 	lck_spin_lock(&region->lock);
+	// a port leaves the mode (its ip_sq cleared) with the region lock held; the address is compared before
+	// anything is read through it
+	uintptr_t at = (uintptr_t) sq_port_slot(port);
+	if (at < (uintptr_t) &region->slots[0] || at >= (uintptr_t) &region->slots[DSQ_SLOTS]) {
+		lck_spin_unlock(&region->lock);
+		return;
+	}
+	slot = (dtape_sq_slot_t*) at;
 	if (slot->port == port && slot->name == name && slot->rights != rights && !slot->closing) {
 		// the task's lookups see the new rights together with the next epoch, and a publish made with the
 		// old rights succeeds only before the epoch changes, i.e. before this call returns
