@@ -1055,7 +1055,7 @@ void DarlingServer::Call::Sigprocess::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		try {
-			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _body.thread_state, _body.float_state);
+			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _header.architecture, _body.thread_state, _body.float_state);
 			newBSDSignal = thread->pendingSignal();
 		} catch (std::system_error e) {
 			code = -e.code().value();
@@ -1328,7 +1328,7 @@ void DarlingServer::Call::ThreadSuspended::processCall() {
 	int code = 0;
 
 	if (auto thread = _thread.lock()) {
-		thread->waitWhileUserSuspended(_body.thread_state, _body.float_state);
+		thread->waitWhileUserSuspended(_header.architecture, _body.thread_state, _body.float_state);
 	} else {
 		code = -ESRCH;
 	}
