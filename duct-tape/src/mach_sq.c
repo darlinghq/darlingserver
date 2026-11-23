@@ -76,6 +76,13 @@ typedef struct dtape_sq_slot {
 	uint64_t closed_head;
 	uint64_t closed_deq;
 	struct ipc_kmsg_queue tokens;
+	// the head seq from which on each generation of the token history was the task's for this queue: an
+	// INLINE message published at seq s was sent with the tokens of the mark with the largest seq <= s
+	// (indexed like the history; `gen` 0: none)
+	struct {
+		uint32_t gen;
+		uint32_t seq;
+	} token_marks[DSQ_TOKEN_HISTORY];
 } dtape_sq_slot_t;
 
 typedef struct dtape_sq_history_entry {
@@ -153,15 +160,37 @@ static void sq_record_tokens_locked(dtape_sq_region_t* region)
 	dsq_tokens_push(&region->view, (const uint32_t*) &task->sec_token, (const uint32_t*) &task->audit_token);
 }
 
-// the tokens of a message sent under generation `gen`; a generation that is no longer known (or that the
-// task made up) gives the current tokens, so the task can't claim tokens it never had
-static const dtape_sq_history_entry_t* sq_history(dtape_sq_region_t* region, uint32_t gen)
+// the current generation becomes the task's for every message published on `slot` from `seq` on (region locked)
+static void sq_mark_tokens_locked(dtape_sq_slot_t* slot, uint32_t seq)
 {
-	const dtape_sq_history_entry_t* e = &region->history[gen % DSQ_TOKEN_HISTORY];
-	if (e->gen != gen) {
-		e = &region->history[region->gen % DSQ_TOKEN_HISTORY];
+	uint32_t gen = slot->region->gen;
+	slot->token_marks[gen % DSQ_TOKEN_HISTORY].gen = gen;
+	slot->token_marks[gen % DSQ_TOKEN_HISTORY].seq = seq & DSQ_SEQ_MASK;
+}
+
+// The tokens of the INLINE message published at head seq `seq` on `slot`: those that were the task's when the
+// head had that seq, as the server recorded it (sq_mark_tokens_locked()). The generation the task wrote into
+// the node is not used: a task that changed its user ID could otherwise label new messages with tokens it had
+// before. A message older than every mark still known (more token changes than the history holds while it was
+// queued) gets the current tokens. Region locked.
+static const dtape_sq_history_entry_t* sq_slot_tokens(dtape_sq_slot_t* slot, uint32_t seq)
+{
+	dtape_sq_region_t* region = slot->region;
+
+	// newest generation first: a later generation's mark is at a later seq. A mark at or before `seq` is less
+	// than 2^30 behind it; one after it (the message was queued before that change) is less than DSQ_NODES
+	// ahead, so "behind" by almost 2^31 (seq arithmetic wraps at 2^31)
+	for (uint32_t k = 0; k < DSQ_TOKEN_HISTORY; k++) {
+		uint32_t gen = region->gen - k;
+		uint32_t i = gen % DSQ_TOKEN_HISTORY;
+		if (gen == 0 || slot->token_marks[i].gen != gen || region->history[i].gen != gen) {
+			continue;
+		}
+		if (((seq - slot->token_marks[i].seq) & DSQ_SEQ_MASK) < 0x40000000u) {
+			return &region->history[i];
+		}
 	}
-	return e;
+	return &region->history[region->gen % DSQ_TOKEN_HISTORY];
 }
 
 bool dtape_sq_attach(dtape_task_t* task, void* s_map, void* q_map)
@@ -213,6 +242,14 @@ void dtape_sq_task_tokens_changed(dtape_task_t* task)
 	task_lock(&task->xnu_task);
 	lck_spin_lock(&region->lock);
 	sq_record_tokens_locked(region);
+	// messages the task publishes from now on are sent with the new tokens; one being published at this
+	// moment is either before the head seq read here or at or after it
+	for (uint32_t i = 0; i < DSQ_SLOTS; i++) {
+		dtape_sq_slot_t* slot = &region->slots[i];
+		if (slot->port != IP_NULL) {
+			sq_mark_tokens_locked(slot, DSQ_H_SEQ(dsq_load(&region->view.q->slots[i].head)));
+		}
+	}
 	lck_spin_unlock(&region->lock);
 	task_unlock(&task->xnu_task);
 }
@@ -320,6 +357,8 @@ void dtape_sq_port_created(ipc_space_t space, mach_port_name_t name)
 			slot->tokens_taken = 0;
 			slot->pset = NULL;
 			slot->set = NULL;
+			memset(slot->token_marks, 0, sizeof(slot->token_marks));
+			sq_mark_tokens_locked(slot, DSQ_H_SEQ(dsq_load(&region->view.q->slots[slot->index].head)));
 			__atomic_store_n(&port->ip_sq, slot, __ATOMIC_RELEASE);
 		} else {
 			// the name table is full: the port stays normal
@@ -344,15 +383,17 @@ static inline bool sq_node_made_send(const dsq_node_t* node, uint32_t index)
 }
 
 // makes a kmsg of a node of a slot the server has taken (`node` is the server's one copy of node `index`:
-// the task can't change what is validated afterwards); NULL if the node is not a valid one
-static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32_t index, const dsq_node_t* copy)
+// the task can't change what is validated afterwards; `seq` is the head seq it was published at, as the server
+// found it); NULL if the node is not a valid one
+static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32_t index, uint32_t seq,
+    const dsq_node_t* copy)
 {
 	dtape_sq_region_t* region = slot->region;
 	const dsq_node_t node = *copy;
 	ipc_kmsg_t kmsg = IKM_NULL;
 
 	if ((node.flags & DSQ_NODE_INLINE) && index < DSQ_TNODES) {
-		const dtape_sq_history_entry_t* tokens = sq_history(region, node.aux);
+		const dtape_sq_history_entry_t* tokens = sq_slot_tokens(slot, seq);
 		if (node.size >= DSQ_MSG_MIN && node.size <= DSQ_MSG_MAX) {
 			kmsg = dtape_kmsg_from_shared(port, slot->name, node.msg, node.size,
 			    sq_node_made_send(&node, index), &tokens->sec_token, &tokens->audit_token);
@@ -528,7 +569,7 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 		if (sq_node_made_send(&node, nodes[i])) {
 			made++;
 		}
-		kmsg = sq_node_to_kmsg(slot, port, nodes[i], &node);
+		kmsg = sq_node_to_kmsg(slot, port, nodes[i], DSQ_D_DEQ(d) + i, &node);
 		if (kmsg == IKM_NULL) {
 			corrupt = true;
 			continue;
@@ -891,13 +932,16 @@ void dtape_sq_entry_modified(ipc_space_t space, mach_port_name_t name, ipc_entry
 		return;
 	}
 	port = ip_object_to_port(entry->ie_object);
-	slot = sq_port_slot(port);
-	if (!slot) {
+	if (!sq_port_slot(port) || space->is_task == TASK_NULL) {
 		return;
 	}
-	region = slot->region;
-	// a name in another task's space (a send right to the port) is not the one the region describes
-	if (region->task->xnu_task.itk_space != space) {
+
+	// Only the region of this space's own task describes its names. A port in the mode that this space only
+	// has a send right to belongs to another task's region, which that task's teardown may free at any time
+	// (nothing here locks that task), so its slot is not looked at: the slot is used only if it lies in this
+	// space's region. The space is locked and active, so its task, and with it the region, stays.
+	region = __atomic_load_n(&dtape_task_for_xnu_task(space->is_task)->sq_region, __ATOMIC_ACQUIRE);
+	if (!region) {
 		return;
 	}
 
@@ -905,6 +949,14 @@ void dtape_sq_entry_modified(ipc_space_t space, mach_port_name_t name, ipc_entry
 	         ((entry->ie_bits & MACH_PORT_TYPE_SEND) ? DSQ_RIGHT_SEND : 0);
 
 	lck_spin_lock(&region->lock);
+	// a port leaves the mode (its ip_sq cleared) with the region lock held; the address is compared before
+	// anything is read through it
+	uintptr_t at = (uintptr_t) sq_port_slot(port);
+	if (at < (uintptr_t) &region->slots[0] || at >= (uintptr_t) &region->slots[DSQ_SLOTS]) {
+		lck_spin_unlock(&region->lock);
+		return;
+	}
+	slot = (dtape_sq_slot_t*) at;
 	// not a right: how the port is used (mk_timer)
 	rights |= slot->rights & DSQ_RIGHT_NOSEND;
 	if (slot->port == port && slot->name == name && slot->rights != rights && !slot->closing) {
@@ -941,9 +993,20 @@ void dtape_sq_port_qlimit_changed(ipc_port_t port)
 	if (slot) {
 		dtape_sq_region_t* region = slot->region;
 		dsq_s_slot_t* sslot = &region->view.s->slots[slot->index];
-		__atomic_store_n(&sslot->qlimit, port->ip_messages.imq_qlimit, __ATOMIC_RELEASE);
-		// senders waiting for room look again, as XNU wakes full waiters when the limit is raised
-		sq_wake(region, &region->view.q->slots[slot->index].deq);
+		uint32_t qlimit = port->ip_messages.imq_qlimit;
+		uint32_t previous = sslot->qlimit;
+
+		// a sender of the task that found the queue full counts itself in `snd_waiters`, reads the limit again
+		// and waits for the deq word to change. A new limit does not change that word, so a sender that read
+		// the old limit would sleep through the change. XNU lets the waiting senders in when the limit is
+		// raised: with a sender counted in, the port leaves the mode, and the close changes the deq word and
+		// wakes it (it then sends through the server). The store and the load are both SEQ_CST: either the
+		// sender reads the new limit, or the server sees the sender counted in
+		__atomic_store_n(&sslot->qlimit, qlimit, __ATOMIC_SEQ_CST);
+		if (qlimit > previous &&
+		    __atomic_load_n(&region->view.q->slots[slot->index].snd_waiters, __ATOMIC_SEQ_CST) != 0) {
+			dtape_sq_port_leave_locked(port, DSQ_CLOSE_OTHER);
+		}
 	}
 }
 
@@ -1120,7 +1183,7 @@ static int sq_receive_node(dtape_sq_slot_t* slot, ipc_port_t port, const dsq_set
 	}
 
 	lck_spin_lock(&region->lock);
-	ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, &node);
+	ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, DSQ_D_DEQ(d), &node);
 	if (kmsg == IKM_NULL) {
 		sq_poison(region, "an invalid message");
 		lck_spin_unlock(&region->lock);
@@ -1394,10 +1457,22 @@ mach_port_msgcount_t dtape_sq_port_message_count(ipc_port_t port)
 	mach_port_msgcount_t count = port->ip_messages.imq_msgcount;
 
 	if (slot) {
-		dsq_q_slot_t* qslot = &slot->region->view.q->slots[slot->index];
-		uint64_t d = dsq_load(&qslot->deq);
-		uint64_t h = dsq_load(&qslot->head);
-		uint32_t len = DSQ_LEN(h, d);
+		dtape_sq_region_t* region = slot->region;
+		dsq_q_slot_t* qslot = &region->view.q->slots[slot->index];
+		uint64_t h, d;
+		uint32_t len;
+
+		lck_spin_lock(&region->lock);
+		if (slot->closing) {
+			// the close changed the deq word: the queue is what the close left
+			h = slot->closed_head;
+			d = slot->closed_deq;
+		} else {
+			d = dsq_load(&qslot->deq);
+			h = dsq_load(&qslot->head);
+		}
+		lck_spin_unlock(&region->lock);
+		len = DSQ_LEN(h, d);
 		count += (len > DSQ_NODES) ? DSQ_NODES : len;
 	}
 	return count;
