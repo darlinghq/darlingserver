@@ -273,8 +273,8 @@ namespace DarlingServer {
 		 */
 		std::shared_ptr<Thread> impersonatingThread() const;
 
-		void loadStateFromUser(uint64_t threadState, uint64_t floatState);
-		void saveStateToUser(uint64_t threadState, uint64_t floatState);
+		void loadStateFromUser(dserver_rpc_architecture_t callerArchitecture, uint64_t threadState, uint64_t floatState);
+		void saveStateToUser(dserver_rpc_architecture_t callerArchitecture, uint64_t threadState, uint64_t floatState);
 
 		int pendingSignal() const;
 
@@ -283,7 +283,7 @@ namespace DarlingServer {
 		 */
 		int setPendingSignal(int signal);
 
-		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
+		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 
 		void handleSignal(int signal);
 
@@ -318,7 +318,7 @@ namespace DarlingServer {
 		 */
 		bool getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const;
 
-		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
+		void waitWhileUserSuspended(dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;
 
 		/**

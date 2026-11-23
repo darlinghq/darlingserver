@@ -89,8 +89,8 @@ void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, 
  */
 dtape_thread_t* dtape_thread_for_port(uint32_t thread_port);
 void* dtape_thread_context(dtape_thread_t* thread);
-int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
-int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
+int dtape_thread_load_state_from_user(dtape_thread_t* thread, dserver_rpc_architecture_t caller_architecture, uintptr_t thread_state_address, uintptr_t float_state_address);
+int dtape_thread_save_state_to_user(dtape_thread_t* thread, dserver_rpc_architecture_t caller_architecture, uintptr_t thread_state_address, uintptr_t float_state_address);
 void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, int linux_signal_number, int code, uintptr_t signal_address);
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
 void dtape_thread_retain(dtape_thread_t* thread);
