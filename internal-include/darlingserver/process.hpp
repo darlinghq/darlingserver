@@ -26,6 +26,7 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <string>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -128,6 +129,28 @@ namespace DarlingServer {
 		mutable int _mapsFd = -1;
 		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset, uint64_t* device = nullptr, uint64_t* inode = nullptr) const;
 		void _closeMapsDescriptor();
+
+		// `/proc/<pid>/smaps`, read front to back by regionResidency(). The kernel produces the text of one mapping
+		// at a time, as the descriptor is read, so keeping the descriptor and its parse state between calls lets an
+		// ascending walk over the mappings read the file once (instead of from its start for every mapping).
+		struct SmapsCursor {
+			int fd = -1;
+			// text read from the descriptor that has not been parsed yet
+			std::string pending;
+			// the mapping whose header was parsed last
+			bool haveRegion = false;
+			uintptr_t regionStart = 0;
+			uint64_t privateKiB = 0;
+			uint64_t sharedKiB = 0;
+			// all the counts of the mapping have been parsed
+			bool regionComplete = false;
+			// the mapping's counts were returned to a caller (a later query for it must read the file afresh)
+			bool regionServed = false;
+		};
+		mutable std::mutex _smapsMutex;
+		mutable SmapsCursor _smaps;
+		bool _scanSmaps(uintptr_t startAddress, uint64_t& privateKiB, uint64_t& sharedKiB, bool& found) const;
+		void _closeSmapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;

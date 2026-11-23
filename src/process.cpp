@@ -137,6 +137,7 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 DarlingServer::Process::~Process() {
 	processLog.info() << *this << ": process being destroyed" << processLog.endLog;
 	_closeMapsDescriptor();
+	_closeSmapsDescriptor();
 };
 
 DarlingServer::Process::ID DarlingServer::Process::id() const {
@@ -341,8 +342,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// update the process architecture
 		_architecture = architecture;
 
-		// the old `/proc/<pid>/maps` descriptor refers to the address space that the exec replaced
+		// the old `/proc/<pid>/maps` and smaps descriptors refer to the address space that the exec replaced
 		_closeMapsDescriptor();
+		_closeSmapsDescriptor();
 
 		// replace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;
@@ -848,33 +850,76 @@ bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext
 	return false;
 };
 
-bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const {
-	if (isDead()) {
-		return false;
+void DarlingServer::Process::_closeSmapsDescriptor() {
+	std::unique_lock lock(_smapsMutex);
+	if (_smaps.fd >= 0) {
+		close(_smaps.fd);
 	}
+	_smaps = SmapsCursor();
+};
 
-	std::ifstream file("/proc/" + std::to_string(_pid) + "/smaps");
-	std::string line;
-	bool inRegion = false;
-	uint64_t privateKiB = 0;
-	uint64_t sharedKiB = 0;
+//
+// Reads `/proc/<pid>/smaps` forward from the cursor until the counts of the mapping that starts at `startAddress` are
+// parsed. `found` tells whether that mapping was reached; the return value is false only if the file could not be read.
+//
+// The reads are small and the parsing stops at the last count that is needed, so the kernel, which writes the text of
+// one mapping at a time as the file is read, does not produce the text of mappings that were not asked for yet (their
+// counts would be out of date by the time they are asked for).
+//
+bool DarlingServer::Process::_scanSmaps(uintptr_t startAddress, uint64_t& privateKiB, uint64_t& sharedKiB, bool& found) const {
+	found = false;
 
-	while (std::getline(file, line)) {
-		uintptr_t start;
-		uintptr_t end;
-		char perms[8];
-		uintptr_t offset;
-
-		// a mapping's header line; the lines that follow it (until the next header) describe it
-		if (parseMapsLine(line, start, end, perms, offset)) {
-			if (inRegion) {
-				break;
+	for (;;) {
+		if (_smaps.haveRegion) {
+			if (_smaps.regionStart > startAddress) {
+				// the mapping is not there any more (or was never)
+				return true;
 			}
-			inRegion = start == startAddress;
+			if (_smaps.regionStart == startAddress && _smaps.regionComplete) {
+				privateKiB = _smaps.privateKiB;
+				sharedKiB = _smaps.sharedKiB;
+				_smaps.regionServed = true;
+				found = true;
+				return true;
+			}
+		}
+
+		auto lineEnd = _smaps.pending.find('\n');
+		if (lineEnd == std::string::npos) {
+			char chunk[128];
+			ssize_t count;
+			do {
+				count = read(_smaps.fd, chunk, sizeof(chunk));
+			} while (count < 0 && errno == EINTR);
+			if (count <= 0) {
+				// the end of the file (or an error, e.g. the address space is gone): there is no such mapping after the cursor
+				return count == 0;
+			}
+			_smaps.pending.append(chunk, count);
 			continue;
 		}
 
-		if (!inRegion) {
+		std::string line = _smaps.pending.substr(0, lineEnd);
+		_smaps.pending.erase(0, lineEnd + 1);
+
+		// a mapping's header line starts with a (lowercase hexadecimal) address; the field lines, with a capitalized name
+		if (!line.empty() && ((line[0] >= '0' && line[0] <= '9') || (line[0] >= 'a' && line[0] <= 'f'))) {
+			uintptr_t start;
+			uintptr_t end;
+			char perms[8];
+			uintptr_t offset;
+			if (parseMapsLine(line, start, end, perms, offset)) {
+				_smaps.haveRegion = true;
+				_smaps.regionStart = start;
+				_smaps.privateKiB = 0;
+				_smaps.sharedKiB = 0;
+				_smaps.regionComplete = false;
+				_smaps.regionServed = false;
+			}
+			continue;
+		}
+
+		if (!_smaps.haveRegion || _smaps.regionStart != startAddress) {
 			continue;
 		}
 
@@ -884,13 +929,64 @@ bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& p
 			continue;
 		}
 		if (strcmp(field, "Private_Clean") == 0 || strcmp(field, "Private_Dirty") == 0) {
-			privateKiB += kib;
+			_smaps.privateKiB += kib;
+			if (field[8] == 'D') {
+				// the last of the counts (Shared_* come before Private_*)
+				_smaps.regionComplete = true;
+			}
 		} else if (strcmp(field, "Shared_Clean") == 0 || strcmp(field, "Shared_Dirty") == 0) {
-			sharedKiB += kib;
+			_smaps.sharedKiB += kib;
+		}
+	}
+};
+
+bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const {
+	if (isDead()) {
+		return false;
+	}
+
+	uint64_t privateKiB = 0;
+	uint64_t sharedKiB = 0;
+	bool found = false;
+
+	{
+		std::unique_lock lock(_smapsMutex);
+
+		// Reading on from where the previous call stopped serves a walk over the mappings in ascending order.
+		// Anything else (an earlier mapping, the same mapping again, a mapping that was not found) starts reading the
+		// file from its start, which also gives the counts as they are now.
+		bool resumable = _smaps.fd >= 0 && _smaps.haveRegion && (startAddress > _smaps.regionStart || (startAddress == _smaps.regionStart && !_smaps.regionServed));
+
+		auto restart = [&]() {
+			if (_smaps.fd >= 0) {
+				close(_smaps.fd);
+			}
+			_smaps = SmapsCursor();
+			_smaps.fd = open(("/proc/" + std::to_string(_pid) + "/smaps").c_str(), O_RDONLY | O_CLOEXEC);
+			return _smaps.fd >= 0;
+		};
+
+		if (!resumable && !restart()) {
+			return false;
+		}
+
+		bool readable = _scanSmaps(startAddress, privateKiB, sharedKiB, found);
+
+		if (!found && resumable) {
+			if (!restart()) {
+				return false;
+			}
+			readable = _scanSmaps(startAddress, privateKiB, sharedKiB, found);
+		}
+
+		if (!readable) {
+			// the end of the file, or it can't be read: nothing more to resume
+			close(_smaps.fd);
+			_smaps = SmapsCursor();
 		}
 	}
 
-	if (!inRegion) {
+	if (!found) {
 		return false;
 	}
 
