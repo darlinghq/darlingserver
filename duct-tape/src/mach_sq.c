@@ -610,17 +610,11 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 	lck_spin_unlock(&region->lock);
 
 	if (len > 0 && port->ip_in_pset != 0) {
-		// the port is in sets of XNU's: its messages are in its queue now, and the sets have to know (the
-		// port is posted to them, as ipc_mqueue_post() does when a message arrives)
-		uint64_t reserved_prepost = 0;
-		spl_t th_spl;
-		thread_t th = waitq_wakeup64_identify_locked(&mqueue->imq_wait_queue, IPC_MQUEUE_RECEIVE, THREAD_AWAKENED,
-		    &th_spl, &reserved_prepost, WAITQ_ALL_PRIORITIES, WAITQ_KEEP_LOCKED);
-		if (th != THREAD_NULL) {
-			// nothing waits on a port that was in the mode
-			thread_unlock(th);
-			splx(th_spl);
-		}
+		// the port is in sets of XNU's: its messages are in its queue now, and the sets have to know. A thread
+		// may already be blocked in XNU's receive on such a set (another server thread let the set leave the
+		// mode and found nothing in it while this port's queue was being moved), so each message goes to a
+		// waiting receiver, and the port is preposted once none is left, as ipc_mqueue_post() does
+		ipc_mqueue_post_queued(mqueue);
 	}
 }
 
