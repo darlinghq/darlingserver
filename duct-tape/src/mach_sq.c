@@ -416,18 +416,33 @@ static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32
 	return kmsg;
 }
 
+static void sq_set_close_all_for_later(dtape_sq_slot_t* set);
+
 // closes a slot without moving its queue (region locked). no publish or take succeeds afterwards;
-// dtape_sq_port_leave_locked() moves the queue to the port later
+// dtape_sq_port_leave_locked() moves the queue to the port later.
+// A set slot closes with its members (sq_set_close_all_for_later()), and a member closes its set as well: a
+// receive on the set does not look at a closed member, so with the set still in the mode the member's messages
+// would wait unseen for the member's next server operation, and the set's receivers have to learn of the close
 static void sq_close_for_later(dtape_sq_slot_t* slot)
 {
 	dtape_sq_region_t* region = slot->region;
 	dsq_q_slot_t* qslot = &region->view.q->slots[slot->index];
+
+	if (slot->pset != NULL) {
+		sq_set_close_all_for_later(slot);
+		return;
+	}
 
 	__atomic_store_n(&region->view.s->slots[slot->index].close_reason, DSQ_CLOSE_OTHER, __ATOMIC_RELEASE);
 	dsq_close(&region->view, slot->index, &slot->closed_head, &slot->closed_deq);
 	slot->closing = true;
 	sq_wake(region, &qslot->head);
 	sq_wake(region, &qslot->deq);
+
+	// (the set skips members that are closing already, this one included)
+	if (slot->set != NULL) {
+		sq_set_close_all_for_later(slot->set);
+	}
 }
 
 // ---- port sets ------------------------------------------------------------------------------------------
