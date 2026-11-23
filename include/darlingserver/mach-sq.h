@@ -133,7 +133,7 @@ typedef struct dsq_node {
 	uint16_t next;  // the next older node of the queue (DSQ_NONE: none)
 	uint16_t flags; // DSQ_NODE_*
 	uint16_t size;  // INLINE: the message size; TOKEN: the kmsg's user-visible size (at most 0xffff)
-	uint32_t aux;   // INLINE: token history generation at send; TOKEN: token id
+	uint32_t aux;   // INLINE: token history generation at send (for the task's own receives; the server keeps its own record); TOKEN: token id
 	uint8_t msg[DSQ_MSG_MAX];
 } DSQ_ALIGN(8) dsq_node_t;
 

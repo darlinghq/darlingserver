@@ -71,6 +71,13 @@ typedef struct dtape_sq_slot {
 	uint64_t closed_head;
 	uint64_t closed_deq;
 	struct ipc_kmsg_queue tokens;
+	// the head seq from which on each generation of the token history was the task's for this queue: an
+	// INLINE message published at seq s was sent with the tokens of the mark with the largest seq <= s
+	// (indexed like the history; `gen` 0: none)
+	struct {
+		uint32_t gen;
+		uint32_t seq;
+	} token_marks[DSQ_TOKEN_HISTORY];
 } dtape_sq_slot_t;
 
 typedef struct dtape_sq_history_entry {
@@ -143,15 +150,37 @@ static void sq_record_tokens_locked(dtape_sq_region_t* region)
 	dsq_tokens_push(&region->view, (const uint32_t*) &task->sec_token, (const uint32_t*) &task->audit_token);
 }
 
-// the tokens of a message sent under generation `gen`; a generation that is no longer known (or that the
-// task made up) gives the current tokens, so the task can't claim tokens it never had
-static const dtape_sq_history_entry_t* sq_history(dtape_sq_region_t* region, uint32_t gen)
+// the current generation becomes the task's for every message published on `slot` from `seq` on (region locked)
+static void sq_mark_tokens_locked(dtape_sq_slot_t* slot, uint32_t seq)
 {
-	const dtape_sq_history_entry_t* e = &region->history[gen % DSQ_TOKEN_HISTORY];
-	if (e->gen != gen) {
-		e = &region->history[region->gen % DSQ_TOKEN_HISTORY];
+	uint32_t gen = slot->region->gen;
+	slot->token_marks[gen % DSQ_TOKEN_HISTORY].gen = gen;
+	slot->token_marks[gen % DSQ_TOKEN_HISTORY].seq = seq & DSQ_SEQ_MASK;
+}
+
+// The tokens of the INLINE message published at head seq `seq` on `slot`: those that were the task's when the
+// head had that seq, as the server recorded it (sq_mark_tokens_locked()). The generation the task wrote into
+// the node is not used: a task that changed its user ID could otherwise label new messages with tokens it had
+// before. A message older than every mark still known (more token changes than the history holds while it was
+// queued) gets the current tokens. Region locked.
+static const dtape_sq_history_entry_t* sq_slot_tokens(dtape_sq_slot_t* slot, uint32_t seq)
+{
+	dtape_sq_region_t* region = slot->region;
+
+	// newest generation first: a later generation's mark is at a later seq. A mark at or before `seq` is less
+	// than 2^30 behind it; one after it (the message was queued before that change) is less than DSQ_NODES
+	// ahead, so "behind" by almost 2^31 (seq arithmetic wraps at 2^31)
+	for (uint32_t k = 0; k < DSQ_TOKEN_HISTORY; k++) {
+		uint32_t gen = region->gen - k;
+		uint32_t i = gen % DSQ_TOKEN_HISTORY;
+		if (gen == 0 || slot->token_marks[i].gen != gen || region->history[i].gen != gen) {
+			continue;
+		}
+		if (((seq - slot->token_marks[i].seq) & DSQ_SEQ_MASK) < 0x40000000u) {
+			return &region->history[i];
+		}
 	}
-	return e;
+	return &region->history[region->gen % DSQ_TOKEN_HISTORY];
 }
 
 bool dtape_sq_attach(dtape_task_t* task, void* s_map, void* q_map)
@@ -203,6 +232,14 @@ void dtape_sq_task_tokens_changed(dtape_task_t* task)
 	task_lock(&task->xnu_task);
 	lck_spin_lock(&region->lock);
 	sq_record_tokens_locked(region);
+	// messages the task publishes from now on are sent with the new tokens; one being published at this
+	// moment is either before the head seq read here or at or after it
+	for (uint32_t i = 0; i < DSQ_SLOTS; i++) {
+		dtape_sq_slot_t* slot = &region->slots[i];
+		if (slot->port != IP_NULL) {
+			sq_mark_tokens_locked(slot, DSQ_H_SEQ(dsq_load(&region->view.q->slots[i].head)));
+		}
+	}
 	lck_spin_unlock(&region->lock);
 	task_unlock(&task->xnu_task);
 }
@@ -300,6 +337,8 @@ void dtape_sq_port_created(ipc_space_t space, mach_port_name_t name)
 			slot->rights = rights;
 			slot->tokens_published = 0;
 			slot->tokens_taken = 0;
+			memset(slot->token_marks, 0, sizeof(slot->token_marks));
+			sq_mark_tokens_locked(slot, DSQ_H_SEQ(dsq_load(&region->view.q->slots[slot->index].head)));
 			__atomic_store_n(&port->ip_sq, slot, __ATOMIC_RELEASE);
 		} else {
 			// the name table is full: the port stays normal
@@ -324,15 +363,17 @@ static inline bool sq_node_made_send(const dsq_node_t* node, uint32_t index)
 }
 
 // makes a kmsg of a node of a slot the server has taken (`node` is the server's one copy of node `index`:
-// the task can't change what is validated afterwards); NULL if the node is not a valid one
-static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32_t index, const dsq_node_t* copy)
+// the task can't change what is validated afterwards; `seq` is the head seq it was published at, as the server
+// found it); NULL if the node is not a valid one
+static ipc_kmsg_t sq_node_to_kmsg(dtape_sq_slot_t* slot, ipc_port_t port, uint32_t index, uint32_t seq,
+    const dsq_node_t* copy)
 {
 	dtape_sq_region_t* region = slot->region;
 	const dsq_node_t node = *copy;
 	ipc_kmsg_t kmsg = IKM_NULL;
 
 	if ((node.flags & DSQ_NODE_INLINE) && index < DSQ_TNODES) {
-		const dtape_sq_history_entry_t* tokens = sq_history(region, node.aux);
+		const dtape_sq_history_entry_t* tokens = sq_slot_tokens(slot, seq);
 		if (node.size >= DSQ_MSG_MIN && node.size <= DSQ_MSG_MAX) {
 			kmsg = dtape_kmsg_from_shared(port, slot->name, node.msg, node.size,
 			    sq_node_made_send(&node, index), &tokens->sec_token, &tokens->audit_token);
@@ -424,7 +465,7 @@ void dtape_sq_port_leave_locked(ipc_port_t port, uint32_t reason)
 		if (sq_node_made_send(&node, nodes[i])) {
 			made++;
 		}
-		kmsg = sq_node_to_kmsg(slot, port, nodes[i], &node);
+		kmsg = sq_node_to_kmsg(slot, port, nodes[i], DSQ_D_DEQ(d) + i, &node);
 		if (kmsg == IKM_NULL) {
 			corrupt = true;
 			continue;
@@ -783,7 +824,7 @@ boolean_t dtape_sq_mqueue_receive(ipc_mqueue_t mqueue, mach_msg_option_t option,
 		}
 
 		lck_spin_lock(&region->lock);
-		ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, &node);
+		ipc_kmsg_t kmsg = sq_node_to_kmsg(slot, port, index, DSQ_D_DEQ(d), &node);
 		if (kmsg == IKM_NULL) {
 			sq_poison(region, "an invalid message");
 			lck_spin_unlock(&region->lock);
