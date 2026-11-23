@@ -535,9 +535,20 @@ void dtape_sq_port_qlimit_changed(ipc_port_t port)
 	if (slot) {
 		dtape_sq_region_t* region = slot->region;
 		dsq_s_slot_t* sslot = &region->view.s->slots[slot->index];
-		__atomic_store_n(&sslot->qlimit, port->ip_messages.imq_qlimit, __ATOMIC_RELEASE);
-		// senders waiting for room look again, as XNU wakes full waiters when the limit is raised
-		sq_wake(region, &region->view.q->slots[slot->index].deq);
+		uint32_t qlimit = port->ip_messages.imq_qlimit;
+		uint32_t previous = sslot->qlimit;
+
+		// a sender of the task that found the queue full counts itself in `snd_waiters`, reads the limit again
+		// and waits for the deq word to change. A new limit does not change that word, so a sender that read
+		// the old limit would sleep through the change. XNU lets the waiting senders in when the limit is
+		// raised: with a sender counted in, the port leaves the mode, and the close changes the deq word and
+		// wakes it (it then sends through the server). The store and the load are both SEQ_CST: either the
+		// sender reads the new limit, or the server sees the sender counted in
+		__atomic_store_n(&sslot->qlimit, qlimit, __ATOMIC_SEQ_CST);
+		if (qlimit > previous &&
+		    __atomic_load_n(&region->view.q->slots[slot->index].snd_waiters, __ATOMIC_SEQ_CST) != 0) {
+			dtape_sq_port_leave_locked(port, DSQ_CLOSE_OTHER);
+		}
 	}
 }
 
