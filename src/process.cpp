@@ -46,7 +46,7 @@
 
 static DarlingServer::Log processLog("process");
 
-DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe):
+DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe, bool forkChild):
 	_pid(id),
 	_nspid(nsid),
 	_architecture(architecture)
@@ -101,6 +101,13 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 		_csState = parentProcess->_csState;
 		_csState.darling_flags = CodeSigning::darlingFlagsInheritedByFork(_csState.darling_flags);
 		_csImage = parentProcess->_csImage;
+
+		// fork does not change a task's architecture, only exec does. The task of a program run
+		// under an emulator was registered by the host-native loader, so its fork child reports a
+		// different architecture than its parent's task has.
+		if (forkChild) {
+			_architecture = parentProcess->_architecture;
+		}
 	} else {
 		_resetCodeSigningState();
 
@@ -414,12 +421,6 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 			_resetCodeSigningState();
 			_csState.darling_flags |= kept;
 			_csMayRegister = true;
-		}
-	} else if (isFork) {
-		// fork case
-
-		if (architecture != _architecture) {
-			throw std::runtime_error("Impossible: parent process architecture != child process architecture on fork");
 		}
 	}
 
