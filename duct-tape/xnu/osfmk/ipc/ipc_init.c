@@ -147,6 +147,43 @@ LCK_ATTR_DECLARE(ipc_lck_attr, 0, 0);
 #define MSG_OOL_SIZE_SMALL_MAX (2*PAGE_SIZE)
 SECURITY_READ_ONLY_LATE(vm_size_t) msg_ool_size_small;
 
+#ifdef __DARLING__
+/*
+ *	Routine:	ipc_init_early
+ *	Purpose:
+ *		The part of ipc_init() that has to be done before the kernel task is created
+ *		(which needs the kernel map that ipc_init() allocates from): the kernel IPC
+ *		space, which must exist for the ports of the kernel task to have it as their
+ *		receiver, and the control port options that decide how task ports are made.
+ */
+void
+ipc_init_early(void)
+{
+	kern_return_t kr;
+	static bool done = false;
+
+	if (done) {
+		return;
+	}
+	done = true;
+
+	kr = ipc_space_create_special(&ipc_space_kernel);
+	assert(kr == KERN_SUCCESS);
+
+	kr = ipc_space_create_special(&ipc_space_reply);
+	assert(kr == KERN_SUCCESS);
+
+	pinned_control_port_enabled    = !!(ipc_control_port_options & (IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT | IPC_CONTROL_PORT_OPTIONS_PINNED_HARD));
+	immovable_control_port_enabled = !!(ipc_control_port_options & (IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_SOFT | IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_HARD));
+
+	if (pinned_control_port_enabled && !immovable_control_port_enabled) {
+		kprintf("Invalid ipc_control_port_options boot-arg: pinned control port cannot be enabled without immovability enforcement. Ignoring pinning boot-arg.");
+		pinned_control_port_enabled = false;
+		ipc_control_port_options &= ~(IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT | IPC_CONTROL_PORT_OPTIONS_PINNED_HARD);
+	}
+}
+#endif
+
 /*
  *	Routine:	ipc_init
  *	Purpose:
@@ -163,6 +200,9 @@ ipc_init(void)
 	kern_return_t kr;
 	vm_offset_t min;
 
+#ifdef __DARLING__
+	ipc_init_early();
+#else
 	/* create special spaces */
 
 	kr = ipc_space_create_special(&ipc_space_kernel);
@@ -170,6 +210,7 @@ ipc_init(void)
 
 	kr = ipc_space_create_special(&ipc_space_reply);
 	assert(kr == KERN_SUCCESS);
+#endif
 
 	/* initialize modules with hidden data structures */
 
@@ -180,6 +221,7 @@ ipc_init(void)
 	arcade_init();
 #endif
 
+#ifndef __DARLING__
 	pinned_control_port_enabled    = !!(ipc_control_port_options & (IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT | IPC_CONTROL_PORT_OPTIONS_PINNED_HARD));
 	immovable_control_port_enabled = !!(ipc_control_port_options & (IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_SOFT | IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_HARD));
 
@@ -188,6 +230,7 @@ ipc_init(void)
 		pinned_control_port_enabled = false;
 		ipc_control_port_options &= ~(IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT | IPC_CONTROL_PORT_OPTIONS_PINNED_HARD);
 	}
+#endif
 
 	kr = kmem_suballoc(kernel_map, &min, IPC_KERNEL_MAP_SIZE,
 	    TRUE,

@@ -1499,7 +1499,7 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 
 			thread_lock(xthread);
 
-			// TODO: fill in these values properly
+			// cpu_usage and sleep_time are not tracked: they stay 0
 			info->cpu_usage = 0;
 			info->flags = 0;
 			info->policy = 0;
@@ -1512,6 +1512,20 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			info->suspend_count = xthread->user_stop_count;
 
 			thread_unlock(xthread);
+
+			// the CPU time of the thread as Linux counts it
+			{
+				char name[MAXTHREADNAMESIZE];
+				uint64_t user_ns;
+				uint64_t system_ns;
+
+				if (dtape_hooks->thread_get_stats(thread->context, name, sizeof(name), &user_ns, &system_ns)) {
+					info->user_time.seconds = user_ns / NSEC_PER_SEC;
+					info->user_time.microseconds = (user_ns % NSEC_PER_SEC) / NSEC_PER_USEC;
+					info->system_time.seconds = system_ns / NSEC_PER_SEC;
+					info->system_time.microseconds = (system_ns % NSEC_PER_SEC) / NSEC_PER_USEC;
+				}
+			}
 
 			// check if the thread is currently waiting suspended; in that case, the `thread_get_state` hook will
 			// report that it is waiting interruptibly (because that's what Linux sees), but we know that it's

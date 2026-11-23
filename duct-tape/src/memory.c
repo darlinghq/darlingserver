@@ -1266,6 +1266,11 @@ kern_return_t mach_vm_map_external(vm_map_t target_map, mach_vm_offset_t* addres
 };
 
 kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size_t size, vm_sync_t sync_flags) {
+	if (map == VM_MAP_NULL) {
+		// the port did not name a task whose memory the caller may look at
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	int linux_flags = 0;
 
 	// TODO: give the Linux bits names/macros
@@ -1290,6 +1295,11 @@ kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size
 };
 
 kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t* count) {
+	if (map == VM_MAP_NULL) {
+		// the port did not name a task whose memory the caller may look at
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	if (!count) {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -1322,6 +1332,11 @@ kern_return_t mach_vm_page_range_query(vm_map_t map, mach_vm_offset_t address, m
 };
 
 kern_return_t mach_vm_protect(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection) {
+	if (map == VM_MAP_NULL) {
+		// the port did not name a task whose memory the caller may look at
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	// we ignore `set_maximum`
 
 	int prot = 0;
@@ -1384,6 +1399,11 @@ static bool region_at_or_above(vm_map_t map, uint64_t address, dtape_memory_regi
 };
 
 kern_return_t mach_vm_region(vm_map_t map, mach_vm_offset_t* address, mach_vm_size_t* size, vm_region_flavor_t flavor, vm_region_info_t info, mach_msg_type_number_t* count, mach_port_t* object_name) {
+	if (map == VM_MAP_NULL) {
+		// the port did not name a task whose memory the caller may look at
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	switch (flavor) {
 		case VM_REGION_BASIC_INFO:
 		case VM_REGION_BASIC_INFO_64: {
@@ -1525,6 +1545,11 @@ region_info_out:
 };
 
 kern_return_t mach_vm_region_recurse(vm_map_t map, mach_vm_address_t* address, mach_vm_size_t* size, uint32_t* depth, vm_region_recurse_info_t info, mach_msg_type_number_t* infoCnt) {
+	if (map == VM_MAP_NULL) {
+		// the port did not name a task whose memory the caller may look at
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	kern_return_t kr = KERN_FAILURE;
 	dtape_memory_region_info_t region_info;
 
