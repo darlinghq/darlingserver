@@ -131,6 +131,13 @@ add_custom_command(
 	DEPENDS ${host}/pthread-cancel-inc.sh ${root}/duct-tape/src/psynch.c ${root}/duct-tape/src/thread.c
 	VERBATIM
 )
+add_custom_command(
+	OUTPUT ${gen}/exception_codes.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND ${host}/exception-codes-inc.sh ${root} ${gen}/exception_codes.inc
+	DEPENDS ${host}/exception-codes-inc.sh ${root}/duct-tape/src/thread.c
+	VERBATIM
+)
 # the generated client code, built against socket-backed hooks (tests/host/rpc_hooks.h)
 add_custom_command(
 	OUTPUT
@@ -188,6 +195,10 @@ target_compile_definitions(dserver_pthread_cancel_test PRIVATE
 	PTHREAD_CANCEL_DEFS_INC="${gen}/pthread_cancel_defs.inc"
 	PTHREAD_CANCEL_FNS_INC="${gen}/pthread_cancel_fns.inc"
 )
+
+dserver_host_test(exception_codes SOURCES ${host}/exception_codes_test.c ${gen}/exception_codes.inc)
+target_compile_options(dserver_exception_codes_test PRIVATE -std=gnu11)
+target_compile_definitions(dserver_exception_codes_test PRIVATE EXCEPTION_CODES_INC="${gen}/exception_codes.inc")
 
 dserver_host_test(rpc_reply_fd SOURCES ${host}/rpc_reply_fd_test.c ${gen}/rpc/src/rpc.c)
 # rpc.c is included by the test rather than compiled on its own
