@@ -11,6 +11,8 @@
 #              (tests/host/extract-function.py) against stand-in types (tests/host/call_stubs.hpp).
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
+#   process_fork_architecture  includes the Process constructor cut out of <source-root>/src/process.cpp
+#              (tests/host/process-ctor-inc.sh) and checks which architecture a new process's task gets.
 #   process_state  includes closeInheritedFds() and sanitizeProcessState() cut out of
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
 #   prefix_preinit  includes wipeDir() and darlingPreInit() cut out of <source-root>/src/darlingserver.cpp
@@ -65,6 +67,10 @@ case $test in
 		xnu="-I$root/include -I$root/duct-tape/include -idirafter $root/duct-tape/xnu/bsd"
 		$cc -g -O0 -fsanitize=${SANITIZE:-address,undefined} $xnu -c -o "$work/csr.o" "$root/duct-tape/src/csr.c"
 		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/system-config.cpp" "$work/csr.o"
+		;;
+	process_fork_architecture)
+		sh "$here/host/process-ctor-inc.sh" "$root" "$work/process_ctor.inc"
+		$cxx $flags -DPROCESS_CTOR_INC="\"$work/process_ctor.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
 		;;
 	process_state)
 		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" closeInheritedFds sanitizeProcessState > "$work/process_state.inc"
