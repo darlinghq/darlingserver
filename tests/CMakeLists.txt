@@ -103,6 +103,20 @@ add_custom_command(
 	VERBATIM
 )
 add_custom_command(
+	OUTPUT ${gen}/process_ctor.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh ${host}/process-ctor-inc.sh ${root} ${gen}/process_ctor.inc
+	DEPENDS ${host}/process-ctor-inc.sh ${root}/src/process.cpp
+	VERBATIM
+)
+add_custom_command(
+	OUTPUT ${gen}/microthread.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND sh ${host}/microthread-inc.sh ${root} ${gen}/microthread.inc
+	DEPENDS ${host}/microthread-inc.sh ${host}/extract-static.sh ${root}/src/thread.cpp
+	VERBATIM
+)
+add_custom_command(
 	OUTPUT ${gen}/process_maps.inc
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND sh -c "\"$@\" > \"$0\"" ${gen}/process_maps.inc
@@ -115,6 +129,13 @@ add_custom_command(
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
 	COMMAND ${host}/pthread-cancel-inc.sh ${root} ${gen}/pthread_cancel_defs.inc ${gen}/pthread_cancel_fns.inc
 	DEPENDS ${host}/pthread-cancel-inc.sh ${root}/duct-tape/src/psynch.c ${root}/duct-tape/src/thread.c
+	VERBATIM
+)
+add_custom_command(
+	OUTPUT ${gen}/exception_codes.inc
+	COMMAND ${CMAKE_COMMAND} -E make_directory ${gen}
+	COMMAND ${host}/exception-codes-inc.sh ${root} ${gen}/exception_codes.inc
+	DEPENDS ${host}/exception-codes-inc.sh ${root}/duct-tape/src/thread.c
 	VERBATIM
 )
 # the generated client code, built against socket-backed hooks (tests/host/rpc_hooks.h)
@@ -135,7 +156,7 @@ add_custom_command(
 # one target per generated file, so that the tests sharing it do not generate it concurrently
 add_custom_target(dserver_test_call_inc DEPENDS ${gen}/call.inc)
 
-foreach(topic call_peer_uid call_pid_order call_push_reply_pipe call_thread_owner)
+foreach(topic call_peer_uid call_pid_order call_push_reply_pipe call_thread_owner call_fork_checkin call_sigprocess_legacy)
 	dserver_host_test(${topic} SOURCES ${host}/${topic}_test.cpp)
 	target_include_directories(dserver_${topic}_test PRIVATE ${host})
 	target_compile_definitions(dserver_${topic}_test PRIVATE CALL_FROM_MESSAGE_INC="${gen}/call.inc")
@@ -144,6 +165,9 @@ endforeach()
 
 dserver_host_test(arg_parse SOURCES ${host}/arg_parse_test.cpp ${gen}/arg_parse.inc)
 target_compile_definitions(dserver_arg_parse_test PRIVATE ARG_PARSE_INC="${gen}/arg_parse.inc")
+
+dserver_host_test(process_fork_architecture SOURCES ${host}/process_fork_architecture_test.cpp ${gen}/process_ctor.inc)
+target_compile_definitions(dserver_process_fork_architecture_test PRIVATE PROCESS_CTOR_INC="${gen}/process_ctor.inc")
 
 dserver_host_test(process_state TEMP_DIR SOURCES ${host}/process_state_test.cpp ${gen}/process_state.inc)
 target_compile_definitions(dserver_process_state_test PRIVATE PROCESS_STATE_INC="${gen}/process_state.inc")
@@ -157,6 +181,10 @@ target_compile_definitions(dserver_launchd_handshake_test PRIVATE LAUNCHD_HANDSH
 dserver_host_test(thread_discovery SOURCES ${host}/thread_discovery_test.cpp ${gen}/thread_discovery.inc)
 target_compile_definitions(dserver_thread_discovery_test PRIVATE THREAD_DISCOVERY_INC="${gen}/thread_discovery.inc")
 
+dserver_host_test(microthread_migration SOURCES ${host}/microthread_migration_test.cpp ${gen}/microthread.inc)
+target_compile_options(dserver_microthread_migration_test PRIVATE -O2)
+target_compile_definitions(dserver_microthread_migration_test PRIVATE MICROTHREAD_INC="${gen}/microthread.inc")
+
 dserver_host_test(process_maps SOURCES ${host}/process_maps_test.cpp ${gen}/process_maps.inc)
 target_include_directories(dserver_process_maps_test PRIVATE ${root}/src)
 target_compile_definitions(dserver_process_maps_test PRIVATE PROCESS_MAPS_INC="${gen}/process_maps.inc")
@@ -167,6 +195,10 @@ target_compile_definitions(dserver_pthread_cancel_test PRIVATE
 	PTHREAD_CANCEL_DEFS_INC="${gen}/pthread_cancel_defs.inc"
 	PTHREAD_CANCEL_FNS_INC="${gen}/pthread_cancel_fns.inc"
 )
+
+dserver_host_test(exception_codes SOURCES ${host}/exception_codes_test.c ${gen}/exception_codes.inc)
+target_compile_options(dserver_exception_codes_test PRIVATE -std=gnu11)
+target_compile_definitions(dserver_exception_codes_test PRIVATE EXCEPTION_CODES_INC="${gen}/exception_codes.inc")
 
 dserver_host_test(rpc_reply_fd SOURCES ${host}/rpc_reply_fd_test.c ${gen}/rpc/src/rpc.c)
 # rpc.c is included by the test rather than compiled on its own

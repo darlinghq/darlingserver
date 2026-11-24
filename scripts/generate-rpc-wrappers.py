@@ -174,6 +174,14 @@ calls = [
 		# these are in/out pointers
 		('thread_state', 'uint64_t'),
 		('float_state', 'uint64_t'),
+
+		# the hardware exception state of the signal frame (x86: trap number, error code and cr2), which
+		# thread_get_state() reports. callers from before these fields were added send a shorter call,
+		# which is taken as one without exception state (see Call::callFromMessage()).
+		('exception_fault_address', 'uint64_t'),
+		('exception_trapno', 'uint32_t'),
+		('exception_err', 'uint32_t'),
+		('has_exception_state', 'bool'),
 	], [
 		('new_bsd_signal_number', 'int32_t'),
 	]),

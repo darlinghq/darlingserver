@@ -353,7 +353,12 @@ mach_port_space_info_from_user(
  *		KERN_INVALID_TASK	The space is dead.
  */
 
-#if !MACH_IPC_DEBUG
+/*
+ * Darling: the in-use count of the table is what top(1) reports as the number of ports of a task, and it
+ * is all of this that a release kernel of macOS provides, so it is built even though the rest of the
+ * debugging interface (MACH_IPC_DEBUG) is left out.
+ */
+#if !MACH_IPC_DEBUG && !defined(__DARLING__)
 kern_return_t
 mach_port_space_basic_info(
 	__unused ipc_space_t                    space,
@@ -379,7 +384,12 @@ mach_port_space_basic_info(
 	}
 
 	/* get the basic space info */
+#ifdef __DARLING__
+	/* MACH_PORT_NGEN() of ipc/port.h is not visible here */
+	infop->iisb_genno_mask = MACH_PORT_MAKE(0, MACH_PORT_GEN(MACH_PORT_DEAD));
+#else
 	infop->iisb_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
+#endif
 	infop->iisb_table_size = space->is_table_size;
 	infop->iisb_table_next = space->is_table_next->its_size;
 	infop->iisb_table_inuse = space->is_table_size - space->is_table_free - 1;

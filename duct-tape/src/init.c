@@ -39,6 +39,8 @@ void mach_init_activity_id(void);
 void dtape_timer_init(void);
 void dtape_mk_timer_init(void);
 
+void ipc_init_early(void);
+
 void dtape_init(const dtape_hooks_t* hooks) {
 	dtape_hooks = hooks;
 
@@ -81,6 +83,11 @@ void dtape_init(const dtape_hooks_t* hooks) {
 	// Match XNU's startup initialization before serving activity-ID traps.
 	dtape_log_debug("mach_init_activity_id");
 	mach_init_activity_id();
+
+	// the ports of the kernel task have the kernel IPC space as their receiver only if that space
+	// exists when the task is created (messages sent to them are otherwise queued, not served)
+	dtape_log_debug("ipc_init_early");
+	ipc_init_early();
 
 	dtape_log_debug("dtape_task_init");
 	dtape_task_init();
