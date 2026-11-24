@@ -11,6 +11,8 @@
 #              (tests/host/extract-function.py) against stand-in types (tests/host/call_stubs.hpp).
 #   system_config  links <source-root>/src/system-config.cpp and duct-tape/src/csr.c, compiled unchanged;
 #              <sys/csr.h> comes from the imported XNU headers.
+#   process_fork_architecture  includes the Process constructor cut out of <source-root>/src/process.cpp
+#              (tests/host/process-ctor-inc.sh) and checks which architecture a new process's task gets.
 #   process_state  includes closeInheritedFds() and sanitizeProcessState() cut out of
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
 #   prefix_preinit  includes wipeDir() and darlingPreInit() cut out of <source-root>/src/darlingserver.cpp
@@ -23,6 +25,8 @@
 #              children that make their own user namespaces, and the libexec override rule.
 #   thread_discovery  includes findThreadByStackHint() cut out of <source-root>/src/thread.cpp
 #              (tests/host/extract-static.sh) and runs it against the threads of a child process.
+#   microthread_migration  includes the scheduler, continuation, suspend and return functions cut out of
+#              <source-root>/src/thread.cpp (tests/host/microthread-inc.sh) and migrates a microthread across OS threads.
 #   iosurface_registry  links <source-root>/src/iosurface.cpp, compiled unchanged.
 #   platform_identity  links <source-root>/src/platform-identity.cpp, compiled unchanged, and the host's libcrypto.
 #   code_signing  links <source-root>/src/code-signing.cpp and trust-store.cpp with the parser and runs
@@ -64,6 +68,10 @@ case $test in
 		$cc -g -O0 -fsanitize=${SANITIZE:-address,undefined} $xnu -c -o "$work/csr.o" "$root/duct-tape/src/csr.c"
 		$cxx $flags $xnu -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/system-config.cpp" "$work/csr.o"
 		;;
+	process_fork_architecture)
+		sh "$here/host/process-ctor-inc.sh" "$root" "$work/process_ctor.inc"
+		$cxx $flags -DPROCESS_CTOR_INC="\"$work/process_ctor.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
+		;;
 	process_state)
 		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" closeInheritedFds sanitizeProcessState > "$work/process_state.inc"
 		$cxx $flags -DPROCESS_STATE_INC="\"$work/process_state.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
@@ -86,6 +94,12 @@ case $test in
 	thread_discovery)
 		"$here/host/extract-static.sh" "$root/src/thread.cpp" findThreadByStackHint > "$work/thread_discovery.inc"
 		$cxx $flags -pthread -DTHREAD_DISCOVERY_INC="\"$work/thread_discovery.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
+		;;
+	microthread_migration)
+		sh "$here/host/microthread-inc.sh" "$root" "$work/microthread.inc"
+		# Optimized ucontext migration is the contract; ASan requires a different fiber protocol.
+		$cxx -std=c++17 -O2 -g -pthread -DMICROTHREAD_INC="\"$work/microthread.inc\"" \
+			-o "$work/t" "$here/host/${test}_test.cpp"
 		;;
 	iosurface_registry)
 		$cxx $flags -I"$root/include" -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/iosurface.cpp"

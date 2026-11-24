@@ -32,6 +32,10 @@ typedef struct dtape_thread_user_state {
 	arm_unified_thread_state_t thread_state;
 	arm_neon_state64_t float_state;
 #endif
+
+	// the exception state of the signal frame, if the guest supplied it
+	bool has_exception_state;
+	dtape_exception_state_t exception_state;
 } dtape_thread_user_state_t;
 
 typedef LIST_HEAD(dtape_thread_user_state_head, dtape_thread_user_state) dtape_thread_user_state_head_t;
@@ -88,6 +92,13 @@ struct dtape_thread {
 	libsimple_lock_t block_suspend_gate;
 	dtape_mutex_t suspension_mutex;
 	dtape_condvar_t suspension_condvar;
+	// protects suspend_count, `parked_suspended` and `suspension_dying`, and is held from the suspend_count check in
+	// dtape_thread_wait_while_user_suspended() until the microthread has been suspended
+	libsimple_lock_t suspension_gate;
+	// the thread is parked in dtape_thread_wait_while_user_suspended(), and thread_release() has to resume it
+	bool parked_suspended;
+	// set by dtape_thread_dying(); the thread no longer parks
+	bool suspension_dying;
 
 	//
 	// uthread stuff for psynch

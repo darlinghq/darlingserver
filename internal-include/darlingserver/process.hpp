@@ -26,6 +26,7 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <string>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -128,6 +129,28 @@ namespace DarlingServer {
 		mutable int _mapsFd = -1;
 		bool _queryRegion(uintptr_t address, bool coveringOrNext, uintptr_t& start, uintptr_t& end, int& protection, bool& shared, uint64_t& offset, uint64_t* device = nullptr, uint64_t* inode = nullptr) const;
 		void _closeMapsDescriptor();
+
+		// `/proc/<pid>/smaps`, read front to back by regionResidency(). The kernel produces the text of one mapping
+		// at a time, as the descriptor is read, so keeping the descriptor and its parse state between calls lets an
+		// ascending walk over the mappings read the file once (instead of from its start for every mapping).
+		struct SmapsCursor {
+			int fd = -1;
+			// text read from the descriptor that has not been parsed yet
+			std::string pending;
+			// the mapping whose header was parsed last
+			bool haveRegion = false;
+			uintptr_t regionStart = 0;
+			uint64_t privateKiB = 0;
+			uint64_t sharedKiB = 0;
+			// all the counts of the mapping have been parsed
+			bool regionComplete = false;
+			// the mapping's counts were returned to a caller (a later query for it must read the file afresh)
+			bool regionServed = false;
+		};
+		mutable std::mutex _smapsMutex;
+		mutable SmapsCursor _smaps;
+		bool _scanSmaps(uintptr_t startAddress, uint64_t& privateKiB, uint64_t& sharedKiB, bool& found) const;
+		void _closeSmapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;
@@ -179,7 +202,7 @@ namespace DarlingServer {
 		using ID = pid_t;
 		using NSID = ID;
 
-		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1);
+		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1, bool forkChild = false);
 		Process(KernelProcessConstructorTag tag);
 		~Process();
 
@@ -234,6 +257,31 @@ namespace DarlingServer {
 
 		bool is64Bit() const;
 		Architecture architecture() const;
+
+		// CPU time of the threads of the process, in nanoseconds (Linux counts it in clock ticks)
+		struct CPUTimes {
+			// threads that have exited
+			uint64_t terminatedUserNs;
+			uint64_t terminatedSystemNs;
+			// threads that are still running
+			uint64_t liveUserNs;
+			uint64_t liveSystemNs;
+		};
+
+		// counters of events Linux keeps for the process
+		struct EventCounts {
+			uint64_t faults;
+			uint64_t pageins;
+			// of the threads that still exist
+			uint64_t contextSwitches;
+		};
+
+		// the host process whose statistics describe this task (the server itself for the kernel task)
+		pid_t statisticsPID() const;
+
+		// false if the process is gone
+		bool cpuTimes(CPUTimes& times) const;
+		bool eventCounts(EventCounts& counts) const;
 
 		MemoryInfo memoryInfo() const;
 		MemoryRegionInfo memoryRegionInfo(uintptr_t address) const;

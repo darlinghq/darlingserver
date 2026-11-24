@@ -21,6 +21,7 @@
 #include <darlingserver/call.hpp>
 #include <darlingserver/server.hpp>
 #include <sys/uio.h>
+#include <cstddef>
 
 #include <darlingserver/logging.hpp>
 #include <darlingserver/duct-tape.h>
@@ -79,6 +80,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			std::shared_ptr<Process> tmp = nullptr;
 
 			int lifetimePipe = -1;
+			bool forkChild = false;
 
 			if (header->number == dserver_callnum_checkin) {
 				auto checkinCall = reinterpret_cast<dserver_rpc_call_checkin_t*>(header);
@@ -86,10 +88,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 					lifetimePipe = requestMessage.extractDescriptorAtIndex(checkinCall->body.lifetime_listener_pipe);
 					checkinCall->body.lifetime_listener_pipe = -1;
 				}
+				forkChild = checkinCall->body.is_fork;
 			}
 
 			try {
-				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe);
+				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe, forkChild);
 			} catch (std::system_error e) {
 				return tmp;
 			}
@@ -257,6 +260,13 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		write(pipeDesc.fd(), &tmp, sizeof(tmp));
 
 		return nullptr;
+	}
+
+	// a sigprocess call from a libsystem_kernel that predates the exception state ends before it. take it as one without
+	// exception state: dropping it as too short would leave the thread waiting for the reply forever
+	if (header->number == dserver_callnum_sigprocess && requestMessage.data().size() == offsetof(dserver_rpc_call_sigprocess_t, body.exception_fault_address)) {
+		requestMessage.data().resize(sizeof(dserver_rpc_call_sigprocess_t), 0);
+		header = reinterpret_cast<dserver_rpc_callhdr_t*>(requestMessage.data().data());
 	}
 
 	// finally, let's construct the call class
@@ -1138,7 +1148,11 @@ void DarlingServer::Call::Sigprocess::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		try {
-			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _body.thread_state, _body.float_state);
+			std::optional<dtape_exception_state_t> exceptionState;
+			if (_body.has_exception_state) {
+				exceptionState = dtape_exception_state_t { _body.exception_fault_address, _body.exception_trapno, _body.exception_err };
+			}
+			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _header.architecture, _body.thread_state, _body.float_state, exceptionState);
 			newBSDSignal = thread->pendingSignal();
 		} catch (std::system_error e) {
 			code = -e.code().value();
@@ -1411,7 +1425,7 @@ void DarlingServer::Call::ThreadSuspended::processCall() {
 	int code = 0;
 
 	if (auto thread = _thread.lock()) {
-		thread->waitWhileUserSuspended(_body.thread_state, _body.float_state);
+		thread->waitWhileUserSuspended(_header.architecture, _body.thread_state, _body.float_state);
 	} else {
 		code = -ESRCH;
 	}
