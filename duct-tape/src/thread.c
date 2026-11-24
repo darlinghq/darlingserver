@@ -35,6 +35,10 @@
 #define LINUX_SI_USER 0
 #define LINUX_SI_KERNEL 0x80
 #define LINUX_TRAP_HWBKPT 4
+#define LINUX_SEGV_ACCERR 2
+#define LINUX_SEGV_PKUERR 4
+#define LINUX_BUS_ADRERR 2
+#define LINUX_BUS_OBJERR 3
 
 #define LINUX_SIGSEGV 11
 #define LINUX_SIGBUS 7
@@ -387,18 +391,30 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 
 	int mach_exception = 0;
 	switch (linux_signal_number) {
-		case LINUX_SIGSEGV: // KERN_INVALID_ADDRESS
+		// as in XNU's page fault handling, the code is the reason the access failed and the subcode its address;
+		// ux_exception() then gives SIGSEGV for KERN_INVALID_ADDRESS and SIGBUS for the others, as macOS does
+		case LINUX_SIGSEGV:
 			mach_exception = EXC_BAD_ACCESS;
-			codes[0] = KERN_INVALID_ADDRESS;
+			if (code == LINUX_SEGV_ACCERR || code == LINUX_SEGV_PKUERR) {
+				codes[0] = KERN_PROTECTION_FAILURE;
+			} else {
+				codes[0] = KERN_INVALID_ADDRESS;
+			}
 			codes[1] = signal_address;
 			break;
 		case LINUX_SIGBUS:
 			mach_exception = EXC_BAD_ACCESS;
+			if (code == LINUX_BUS_ADRERR || code == LINUX_BUS_OBJERR) {
+				// e.g. a file mapping accessed past the end of the file
+				codes[0] = KERN_MEMORY_ERROR;
+				codes[1] = signal_address;
+			} else {
 #if defined(__aarch64__)
-			codes[0] = EXC_ARM_DA_ALIGN;
+				codes[0] = EXC_ARM_DA_ALIGN;
 #else
-			codes[0] = EXC_I386_ALIGNFLT;
+				codes[0] = EXC_I386_ALIGNFLT;
 #endif
+			}
 			break;
 		case LINUX_SIGILL:
 			mach_exception = EXC_BAD_INSTRUCTION;
