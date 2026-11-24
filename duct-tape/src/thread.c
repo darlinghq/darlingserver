@@ -228,6 +228,16 @@ void* dtape_thread_context(dtape_thread_t* thread) {
 	return thread->context;
 };
 
+void dtape_thread_set_exception_state(dtape_thread_t* thread, const dtape_exception_state_t* state) {
+	thread_lock(&thread->xnu_thread);
+	dtape_thread_user_state_t* user_state = LIST_FIRST(&thread->user_states);
+	user_state->has_exception_state = state != NULL;
+	if (state) {
+		user_state->exception_state = *state;
+	}
+	thread_unlock(&thread->xnu_thread);
+};
+
 // The caller's buffers have its build architecture's layout, not the task's under an emulator
 // (x86_64 code in an arm64 task); with no conversion, the state is not transferred.
 static bool dtape_thread_user_state_matches_task(dtape_task_t* task, dserver_rpc_architecture_t caller_architecture) {
@@ -1301,6 +1311,53 @@ thread_get_state_internal(
 				x86_debug_state32_t* s = (x86_debug_state32_t*) state;
 				*state_count = x86_DEBUG_STATE32_COUNT;
 				memset(s, 0, sizeof(*s));
+
+				return KERN_SUCCESS;
+			}
+			case x86_EXCEPTION_STATE:
+			{
+				x86_exception_state_t* s = (x86_exception_state_t*) state;
+
+				if (*state_count < x86_EXCEPTION_STATE_COUNT)
+					return KERN_INVALID_ARGUMENT;
+				if (dtask->architecture != dserver_rpc_architecture_x86_64)
+					return KERN_INVALID_ARGUMENT;
+
+				memset(s, 0, sizeof(*s));
+				mach_msg_type_number_t count = x86_EXCEPTION_STATE64_COUNT;
+				kern_return_t kr = thread_get_state_internal(thread, x86_EXCEPTION_STATE64, (thread_state_t) &s->ues.es64, &count, to_user);
+				if (kr != KERN_SUCCESS)
+					return kr;
+
+				s->esh.flavor = x86_EXCEPTION_STATE64;
+				s->esh.count = x86_EXCEPTION_STATE64_COUNT;
+				*state_count = x86_EXCEPTION_STATE_COUNT;
+				return KERN_SUCCESS;
+			}
+			case x86_EXCEPTION_STATE64:
+			{
+				if (*state_count < x86_EXCEPTION_STATE64_COUNT)
+					return KERN_INVALID_ARGUMENT;
+				if (dtask->architecture != dserver_rpc_architecture_x86_64)
+					return KERN_INVALID_ARGUMENT;
+
+				// the thread's signal frame can end (and its user state be freed) meanwhile
+				thread_lock(thread);
+				dtape_thread_user_state_t* current = LIST_FIRST(&dthread->user_states);
+				bool has_exception_state = current->has_exception_state;
+				dtape_exception_state_t exception_state = current->exception_state;
+				thread_unlock(thread);
+
+				// known only for signal frames whose state libsystem_kernel supplies
+				if (!has_exception_state)
+					return KERN_INVALID_ARGUMENT;
+
+				x86_exception_state64_t* s = (x86_exception_state64_t*) state;
+				*state_count = x86_EXCEPTION_STATE64_COUNT;
+				memset(s, 0, sizeof(*s));
+				s->trapno = exception_state.trapno;
+				s->err = exception_state.err;
+				s->faultvaddr = exception_state.fault_address;
 
 				return KERN_SUCCESS;
 			}

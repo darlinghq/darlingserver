@@ -14,6 +14,14 @@ typedef struct dtape_kqchan_mach_port dtape_kqchan_mach_port_t;
 typedef struct dtape_semaphore dtape_semaphore_t;
 typedef uint64_t dtape_eternal_id_t;
 
+// the hardware exception state of a signal frame, as the guest's Linux signal frame has it.
+// x86: the faulting address (cr2), the trap number and the error code.
+typedef struct dtape_exception_state {
+	uint64_t fault_address;
+	uint32_t trapno;
+	uint32_t err;
+} dtape_exception_state_t;
+
 typedef enum dtape_log_level {
 	dtape_log_level_debug,
 	dtape_log_level_info,
