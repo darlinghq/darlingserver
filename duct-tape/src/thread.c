@@ -79,6 +79,9 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	thread->wakeup_pending = false;
 	thread->interrupt_deferred = false;
 	libsimple_lock_init(&thread->block_suspend_gate);
+	libsimple_lock_init(&thread->suspension_gate);
+	thread->parked_suspended = false;
+	thread->suspension_dying = false;
 	LIST_INIT(&thread->user_states);
 	dtape_mutex_init(&thread->suspension_mutex);
 	dtape_condvar_init(&thread->suspension_condvar);
@@ -353,7 +356,12 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 	mach_exception_data_type_t codes[EXCEPTION_CODE_MAX] = { 0, 0 };
 	dtape_task_t* task = dtape_task_for_thread(thread);
 
+	// the thread's user state has been captured and it parks before it returns to user code if it is suspended
+	// (dtape_thread_wait_while_user_suspended()), so thread_wait() need not wait for it; see there
+	dtape_mutex_lock(&thread->suspension_mutex);
 	thread->processing_signal = true;
+	dtape_mutex_unlock(&thread->suspension_mutex);
+	dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
 
 	if (code == LINUX_SI_USER) {
 		if (task->has_sigexc) {
@@ -444,7 +452,9 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 	dtape_log_debug("exception_triage_thread returned");
 
 out:
+	dtape_mutex_lock(&thread->suspension_mutex);
 	thread->processing_signal = false;
+	dtape_mutex_unlock(&thread->suspension_mutex);
 };
 
 extern int ux_exception(int exception, mach_exception_code_t code, mach_exception_subcode_t subcode);
@@ -492,7 +502,14 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 	//         2. we can register the signalfd only when we receive a signal, since we only need to check for pending signals during sigprocess,
 	//            but this means signal processing incurs an additional delay.
 
-	while (thread->xnu_thread.suspend_count > 0) {
+	for (;;) {
+		libsimple_lock_lock(&thread->suspension_gate);
+		bool park = thread->xnu_thread.suspend_count > 0 && !thread->suspension_dying;
+		libsimple_lock_unlock(&thread->suspension_gate);
+		if (!park) {
+			break;
+		}
+
 		dtape_log_debug("sigexc: going to sleep");
 
 		dtape_mutex_lock(&thread->suspension_mutex);
@@ -500,11 +517,19 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 		dtape_mutex_unlock(&thread->suspension_mutex);
 		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
 
-		// FIXME: possible race condition here between notifying of waiting and actually sleeping
-
-		thread->xnu_thread.wait_result = THREAD_WAITING;
-
-		dtape_hooks->thread_suspend(thread->context, NULL, NULL, NULL);
+		// a release or the thread's death between a check and our suspension would find nothing to resume.
+		// both take the gate, which is held from the final check until we are suspended (the server unlocks it then)
+		libsimple_lock_lock(&thread->suspension_gate);
+		park = thread->xnu_thread.suspend_count > 0 && !thread->suspension_dying;
+		if (park) {
+			thread->parked_suspended = true;
+			thread->xnu_thread.wait_result = THREAD_WAITING;
+			dtape_hooks->thread_suspend(thread->context, NULL, NULL, &thread->suspension_gate);
+			libsimple_lock_lock(&thread->suspension_gate);
+			thread->parked_suspended = false;
+		}
+		bool dying = thread->suspension_dying;
+		libsimple_lock_unlock(&thread->suspension_gate);
 
 		dtape_log_debug("sigexc: woken up");
 
@@ -513,7 +538,7 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 		dtape_mutex_unlock(&thread->suspension_mutex);
 		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
 
-		if (thread->xnu_thread.wait_result == THREAD_INTERRUPTED) {
+		if (!park || dying) {
 			break;
 		}
 	}
@@ -589,6 +614,10 @@ void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 };
 
 void dtape_thread_dying(dtape_thread_t* thread) {
+	// a thread that has not parked yet sees this and doesn't (see dtape_thread_wait_while_user_suspended());
+	// one that has is resumed by the caller
+	libsimple_lock_lock(&thread->suspension_gate);
+	thread->suspension_dying = true;
 	thread_lock(&thread->xnu_thread);
 	// see dtape_thread_sigexc_enter()
 	dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
@@ -597,6 +626,7 @@ void dtape_thread_dying(dtape_thread_t* thread) {
 	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
 	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
 	thread_unlock(&thread->xnu_thread);
+	libsimple_lock_unlock(&thread->suspension_gate);
 };
 
 thread_t current_thread(void) {
@@ -1792,7 +1822,10 @@ void thread_hold(thread_t xthread) {
 	dtape_log_debug("sigexc: thread_hold(%p)\n", xthread);
 	// CHECKME: the LKM was always sending the signal whenever thread_hold got called;
 	//          we mimic XNU here instead. check whether this actually works as expected.
-	if (xthread->suspend_count++ == 0) {
+	libsimple_lock_lock(&thread->suspension_gate);
+	bool first = xthread->suspend_count++ == 0;
+	libsimple_lock_unlock(&thread->suspension_gate);
+	if (first) {
 		// This signal leads to sigexc.c which will end up calling darlingserver;
 		// darlingserver will hold the caller so long as the suspend_count > 0.
 		dtape_hooks->thread_send_signal(thread->context, LINUX_SIGRTMIN);
@@ -1802,14 +1835,22 @@ void thread_hold(thread_t xthread) {
 void thread_release(thread_t xthread) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 	dtape_log_debug("sigexc: thread_release(%p)\n", xthread);
-	xthread->suspend_count--;
-	dtape_hooks->thread_resume(thread->context);
+	// see dtape_thread_wait_while_user_suspended(). only the park is woken: the thread may also wait for something
+	// else, e.g. the reply to its exception, if it was suspended and resumed while it handled the exception.
+	libsimple_lock_lock(&thread->suspension_gate);
+	if (--xthread->suspend_count == 0 && thread->parked_suspended) {
+		dtape_hooks->thread_resume(thread->context);
+	}
+	libsimple_lock_unlock(&thread->suspension_gate);
 };
 
 void thread_wait(thread_t xthread, boolean_t until_not_runnable) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	// like XNU's, this returns once the thread no longer runs user code: once it waits suspended, or while it waits
+	// for its exception to be handled. the latter matters for exception handlers that suspend the faulting thread
+	// before they reply; the thread can't take the suspension signal before it has the reply.
 	dtape_mutex_lock(&thread->suspension_mutex);
-	while (!thread->waiting_suspended) {
+	while (!thread->waiting_suspended && !thread->processing_signal) {
 		dtape_condvar_wait(&thread->suspension_condvar, &thread->suspension_mutex);
 	}
 	dtape_mutex_unlock(&thread->suspension_mutex);
