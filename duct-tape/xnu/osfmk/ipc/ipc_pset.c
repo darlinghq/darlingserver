@@ -66,6 +66,11 @@
 #include <mach/port.h>
 #include <mach/kern_return.h>
 #include <mach/message.h>
+
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#include <darlingserver/mach-sq.h>
+#endif /* __DARLING__ */
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_pset.h>
@@ -117,6 +122,9 @@ ipc_pset_alloc(
 	/* pset and space are locked */
 
 	ipc_mqueue_init(&pset->ips_messages, IPC_MQUEUE_KIND_SET);
+#ifdef __DARLING__
+	pset->ips_sq = NULL;
+#endif /* __DARLING__ */
 	is_write_unlock(space);
 
 	*namep = name;
@@ -156,6 +164,9 @@ ipc_pset_alloc_name(
 	/* pset is locked */
 
 	ipc_mqueue_init(&pset->ips_messages, IPC_MQUEUE_KIND_SET);
+#ifdef __DARLING__
+	pset->ips_sq = NULL;
+#endif /* __DARLING__ */
 
 	*psetp = pset;
 	return KERN_SUCCESS;
@@ -236,6 +247,11 @@ ipc_pset_add(
 	assert(ips_active(pset));
 	require_ip_active(port);
 
+#ifdef __DARLING__
+	/* both in the mode: the port becomes a member of the set there; otherwise one of them leaves it */
+	dtape_sq_pset_add(pset, port);
+#endif /* __DARLING__ */
+
 	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages,
 	    reserved_link, reserved_prepost);
 
@@ -271,6 +287,10 @@ ipc_pset_remove(
 	if (port->ip_in_pset == 0) {
 		return KERN_NOT_IN_SET;
 	}
+
+#ifdef __DARLING__
+	dtape_sq_pset_remove(pset, port);
+#endif /* __DARLING__ */
 
 	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
 
@@ -349,6 +369,10 @@ ipc_pset_remove_from_all(
 		return KERN_NOT_IN_SET;
 	}
 
+#ifdef __DARLING__
+	dtape_sq_port_removed_from_sets(port);
+#endif /* __DARLING__ */
+
 	/*
 	 * Remove the port's mqueue from all sets
 	 */
@@ -379,6 +403,11 @@ ipc_pset_destroy(
 #endif
 
 	pset->ips_object.io_bits &= ~IO_BITS_ACTIVE;
+
+#ifdef __DARLING__
+	/* the members stay in the mode as plain ports; receivers of the set are told it is gone */
+	dtape_sq_pset_destroyed(pset);
+#endif /* __DARLING__ */
 
 	/*
 	 * remove all the member message queues
@@ -787,6 +816,11 @@ lookup_again:
 		mqueue = &pset->ips_messages;
 		ips_reference(pset);
 
+#ifdef __DARLING__
+		/* a knote watches the members' own queues: the set and its members leave the mode */
+		dtape_sq_pset_leave(pset);
+#endif /* __DARLING__ */
+
 		imq_lock(mqueue);
 		kn->kn_mqueue = mqueue;
 
@@ -846,6 +880,11 @@ lookup_again:
 		 */
 		ip_lock(port);
 		imq_lock(mqueue);
+
+#ifdef __DARLING__
+		/* a knote watches the port's own queue */
+		dtape_sq_port_leave_locked(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 
 		kn->kn_mqueue = mqueue;
 		if (port->ip_sync_link_state != PORT_SYNC_LINK_ANY) {

@@ -81,6 +81,10 @@
 #include <string.h>
 #include <sys/kdebug.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#endif /* __DARLING__ */
+
 #if DSERVER_EXTENDED_DEBUG
 	#include <darlingserver/duct-tape/task.h>
 	#include <darlingserver/duct-tape/hooks.internal.h>
@@ -463,7 +467,11 @@ void
 ipc_entry_modified(
 	ipc_space_t             space,
 	mach_port_name_t        name,
+#ifdef __DARLING__
+	ipc_entry_t             entry)
+#else
 	__assert_only ipc_entry_t entry)
+#endif /* __DARLING__ */
 {
 	ipc_entry_t table;
 	ipc_entry_num_t size;
@@ -493,6 +501,11 @@ ipc_entry_modified(
 		entry->ie_bits,
 		0,
 		0);
+
+#ifdef __DARLING__
+	/* the task's own sends to a port in shared-queue mode check the rights of its name */
+	dtape_sq_entry_modified(space, name, entry);
+#endif /* __DARLING__ */
 }
 
 #define IPC_ENTRY_GROW_STATS 1

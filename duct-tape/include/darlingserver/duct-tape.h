@@ -89,8 +89,10 @@ void dtape_thread_set_handles(dtape_thread_t* thread, uintptr_t pthread_handle, 
  */
 dtape_thread_t* dtape_thread_for_port(uint32_t thread_port);
 void* dtape_thread_context(dtape_thread_t* thread);
-int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
-int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
+int dtape_thread_load_state_from_user(dtape_thread_t* thread, dserver_rpc_architecture_t caller_architecture, uintptr_t thread_state_address, uintptr_t float_state_address);
+// sets the exception state of the thread's current user state (NULL: none known)
+void dtape_thread_set_exception_state(dtape_thread_t* thread, const dtape_exception_state_t* state);
+int dtape_thread_save_state_to_user(dtape_thread_t* thread, dserver_rpc_architecture_t caller_architecture, uintptr_t thread_state_address, uintptr_t float_state_address);
 void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, int linux_signal_number, int code, uintptr_t signal_address);
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
 void dtape_thread_retain(dtape_thread_t* thread);
@@ -110,6 +112,15 @@ void dtape_thread_returning_to_user(dtape_thread_t* thread);
  */
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 void dtape_task_retain(dtape_task_t* task);
+
+/**
+ * Gives the task a shared message queue region (see darlingserver/mach-sq.h): `s_map` and `q_map` are the server's
+ * read-write mappings of the region's two objects (DSQ_S_SIZE and DSQ_Q_SIZE bytes, zero-filled). From now on, plain
+ * receive rights the task creates for itself keep their message queues in the region.
+ * Returns false (and takes nothing) if the task already has a region. Otherwise the task owns the mappings and gives
+ * them to the sq_region_release hook when it is destroyed.
+ */
+bool dtape_sq_attach(dtape_task_t* task, void* s_map, void* q_map);
 void dtape_task_release(dtape_task_t* task);
 void dtape_task_dying(dtape_task_t* task);
 void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t length);

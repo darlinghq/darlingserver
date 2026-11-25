@@ -32,6 +32,10 @@ typedef struct dtape_thread_user_state {
 	arm_unified_thread_state_t thread_state;
 	arm_neon_state64_t float_state;
 #endif
+
+	// the exception state of the signal frame, if the guest supplied it
+	bool has_exception_state;
+	dtape_exception_state_t exception_state;
 } dtape_thread_user_state_t;
 
 typedef LIST_HEAD(dtape_thread_user_state_head, dtape_thread_user_state) dtape_thread_user_state_head_t;
@@ -69,6 +73,10 @@ struct dtape_thread {
 	struct ipc_kmsg* pending_receive_kmsg;
 	struct ipc_object* pending_receive_object;
 	mach_port_seqno_t pending_receive_seqno;
+	// set for a receive the task waits for itself when the port's shared queue is empty (mach_msg_sq_receive);
+	// dtape_sq_mqueue_receive() then sets `sq_local_wait_result` instead of leaving the mode
+	bool sq_local_wait;
+	bool sq_local_wait_result;
 
 	bool waiting_suspended;
 	// set (with the thread locked) when thread_unblock() ends a wait, cleared once the woken thread has picked up its
@@ -88,6 +96,13 @@ struct dtape_thread {
 	libsimple_lock_t block_suspend_gate;
 	dtape_mutex_t suspension_mutex;
 	dtape_condvar_t suspension_condvar;
+	// protects suspend_count, `parked_suspended` and `suspension_dying`, and is held from the suspend_count check in
+	// dtape_thread_wait_while_user_suspended() until the microthread has been suspended
+	libsimple_lock_t suspension_gate;
+	// the thread is parked in dtape_thread_wait_while_user_suspended(), and thread_release() has to resume it
+	bool parked_suspended;
+	// set by dtape_thread_dying(); the thread no longer parks
+	bool suspension_dying;
 
 	//
 	// uthread stuff for psynch

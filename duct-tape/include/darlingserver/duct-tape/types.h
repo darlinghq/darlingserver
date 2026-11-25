@@ -14,6 +14,14 @@ typedef struct dtape_kqchan_mach_port dtape_kqchan_mach_port_t;
 typedef struct dtape_semaphore dtape_semaphore_t;
 typedef uint64_t dtape_eternal_id_t;
 
+// the hardware exception state of a signal frame, as the guest's Linux signal frame has it.
+// x86: the faulting address (cr2), the trap number and the error code.
+typedef struct dtape_exception_state {
+	uint64_t fault_address;
+	uint32_t trapno;
+	uint32_t err;
+} dtape_exception_state_t;
+
 typedef enum dtape_log_level {
 	dtape_log_level_debug,
 	dtape_log_level_info,
@@ -47,6 +55,21 @@ typedef struct dtape_memory_info {
 	uint64_t phys_footprint;
 	uint64_t phys_footprint_peak;
 } dtape_memory_info_t;
+
+// CPU time of the threads of a task, in nanoseconds: of those that are gone, and of those that are still there
+typedef struct dtape_task_cpu_times {
+	uint64_t terminated_user_ns;
+	uint64_t terminated_system_ns;
+	uint64_t live_user_ns;
+	uint64_t live_system_ns;
+} dtape_task_cpu_times_t;
+
+// event counters of a task that Linux keeps
+typedef struct dtape_task_event_counts {
+	uint64_t faults;
+	uint64_t pageins;
+	uint64_t context_switches;
+} dtape_task_event_counts_t;
 
 typedef enum dtape_memory_protection {
 	dtape_memory_protection_none = 0,

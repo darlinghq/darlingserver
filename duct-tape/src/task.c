@@ -8,6 +8,7 @@
 #include <darlingserver/duct-tape/psynch.h>
 #include <darlingserver/duct-tape/hooks.internal.h>
 #include <darlingserver/duct-tape/log.h>
+#include <darlingserver/duct-tape/mach_sq.h>
 
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
@@ -70,6 +71,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	task->architecture = architecture;
 	task->has_sigexc = false;
 	task->category_role = TASK_UNSPECIFIED;
+	task->sq_region = NULL;
 	task->dyld_info_addr = 0;
 	task->dyld_info_length = 0;
 	task->p_ident.eid = dtape_hooks->task_eternal_id(context);
@@ -158,6 +160,8 @@ void dtape_task_destroy(dtape_task_t* task) {
 
 	ipc_space_terminate(task->xnu_task.itk_space);
 
+	dtape_sq_task_destroy(task);
+
 	ipc_task_terminate(&task->xnu_task);
 
 	dtape_vm_map_destroy(task->xnu_task.map);
@@ -187,6 +191,11 @@ void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_ui
 		task->xnu_task.audit_token.val[2] = new_gid;
 	}
 	task_unlock(&task->xnu_task);
+
+	if (new_uid != -1 || new_gid != -1) {
+		// messages the task queues itself from now on carry the new token
+		dtape_sq_task_tokens_changed(task);
+	}
 };
 
 void dtape_task_retain(dtape_task_t* task) {
@@ -338,9 +347,19 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 				return KERN_INVALID_ARGUMENT;
 			}
 
-			dtape_log_debug("%s: TODO: fetch utimeus and stimeus somehow", __FUNCTION__);
-			utimeus = 0;
-			stimeus = 0;
+			// like on macOS, these are the times of the threads of the task that have terminated;
+			// those of the threads that are still there are what thread_info() returns
+			{
+				dtape_task_cpu_times_t cpu_times;
+
+				if (dtape_hooks->task_get_cpu_times(task->context, &cpu_times)) {
+					utimeus = cpu_times.terminated_user_ns / NSEC_PER_USEC;
+					stimeus = cpu_times.terminated_system_ns / NSEC_PER_USEC;
+				} else {
+					utimeus = 0;
+					stimeus = 0;
+				}
+			}
 
 			if (flavor == TASK_BASIC_INFO_32) {
 				struct task_basic_info_32* info = (void*)task_info_out;
@@ -425,15 +444,84 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			}
 			*task_info_count = TASK_THREAD_TIMES_INFO_COUNT;
 
-			dtape_log_debug("%s: TODO: fetch utimeus and stimeus somehow", __FUNCTION__);
+			// the times of the threads of the task that are still there
 			uint64_t utimeus = 0;
 			uint64_t stimeus = 0;
+			dtape_task_cpu_times_t cpu_times;
+
+			if (dtape_hooks->task_get_cpu_times(task->context, &cpu_times)) {
+				utimeus = cpu_times.live_user_ns / NSEC_PER_USEC;
+				stimeus = cpu_times.live_system_ns / NSEC_PER_USEC;
+			}
 
 			info->user_time.seconds = utimeus / USEC_PER_SEC;
 			info->user_time.microseconds = utimeus % USEC_PER_SEC;
 			info->system_time.seconds = stimeus / USEC_PER_SEC;
 			info->system_time.microseconds = stimeus % USEC_PER_SEC;
 
+			return KERN_SUCCESS;
+		};
+
+		case TASK_EVENTS_INFO: {
+			task_events_info_t info = (task_events_info_t)task_info_out;
+			dtape_task_event_counts_t counts;
+
+			if (*task_info_count < TASK_EVENTS_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			if (!dtape_hooks->task_get_event_counts(task->context, &counts)) {
+				// the process is gone; XNU rejects queries on inactive tasks the same way
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			memset(info, 0, sizeof(*info));
+
+			// the faults, page-ins and context switches are those Linux counts for the process; Linux has
+			// no counter of copy-on-write faults or of system calls, so these stay 0
+			info->faults = (int32_t)MIN(counts.faults, INT32_MAX);
+			info->pageins = (int32_t)MIN(counts.pageins, INT32_MAX);
+			info->messages_sent = task->xnu_task.messages_sent;
+			info->messages_received = task->xnu_task.messages_received;
+			info->csw = (int32_t)MIN(counts.context_switches, INT32_MAX);
+
+			*task_info_count = TASK_EVENTS_INFO_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_POWER_INFO: {
+			task_power_info_t info = (task_power_info_t)task_info_out;
+			dtape_task_cpu_times_t cpu_times;
+
+			if (*task_info_count < TASK_POWER_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			memset(info, 0, sizeof(*info));
+
+			// the CPU time of all threads of the task, in the units of mach_absolute_time() (nanoseconds here);
+			// Linux does not count wakeups from idle or timer wakeups the way macOS does, they stay 0
+			if (dtape_hooks->task_get_cpu_times(task->context, &cpu_times)) {
+				info->total_user = cpu_times.terminated_user_ns + cpu_times.live_user_ns;
+				info->total_system = cpu_times.terminated_system_ns + cpu_times.live_system_ns;
+			}
+
+			*task_info_count = TASK_POWER_INFO_COUNT;
+			return KERN_SUCCESS;
+		};
+
+		case TASK_KERNELMEMORY_INFO: {
+			task_kernelmemory_info_t info = (task_kernelmemory_info_t)task_info_out;
+
+			if (*task_info_count < TASK_KERNELMEMORY_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
+			// there is no kernel memory that is allocated on behalf of a task: the server's memory is not
+			// accounted per task, and what Linux allocates for a process can not be told apart
+			memset(info, 0, sizeof(*info));
+
+			*task_info_count = TASK_KERNELMEMORY_INFO_COUNT;
 			return KERN_SUCCESS;
 		};
 
@@ -499,7 +587,9 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			return KERN_SUCCESS;
 		};
 
-		case TASK_VM_INFO: {
+		case TASK_VM_INFO:
+		// the purgeable memory fields of both flavors are 0 (see below)
+		case TASK_VM_INFO_PURGEABLE: {
 			task_vm_info_t info = (task_vm_info_t)task_info_out;
 			mach_msg_type_number_t orig_info_count = *task_info_count;
 

@@ -80,6 +80,10 @@ struct ipc_pset {
 	 */
 	struct ipc_object       ips_object;
 	struct ipc_mqueue       ips_messages;
+#ifdef __DARLING__
+	/* the set's slot while it is in the mode of its task's shared region (see duct-tape/mach_sq.h) */
+	struct dtape_sq_slot    *ips_sq;
+#endif /* __DARLING__ */
 };
 
 #define ips_references          ips_object.io_references

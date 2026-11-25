@@ -1,5 +1,6 @@
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/duct-tape/task.h>
+#include <darlingserver/duct-tape/mach_sq.h>
 
 uint64_t dtape_debug_task_port_count(dtape_task_t* task) {
 	return task->xnu_task.itk_space->is_table_hashed;
@@ -23,7 +24,7 @@ uint64_t dtape_debug_task_list_ports(dtape_task_t* task, dtape_debug_task_list_p
 		debug_port.name = MACH_PORT_MAKE(index, IE_BITS_GEN(entry->ie_bits));
 		debug_port.refs = IE_BITS_UREFS(entry->ie_bits);
 		debug_port.rights = IE_BITS_TYPE(entry->ie_bits);
-		debug_port.messages = port->ip_messages.imq_msgcount;
+		debug_port.messages = dtape_sq_port_message_count(port);
 
 		if (call_it) {
 			call_it = iterator(context, &debug_port);
@@ -70,7 +71,7 @@ uint64_t dtape_debug_portset_list_members(dtape_task_t* task, uint32_t portset, 
 		debug_port.name = *name;
 		debug_port.refs = IE_BITS_UREFS(entry->ie_bits);
 		debug_port.rights = IE_BITS_TYPE(entry->ie_bits);
-		debug_port.messages = port->ip_messages.imq_msgcount;
+		debug_port.messages = dtape_sq_port_message_count(port);
 
 		if (call_it) {
 			call_it = iterator(context, &debug_port);
