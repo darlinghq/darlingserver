@@ -339,6 +339,12 @@ extern void ipc_mqueue_set_gather_member_names(
 	mach_port_name_t        *names,
 	ipc_entry_num_t         *actualp);
 
+#ifdef __DARLING__
+/* Hand the messages put on a port's queue directly to waiting receivers */
+extern void ipc_mqueue_post_queued(
+	ipc_mqueue_t            mqueue);
+#endif /* __DARLING__ */
+
 /* Clear a message count reservation */
 extern void ipc_mqueue_release_msgcount(
 	ipc_mqueue_t            port_mq,

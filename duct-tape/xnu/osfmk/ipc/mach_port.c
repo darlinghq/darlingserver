@@ -769,6 +769,9 @@ mach_port_allocate_internal(
 		}
 		if (kr == KERN_SUCCESS) {
 			ips_unlock(pset);
+#ifdef __DARLING__
+			dtape_sq_set_created(space, *namep);
+#endif /* __DARLING__ */
 		}
 		break;
 	}
