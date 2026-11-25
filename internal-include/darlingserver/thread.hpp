@@ -179,7 +179,7 @@ namespace DarlingServer {
 		void _dispose();
 		void _scheduleRelease();
 
-		static void _handleInterruptEnterForCurrentThread();
+		static void _handleInterruptEnterForCurrentThread(bool transparent);
 
 		static StackPool stackPool;
 

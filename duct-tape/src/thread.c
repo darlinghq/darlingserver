@@ -77,6 +77,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	thread->waiting_suspended = false;
 	thread->wakeup_pending = false;
 	thread->interrupt_deferred = false;
+	thread->wait_restart = false;
 	libsimple_lock_init(&thread->block_suspend_gate);
 	LIST_INIT(&thread->user_states);
 	dtape_mutex_init(&thread->suspension_mutex);
@@ -522,17 +523,24 @@ static void dtape_thread_cancel_wait_timer_locked(thread_t xthread) {
 	}
 };
 
-void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
+void dtape_thread_sigexc_enter(dtape_thread_t* thread, bool transparent) {
 	thread_lock(&thread->xnu_thread);
 	// a wait that has already been ended by a wakeup keeps its result, as XNU's clear_wait() leaves a thread that is
 	// no longer waiting alone. the waker may already have completed the operation for this thread (e.g. handed a
 	// receive its message); reporting the wait as interrupted would lose that (the caller would receive again and
 	// wait for a reply that has already been taken off the queue).
 	// the call still has to return for the signal to be handled, so interrupt the next wait it starts instead
-	// (as before, one wait is interrupted per signal).
+	// (as before, one wait is interrupted per signal). a transparent interrupt (one of Darling's own: a thread
+	// suspension or a server-to-client call) has no handler of the application to run, so it doesn't need that.
 	if (thread->wakeup_pending) {
-		thread->interrupt_deferred = true;
+		if (!transparent) {
+			thread->interrupt_deferred = true;
+		}
 	} else {
+		// the call has to return for the signal handler to talk to us, but in XNU, a thread suspension or a
+		// server-to-client call doesn't end a wait; see semaphore_wait_continue(). (TH_WAIT doesn't tell whether the
+		// call is waiting: it was cleared when the thread started running this interrupt_enter.)
+		thread->wait_restart = transparent && thread->xnu_thread.wait_result == THREAD_WAITING;
 		// with TH_WAIT cleared, clear_wait_internal() only takes the thread off its wait queue (thread_unblock() isn't
 		// called), so cancel the timer of a timed wait here
 		dtape_thread_cancel_wait_timer_locked(&thread->xnu_thread);
@@ -554,6 +562,7 @@ void dtape_thread_sigexc_enter2(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
 	// the interrupted call is done; waits in the signal handler's own calls are not interrupted
 	thread->interrupt_deferred = false;
+	thread->wait_restart = false;
 	LIST_INSERT_HEAD(&thread->user_states, new_user_state, link);
 	thread_unlock(&thread->xnu_thread);
 };

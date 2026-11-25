@@ -79,6 +79,10 @@ struct dtape_thread {
 	// it starts before it returns is interrupted at once. cleared then, or once the interrupted call is done
 	// (dtape_thread_sigexc_enter2())
 	bool interrupt_deferred;
+	// set when an interrupt of Darling's own machinery (a thread suspension, a server-to-client call) ended the
+	// thread's wait: XNU would not have ended it, so a semaphore wait asks the client to wait again
+	// (DSERVER_RPC_RESTART; see semaphore_wait_continue()). cleared then, or once the interrupted call is done
+	bool wait_restart;
 	// held from the TH_WAIT check in thread_block_parameter() until the
 	// microthread has been suspended; see thread_block_parameter()
 	libsimple_lock_t block_suspend_gate;

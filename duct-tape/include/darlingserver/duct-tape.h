@@ -95,7 +95,7 @@ void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, 
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
 void dtape_thread_retain(dtape_thread_t* thread);
 void dtape_thread_release(dtape_thread_t* thread);
-void dtape_thread_sigexc_enter(dtape_thread_t* thread);
+void dtape_thread_sigexc_enter(dtape_thread_t* thread, bool transparent);
 void dtape_thread_sigexc_exit(dtape_thread_t* thread);
 void dtape_thread_sigexc_enter2(dtape_thread_t* thread);
 void dtape_thread_dying(dtape_thread_t* thread);

@@ -60,6 +60,11 @@
 
 #include <libkern/OSAtomic.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/thread.h>
+#include <darlingserver/rpc-supplement.h>
+#endif
+
 static unsigned int semaphore_event;
 #define SEMAPHORE_EVENT CAST_EVENT64_T(&semaphore_event)
 
@@ -657,6 +662,22 @@ semaphore_wait_continue(void *arg __unused, wait_result_t wr)
 
 	assert(self->handoff_thread == THREAD_NULL);
 	assert(caller_cont != (void (*)(kern_return_t))0);
+#ifdef __DARLING__
+	/*
+	 * A thread suspension or a server-to-client call ended the wait so that the thread could handle the signal
+	 * Darling uses for them (see dtape_thread_sigexc_enter()). In XNU, neither ends a wait, so have
+	 * libsystem_kernel wait again (the semaphore to signal, if any, has been signaled already).
+	 */
+	dtape_thread_t *dthread = dtape_thread_for_xnu_thread(self);
+	thread_lock(self);
+	bool restart = dthread->wait_restart && wr == THREAD_INTERRUPTED;
+	dthread->wait_restart = false;
+	thread_unlock(self);
+	if (restart) {
+		(*caller_cont)(-DSERVER_RPC_RESTART);
+		return;
+	}
+#endif
 	(*caller_cont)(semaphore_convert_wait_result(wr));
 }
 

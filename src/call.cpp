@@ -1080,7 +1080,7 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 };
 
 void DarlingServer::Call::InterruptEnter::processCall() {
-	Thread::_handleInterruptEnterForCurrentThread();
+	Thread::_handleInterruptEnterForCurrentThread(_body.transparent);
 
 	_sendReply(0);
 };
