@@ -78,6 +78,8 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
 	thread->pending_receive_kmsg = NULL;
 	thread->pending_receive_object = NULL;
 	thread->pending_receive_seqno = 0;
+	thread->sq_local_wait = false;
+	thread->sq_local_wait_result = false;
 	thread->name = NULL;
 	thread->waiting_suspended = false;
 	thread->wakeup_pending = false;

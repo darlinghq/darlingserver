@@ -112,6 +112,15 @@ void dtape_thread_returning_to_user(dtape_thread_t* thread);
  */
 void dtape_task_uidgid(dtape_task_t* task, int new_uid, int new_gid, int* old_uid, int* old_gid);
 void dtape_task_retain(dtape_task_t* task);
+
+/**
+ * Gives the task a shared message queue region (see darlingserver/mach-sq.h): `s_map` and `q_map` are the server's
+ * read-write mappings of the region's two objects (DSQ_S_SIZE and DSQ_Q_SIZE bytes, zero-filled). From now on, plain
+ * receive rights the task creates for itself keep their message queues in the region.
+ * Returns false (and takes nothing) if the task already has a region. Otherwise the task owns the mappings and gives
+ * them to the sq_region_release hook when it is destroyed.
+ */
+bool dtape_sq_attach(dtape_task_t* task, void* s_map, void* q_map);
 void dtape_task_release(dtape_task_t* task);
 void dtape_task_dying(dtape_task_t* task);
 void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t length);

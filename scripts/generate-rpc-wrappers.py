@@ -914,6 +914,28 @@ calls = [
 		('memory_users', 'uint32_t'),
 		('flags', 'uint32_t'),
 	]),
+
+	#
+	# shared message queues (see darlingserver/mach-sq.h)
+	#
+
+	# gives the calling task its shared message queue region: `s_object` is mapped read-only by the task,
+	# `q_object` read-write; both are DSQ_S_SIZE/DSQ_Q_SIZE bytes. fails with EEXIST if it already has one
+	('mach_sq_attach', [], [
+		('s_object', '@fd'),
+		('q_object', '@fd'),
+	]),
+
+	# a receive-only mach_msg() on a port in shared-queue mode. the same as mach_msg_overwrite with
+	# MACH_RCV_MSG only, except that when the port's shared queue is empty and the receive would wait,
+	# it returns DSQ_RCV_WAIT_LOCALLY at once so that the task waits for the queue itself
+	('mach_msg_sq_receive', [
+		('msg', 'void*', 'uint64_t'),
+		('option', 'int32_t'),
+		('rcv_size', 'uint32_t'),
+		('rcv_name', 'uint32_t'),
+		('timeout', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX | XNU_TRAP_NO_DTAPE_DEF | ALLOW_INTERRUPTIONS),
 ]
 
 ALLOWED_PRIVATE_TYPES = [

@@ -181,6 +181,10 @@ struct ipc_port {
 	uint8_t         ip_srp_lost_link:1,     /* special reply port turnstile link chain broken */
 	    ip_srp_msg_sent:1;                  /* special reply port msg sent */
 #endif
+#ifdef __DARLING__
+	/* the port's slot while its queue is in the receiver's shared region (see duct-tape/mach_sq.h) */
+	struct dtape_sq_slot *ip_sq;
+#endif /* __DARLING__ */
 };
 
 

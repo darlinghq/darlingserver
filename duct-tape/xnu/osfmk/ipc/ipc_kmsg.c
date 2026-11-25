@@ -144,6 +144,7 @@
 #ifdef __DARLING__
 #include <darlingserver/duct-tape/thread.h>
 #include <darlingserver/duct-tape/memory.h>
+#include <darlingserver/duct-tape/mach_sq.h>
 #endif /* __DARLING__ */
 
 #include <ptrauth.h>
@@ -2066,6 +2067,87 @@ ipc_kmsg_get(
 	return MACH_MSG_SUCCESS;
 }
 
+#ifdef __DARLING__
+/*
+ *	Routine:	dtape_kmsg_from_shared
+ *	Purpose:
+ *		Makes the kmsg of a simple message a task queued in its shared
+ *		region (see duct-tape/mach_sq.h): the result is what ipc_kmsg_get()
+ *		and ipc_kmsg_copyin() would have made of it, with the tokens the
+ *		sender had when it sent it. `msg` is a private copy of the user
+ *		message (mach_msg_legacy_header_t and body); it is validated here.
+ *		The destination right is a COPY_SEND or (`made_send`) MAKE_SEND
+ *		of `port`; the make-send count of the latter is accounted for by
+ *		the caller.
+ *	Conditions:
+ *		The port and its mqueue locked; the port is active.
+ *	Returns:
+ *		IKM_NULL if the message is not one the task may queue itself.
+ */
+ipc_kmsg_t
+dtape_kmsg_from_shared(
+	ipc_port_t              port,
+	mach_port_name_t        name,
+	const void              *msg,
+	mach_msg_size_t         size,
+	boolean_t               made_send,
+	const security_token_t  *sec_token,
+	const audit_token_t     *audit_token)
+{
+	mach_msg_legacy_header_t header;
+	mach_msg_max_trailer_t *trailer;
+	mach_msg_bits_t expected;
+	mach_msg_size_t ksize;
+	ipc_kmsg_t kmsg;
+
+	if (size < sizeof(header) || (size & 3) || size > ipc_kmsg_max_body_space) {
+		return IKM_NULL;
+	}
+	memcpy(&header, msg, sizeof(header));
+
+	expected = MACH_MSGH_BITS(made_send ? MACH_MSG_TYPE_MAKE_SEND : MACH_MSG_TYPE_COPY_SEND, 0);
+	if (header.msgh_bits != expected ||
+	    header.msgh_size != size ||
+	    header.msgh_remote_port != name ||
+	    header.msgh_local_port != MACH_PORT_NULL ||
+	    header.msgh_voucher_port != MACH_PORT_NULL) {
+		return IKM_NULL;
+	}
+
+	ksize = size;
+#if defined(__LP64__)
+	ksize += LEGACY_HEADER_SIZE_DELTA;
+#endif
+	kmsg = ipc_kmsg_alloc(ksize + MAX_TRAILER_SIZE);
+	if (kmsg == IKM_NULL) {
+		return IKM_NULL;
+	}
+
+	kmsg->ikm_header->msgh_size = ksize;
+	kmsg->ikm_header->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_PORT_SEND, 0);
+	kmsg->ikm_header->msgh_remote_port = port;
+	kmsg->ikm_header->msgh_local_port = IP_NULL;
+	kmsg->ikm_header->msgh_voucher_port = MACH_PORT_NULL;
+	kmsg->ikm_header->msgh_id = header.msgh_id;
+	memcpy(kmsg->ikm_header + 1, (const char *)msg + sizeof(header), size - sizeof(header));
+
+	trailer = (mach_msg_max_trailer_t *)((vm_offset_t)kmsg->ikm_header + ksize);
+	bzero(trailer, sizeof(*trailer));
+	trailer->msgh_sender = *sec_token;
+	trailer->msgh_audit = *audit_token;
+	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+	trailer->msgh_labels.sender = 0;
+
+	/* the destination right the message carries, as ipc_object_copyin() of it gives */
+	port->ip_srights++;
+	ip_reference(port);
+
+	ikm_sign(kmsg);
+	return kmsg;
+}
+#endif /* __DARLING__ */
+
 /*
  *	Routine:	ipc_kmsg_get_from_kernel
  *	Purpose:
@@ -2343,10 +2425,16 @@ retry:
 
 		ipc_special_reply_port_msg_sent(port);
 
-		ip_unlock(port);
+#ifdef __DARLING__
+		/* a port whose queue is in its receiver's shared region */
+		if (!dtape_sq_mqueue_send(port, kmsg, option, send_timeout, &error))
+#endif /* __DARLING__ */
+		{
+			ip_unlock(port);
 
-		error = ipc_mqueue_send(&port->ip_messages, kmsg, option,
-		    send_timeout);
+			error = ipc_mqueue_send(&port->ip_messages, kmsg, option,
+			    send_timeout);
+		}
 	}
 
 #if IMPORTANCE_INHERITANCE

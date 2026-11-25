@@ -99,6 +99,11 @@
 
 #include <string.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#include <darlingserver/mach-sq.h>
+#endif /* __DARLING__ */
+
 static TUNABLE(bool, prioritize_launch, "prioritize_launch", true);
 TUNABLE_WRITEABLE(int, ipc_portbt, "ipc_portbt", false);
 
@@ -213,6 +218,10 @@ ipc_port_request_alloc(
 	ipr->ipr_name = name;
 
 	if (send_possible) {
+#ifdef __DARLING__
+		/* XNU sends the notification when a receive dequeues; a dequeue the task does itself can't */
+		dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 		mask |= IPR_SOR_SPREQ_MASK;
 		if (immediate) {
 			mask |= IPR_SOR_SPARM_MASK;
@@ -386,6 +395,9 @@ ipc_port_request_sparm(
 
 		/* Is there a valid destination? */
 		if (IPR_SOR_SPREQ(ipr->ipr_soright)) {
+#ifdef __DARLING__
+			dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
 			ipr->ipr_soright = IPR_SOR_MAKE(ipr->ipr_soright, IPR_SOR_SPARM_MASK);
 			port->ip_sprequests = 1;
 
@@ -542,6 +554,11 @@ ipc_port_nsrequest(
 	mach_port_mscount_t mscount;
 	require_ip_active(port);
 
+#ifdef __DARLING__
+	/* the queued messages of the task hold send rights the check below has to see */
+	dtape_sq_port_leave(port, DSQ_CLOSE_OTHER);
+#endif /* __DARLING__ */
+
 	previous = port->ip_nsrequest;
 	mscount = port->ip_mscount;
 
@@ -582,6 +599,11 @@ ipc_port_clear_receiver(
 {
 	ipc_mqueue_t    mqueue = &port->ip_messages;
 	boolean_t       reap_messages = FALSE;
+
+#ifdef __DARLING__
+	/* the queue goes back to the port first, so what follows sees (and destroys) all its messages */
+	dtape_sq_port_leave(port, should_destroy ? DSQ_CLOSE_DESTROYED : DSQ_CLOSE_MOVED);
+#endif /* __DARLING__ */
 
 	/*
 	 * Pull ourselves out of any sets to which we belong.

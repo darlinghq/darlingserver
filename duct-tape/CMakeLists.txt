@@ -288,6 +288,8 @@ add_library(darlingserver_duct_tape STATIC
 	src/debug.c
 	src/fileport.c
 	src/csr.c
+	src/mach_sq.c
+	../sq/mach-sq.c
 
 	xnu/libkern/os/refcnt.c
 	xnu/libkern/gen/OSAtomicOperations.c

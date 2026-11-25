@@ -80,6 +80,11 @@ typedef bool (*dtape_hook_task_sync_memory_f)(void* task_context, uintptr_t addr
 typedef void (*dtape_hook_task_context_dispose_f)(void* task_context);
 typedef dtape_eternal_id_t (*dtape_hook_task_eternal_id_f)(void* thread_context);
 
+// wakes up to `count` threads waiting (FUTEX_WAIT) on the 32-bit word at `address` in a shared message queue region
+typedef void (*dtape_hook_sq_futex_wake_f)(void* address, int count);
+// unmaps both objects of a task's shared message queue region (dtape_sq_attach()) once the task is gone
+typedef void (*dtape_hook_sq_region_release_f)(void* s_map, size_t s_size, void* q_map, size_t q_size);
+
 typedef enum dtape_task_port_flavor {
 	dtape_task_port_flavor_control,
 	dtape_task_port_flavor_read,
@@ -153,6 +158,9 @@ typedef struct dtape_hooks {
 	dtape_hook_task_context_dispose_f task_context_dispose;
 	dtape_hook_task_eternal_id_f task_eternal_id;
 	dtape_hook_task_port_allowed_f task_port_allowed;
+
+	dtape_hook_sq_futex_wake_f sq_futex_wake;
+	dtape_hook_sq_region_release_f sq_region_release;
 
 #if DSERVER_EXTENDED_DEBUG
 	dtape_hook_task_register_name_f task_register_name;

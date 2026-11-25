@@ -28,6 +28,8 @@
 #include <darlingserver/config.hpp>
 #include <sys/fcntl.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
+#include <darlingserver/mach-sq.h>
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/system-config.hpp>
 #include <darlingserver/platform-identity.hpp>
@@ -858,6 +860,89 @@ void DarlingServer::Call::FileportMakefd::processCall() {
 
 	// the reply takes ownership of the new descriptor
 	_sendReply(code, fd);
+};
+
+// one object of a shared message queue region: a sealed memfd the server keeps mapped read-write
+static int makeSharedQueueObject(const char* name, size_t size, unsigned int seals, void** mapping) {
+	int fd = memfd_create(name, MFD_CLOEXEC | MFD_ALLOW_SEALING);
+	if (fd < 0) {
+		return -errno;
+	}
+	if (ftruncate(fd, size) < 0) {
+		int code = -errno;
+		close(fd);
+		return code;
+	}
+	void* map = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (map == MAP_FAILED) {
+		int code = -errno;
+		close(fd);
+		return code;
+	}
+	// the server's mapping exists before F_SEAL_FUTURE_WRITE, so it stays writable while the task's can't be
+	if (fcntl(fd, F_ADD_SEALS, seals) < 0) {
+		int code = -errno;
+		munmap(map, size);
+		close(fd);
+		return code;
+	}
+	*mapping = map;
+	return fd;
+};
+
+void DarlingServer::Call::MachSqAttach::processCall() {
+	int code = 0;
+	int sFD = -1;
+	int qFD = -1;
+	void* sMap = nullptr;
+	void* qMap = nullptr;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			// S is the server's (the task maps it read-only); Q is shared. neither can change size
+			sFD = makeSharedQueueObject("darling-mach-sq-s", DSQ_S_SIZE,
+				F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL, &sMap);
+			if (sFD < 0) {
+				code = sFD;
+				sFD = -1;
+			} else {
+				qFD = makeSharedQueueObject("darling-mach-sq-q", DSQ_Q_SIZE,
+					F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL, &qMap);
+				if (qFD < 0) {
+					code = qFD;
+					qFD = -1;
+				}
+			}
+
+			if (code == 0 && !dtape_sq_attach(process->_dtapeTask, sMap, qMap)) {
+				code = -EEXIST;
+			}
+
+			if (code != 0) {
+				if (sMap) {
+					munmap(sMap, DSQ_S_SIZE);
+				}
+				if (qMap) {
+					munmap(qMap, DSQ_Q_SIZE);
+				}
+				if (sFD >= 0) {
+					close(sFD);
+					sFD = -1;
+				}
+				if (qFD >= 0) {
+					close(qFD);
+					qFD = -1;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	// the reply takes ownership of the descriptors; the task maps them and closes them
+	_sendReply(code, sFD, qFD);
 };
 
 static DarlingServer::Log systemConfigLog("sysconfig");
