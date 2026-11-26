@@ -27,6 +27,7 @@ static dtape_task_t* dtape_task_create(dtape_task_t*, int, void*, dserver_rpc_ar
 	return tasks.back().get();
 }
 static dtape_semaphore_t* dtape_semaphore_create(dtape_task_t*, int) { return nullptr; }
+static void dtape_task_inherit_dyld_info(dtape_task_t*, dtape_task_t*) {}
 
 struct NullBuf : std::streambuf { int overflow(int c) override { return c; } };
 static NullBuf nullBuf;
