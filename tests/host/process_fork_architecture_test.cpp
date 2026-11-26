@@ -1,4 +1,5 @@
-// A fork child's task keeps its parent's architecture, whatever architecture the child reports.
+// A fork child's task keeps its parent's architecture, whatever architecture the child reports, and starts with its
+// parent's dyld image information.
 // The Process constructor is the real one, cut out of src/process.cpp by tests/host/process-ctor-inc.sh
 // into the file named by PROCESS_CTOR_INC; Process's other members, the registry and duct-tape are stand-ins.
 // The parent is found the way the server finds it: through the PPid line of /proc/<pid>/status.
@@ -18,13 +19,17 @@
 
 typedef int dserver_rpc_architecture_t;
 typedef struct { uint32_t darling_flags; } dserver_cs_state_t;
-struct dtape_task_t { dserver_rpc_architecture_t architecture; };
+struct dtape_task_t { dserver_rpc_architecture_t architecture; uint64_t dyld_info_addr = 0; uint64_t dyld_info_length = 0; };
 struct dtape_semaphore_t {};
 
 static std::vector<std::unique_ptr<dtape_task_t>> tasks;
 static dtape_task_t* dtape_task_create(dtape_task_t*, int, void*, dserver_rpc_architecture_t architecture) {
 	tasks.push_back(std::make_unique<dtape_task_t>(dtape_task_t{architecture}));
 	return tasks.back().get();
+}
+static void dtape_task_inherit_dyld_info(dtape_task_t* task, dtape_task_t* parent_task) {
+	task->dyld_info_addr = parent_task->dyld_info_addr;
+	task->dyld_info_length = parent_task->dyld_info_length;
 }
 static dtape_semaphore_t* dtape_semaphore_create(dtape_task_t*, int) { return nullptr; }
 
@@ -99,13 +104,19 @@ int main(int, char**) {
 	}
 
 	registry.m[getppid()] = std::make_shared<Process>(getppid(), 1, Arch::ARM64, -1, false);
+	registry.m[getppid()]->_dtapeTask->dyld_info_addr = 0x7ff800001000;
+	registry.m[getppid()]->_dtapeTask->dyld_info_length = 0x170;
 
 	Process child(getpid(), 2, Arch::x86_64, -1, true);
 	CHECK(child._parentProcess.lock() == registry.m[getppid()], "the parent is found through PPid");
 	CHECK(hasArchitecture(child, Arch::ARM64), "a fork child's task takes its parent's architecture, not the reported one");
+	CHECK(child._dtapeTask->dyld_info_addr == 0x7ff800001000 && child._dtapeTask->dyld_info_length == 0x170,
+		"a fork child's task starts with its parent's dyld image information");
 
 	Process execd(getpid(), 2, Arch::x86_64, -1, false);
 	CHECK(hasArchitecture(execd, Arch::x86_64), "a process that is no fork child keeps the reported architecture");
+	CHECK(execd._dtapeTask->dyld_info_addr == 0 && execd._dtapeTask->dyld_info_length == 0,
+		"a process that is no fork child waits for its own dyld image information");
 
 	std::printf("%s (%d failures)\n", fails ? "FAILED" : "OK", fails);
 	return fails != 0;
