@@ -42,6 +42,7 @@ struct Log {
 	int endLog = 0;
 	Log& debug() { return *this; }
 	Log& warning() { return *this; }
+	Log& error() { return *this; }
 	Log& info() { return *this; }
 	template<class T> Log& operator<<(const T&) { return *this; }
 };

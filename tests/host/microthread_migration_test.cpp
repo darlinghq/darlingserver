@@ -162,10 +162,35 @@ static void runLockHandoff() {
 	std::puts("PASS suspension lock survives host handoff");
 }
 
+// A process killed while a thread of it waits with a continuation leaves that continuation behind, and the
+// thread's next call arrives while it is still set. The new call wins: the continuation can never resume (its
+// stack went with the process) and is dropped, instead of the exception that ends the server.
+static void runStaleContinuation() {
+	auto token = std::make_shared<int>(1);
+	std::weak_ptr<int> weak = token;
+	bool continuationRan = false, callRan = false, threw = false;
+	auto thread = std::make_shared<Thread>();
+	thread->setupKernelThread([token, &continuationRan] { continuationRan = true; });
+	token.reset();
+	thread->_pendingCall = std::make_shared<Call>();
+	thread->_pendingCall->body = [&] { callRan = true; };
+	try {
+		thread->doWork();
+	} catch (const std::exception&) {
+		threw = true;
+	}
+	check(!threw, "a pending call and a stale continuation do not throw");
+	check(callRan, "the new call runs");
+	check(!continuationRan, "the stale continuation does not");
+	check(weak.expired(), "the dropped continuation releases its captures");
+	std::puts("PASS stale continuation is dropped");
+}
+
 int main() {
 	for (auto mode : {Mode::Call, Mode::Continuation, Mode::Syscall, Mode::Replacement,
 		Mode::Unlock, Mode::Interrupt, Mode::InterruptedContinuation})
 		run(mode);
 	runLockHandoff();
+	runStaleContinuation();
 	return 0;
 }
