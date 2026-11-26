@@ -117,6 +117,10 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
 	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
+	if (parentProcess && forkChild) {
+		// a fork child's dyld does not run again to report its image information (an exec reports it anew)
+		dtape_task_inherit_dyld_info(_dtapeTask, parentProcess->_dtapeTask);
+	}
 	_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 	processLog.info() << "New process created with ID " << _pid << " and NSID " << _nspid;
