@@ -539,7 +539,7 @@ calls = [
 
 	#
 	# mach eventlink "traps" (XNU BSD syscalls 496-498: their 64-bit result, count and error, is written to
-	# `result` in the caller's memory). os_eventlink (AUAudioUnit's out-of-process render pipe, os_workgroup) needs them.
+	# `result` in the caller's memory)
 	#
 
 	('mach_eventlink_signal', [

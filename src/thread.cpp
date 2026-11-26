@@ -382,18 +382,9 @@ void DarlingServer::Thread::makePendingCallActive() {
 	std::unique_lock lock(_rwlock);
 	_activeCall = _pendingCall;
 	_pendingCall = nullptr;
-	// Darwin's BSD syscall dispatch gives every call a fresh `int32_t retval = 0`
-	// (syscalls.master), and a trap body is free to leave it untouched when there is
-	// nothing to report. `_bsdReturnValue` is that per-call value, so it MUST start at 0
-	// for each call: it is otherwise reused across calls, and a handler that only writes
-	// it on the error path (the `ULF_NO_ERRNO` convention in duct-tape's ulock_wake)
-	// would hand the guest the PREVIOUS call's value. Measured failure: the Xcode 26.3
-	// `ld` called os_unfair_lock_unlock on a contended bucket lock, ulock_wake succeeded
-	// and left the field stale, so libplatform's `_os_unfair_lock_unlock_slow` got a
-	// return value outside {0, -ENOENT, -EINTR} and executed its `ud2` ("ulock_wake
-	// failure") -> SIGILL, which clang reported as "linker command failed due to
-	// signal". Resetting here (not in the one handler) keeps every trap on the Darwin
-	// contract.
+	// Darwin's BSD syscall dispatch gives every call a fresh `int32_t retval = 0`, and a trap body may leave it
+	// untouched when there is nothing to report (ulock_wake with ULF_NO_ERRNO does). Reset it for every call so
+	// the guest never sees the previous call's value.
 	_bsdReturnValue = 0;
 };
 
@@ -661,10 +652,9 @@ void DarlingServer::Thread::doWork() {
 
 		if (_continuationCallback && _pendingCall) {
 			// we can only have one of the two
-			// happens when an app is SIGKILLed while one of its threads waits with a continuation (the
-			// iPhone Duo's training killed Safari / News / Health: darlingserver aborted and took every process of the
-			// container with it, SIGILL in each). The thread's new call wins; its old suspended call can never resume (its
-			// stack is gone with a continuation) and is dropped instead of aborting the server.
+			// happens when a process is SIGKILLed while one of its threads waits with a continuation. The thread's
+			// new call wins; its old suspended call can never resume (its stack is gone with a continuation) and is
+			// dropped instead of aborting the server.
 			if (_pendingCallOverride) {
 				throw std::runtime_error("Thread has both a pending call and a pending continuation");
 			}
@@ -1138,14 +1128,8 @@ int DarlingServer::Thread::pendingSignal() const {
 int DarlingServer::Thread::setPendingSignal(int signal) {
 	std::unique_lock lock(_rwlock);
 	if (_interrupts.empty()) {
-		// NO INTERRUPT MARKER TO SET IS NOT AN ERROR. MEASURED: an urgent-plane sigprocess on a
-		// thread with no interrupt context made this throw
-		// "Can't set pending signal with no active interrupts"; processCallBasicReplyCode mapped the
-		// plain exception to -EINVAL (it maps any std::exception to -EINVAL), the guest's sigexc
-		// handler saw the failure and aborted (SIGILL), the fork child never checked in and
-		// shellspawn never became ready. processSignal() already documents and tolerates exactly this
-		// state -- the empty stack means there is no marker of this thread's to clear, not that the
-		// signal is dropped -- and pendingSignal() already answers 0 for it, so this matches both.
+		// no interrupt marker to set is not an error: processSignal() tolerates the same state and
+		// pendingSignal() already answers 0 for it
 		static bool reportedMissingInterrupt = false;
 		if (!reportedMissingInterrupt) {
 			reportedMissingInterrupt = true;
