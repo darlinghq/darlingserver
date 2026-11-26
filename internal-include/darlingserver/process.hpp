@@ -153,6 +153,7 @@ namespace DarlingServer {
 		void _closeSmapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
 		bool _startSuspended = false;
+		bool _stoppedAtStart = false;
 		bool _pendingReplacement = false;
 		std::unordered_map<uintptr_t, std::shared_ptr<Kqchan>> _kqchannels;
 		std::unordered_map<uintptr_t, std::weak_ptr<Kqchan::Process>> _listeningKqchannels;
@@ -232,6 +233,8 @@ namespace DarlingServer {
 
 		bool startSuspended() const;
 		void setStartSuspended(bool startSuspended);
+		bool stoppedAtStart() const;
+		void setStoppedAtStart(bool stoppedAtStart);
 
 		bool readMemory(uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode = nullptr) const;
 		bool writeMemory(uintptr_t remoteAddress, const void* localBuffer, size_t length, int* errorCode = nullptr) const;
