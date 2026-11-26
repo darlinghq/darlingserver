@@ -1705,9 +1705,21 @@ static kern_return_t mach_vm_remap_external_shared(vm_map_t target_map, mach_vm_
 	src_shared_entry = NULL; // the map now owns the shared entry
 
 src_setup_done:
-	target_addr = dtape_hooks->task_map_file(target_map->dtape_task->context, descriptor->memfd, dtape_byte_count_to_page_count_round_up(map_size), prot, 0, 0, dtape_memory_flag_none);
+	{
+		dtape_memory_flags_t target_flags = dtape_memory_flag_none;
+		vm_map_address_t req_addr = 0;
+		if (!(flags & VM_FLAGS_ANYWHERE)) {
+			target_flags |= dtape_memory_flag_fixed;
+			req_addr = mach_vm_trunc_page(*address);
+			if (flags & VM_FLAGS_OVERWRITE) {
+				target_flags |= dtape_memory_flag_overwrite;
+			}
+		}
+		target_addr = dtape_hooks->task_map_file(target_map->dtape_task->context, descriptor->memfd, dtape_byte_count_to_page_count_round_up(map_size), prot, req_addr, 0, target_flags);
+	}
 	if (!target_addr) {
-		kr = KERN_FAILURE;
+		// a fixed address that cannot be mapped (the range is in use and VM_FLAGS_OVERWRITE is not set) is KERN_NO_SPACE
+		kr = (flags & VM_FLAGS_ANYWHERE) ? KERN_FAILURE : KERN_NO_SPACE;
 		goto out;
 	}
 

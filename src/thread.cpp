@@ -1497,6 +1497,11 @@ uintptr_t DarlingServer::Thread::_mmap(uintptr_t address, size_t length, int pro
 	s2cLog.debug() << "_mmap returned address=" << reply->address << ", errno_result=" << reply->errno_result << s2cLog.endLog;
 
 	outErrno = reply->errno_result;
+	if (reply->errno_result != 0) {
+		// a 32-bit client reports its failed mmap as 0xffffffff, which is not MAP_FAILED for this 64-bit
+		// comparison; the errno is the same for every client architecture
+		return (uintptr_t)MAP_FAILED;
+	}
 	return reply->address;
 };
 
