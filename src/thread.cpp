@@ -1582,7 +1582,10 @@ int DarlingServer::Thread::_msync(uintptr_t address, size_t size, int sync_flags
 
 uintptr_t DarlingServer::Thread::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
 	int err = 0;
-	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	// As XNU, set no memory aside when mapping: pages are committed as they
+	// are touched (see the BSD mmap() in libsystem_kernel; test:
+	// mmap-large-anonymous.c in Darling's xnu tests).
+	int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 	if (fixed && overwrite) {
 		flags |= MAP_FIXED;
 	} else if (fixed) {
@@ -1924,7 +1927,7 @@ void DarlingServer::Thread::_scheduleRelease() {
 	});
 };
 
-void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
+void DarlingServer::Thread::_handleInterruptEnterForCurrentThread(bool transparent) {
 	// FIXME: this currently does not work properly if the thread was suspended waiting for a lock
 	Thread* self = currentThread().get();
 	auto& interrupt = self->_interrupts.top();
@@ -1944,7 +1947,7 @@ void DarlingServer::Thread::_handleInterruptEnterForCurrentThread() {
 		interrupt.continuation = std::exchange(self->_interruptedContinuation, nullptr);
 	}
 
-	dtape_thread_sigexc_enter(self->_dtapeThread);
+	dtape_thread_sigexc_enter(self->_dtapeThread, transparent);
 
 	self->_didSyscallReturnDuringInterrupt = false;
 	getcontext(&self->_syscallReturnHereDuringInterrupt);

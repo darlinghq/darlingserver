@@ -100,7 +100,7 @@ struct Thread: std::enable_shared_from_this<Thread> {
 	static void microthreadWorker();
 	static void microthreadContinuation();
 	static void syscallReturn(int code);
-	static void _handleInterruptEnterForCurrentThread();
+	static void _handleInterruptEnterForCurrentThread(bool transparent);
 	void doWork();
 	void suspend(std::function<void()> continuation = nullptr, libsimple_lock_t* unlock = nullptr);
 	void setupKernelThread(std::function<void()> continuation);
@@ -125,7 +125,7 @@ inline void dtape_thread_exiting(void* context) {
 	if (thread->onExit)
 		thread->onExit();
 }
-inline void dtape_thread_sigexc_enter(void*) {}
+inline void dtape_thread_sigexc_enter(void*, bool) {}
 inline void dtape_thread_sigexc_enter2(void*) {}
 inline DarlingServer::StackPool DarlingServer::Thread::stackPool;
 inline DarlingServer::Log threadLog, microthreadLog;

@@ -81,7 +81,7 @@ static void run(Mode mode) {
 			thread->_interruptedContinuation = [token] { migratingBody(); };
 			thread->_interrupts.emplace();
 			thread->_interrupts.top().interruptedCall = call;
-			call->body = Thread::_handleInterruptEnterForCurrentThread;
+			call->body = [] { Thread::_handleInterruptEnterForCurrentThread(false); };
 			thread->_pendingCall = call;
 		}
 	} else {
@@ -104,7 +104,7 @@ static void run(Mode mode) {
 		if (mode == Mode::InterruptedContinuation) {
 			thread->_pendingCall = std::make_shared<Call>();
 			thread->_pendingCall->kind = Call::Number::InterruptEnter;
-			thread->_pendingCall->body = Thread::_handleInterruptEnterForCurrentThread;
+			thread->_pendingCall->body = [] { Thread::_handleInterruptEnterForCurrentThread(false); };
 		}
 		thread->doWork();
 		check(state.completed, "resumed work completes on the second host");

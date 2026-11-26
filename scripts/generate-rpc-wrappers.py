@@ -192,7 +192,11 @@ calls = [
 		('is_64_bit', 'bool'),
 	]),
 
-	('interrupt_enter', [], [], PUSH_UNKNOWN_REPLIES),
+	# `transparent` is true for the signals of Darling's own machinery (a thread suspension, a server-to-client call),
+	# which the application doesn't see; see dtape_thread_sigexc_enter()
+	('interrupt_enter', [
+		('transparent', 'bool'),
+	], [], PUSH_UNKNOWN_REPLIES),
 
 	('interrupt_exit', [], []),
 
