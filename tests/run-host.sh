@@ -19,6 +19,8 @@
 #              (tests/host/extract-static.sh) and runs them on prefixes in a private directory.
 #   launchd_handshake  includes sendReadyByte() and readReadyByte() cut out of
 #              <source-root>/src/darlingserver.cpp (tests/host/extract-static.sh).
+#   guest_core_limit  includes guestCoreLimit() cut out of <source-root>/src/darlingserver.cpp
+#              (tests/host/extract-static.sh) and crashes a child under the limit it gives.
 #   prefix_setup  links <source-root>/src/prefix-setup.cpp, compiled unchanged, and runs it as the
 #              current (unprivileged) user in a private directory.
 #   run_mode  links <source-root>/src/run-mode.cpp, compiled unchanged; checks the mode decision, in
@@ -83,6 +85,10 @@ case $test in
 	launchd_handshake)
 		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" sendReadyByte readReadyByte > "$work/launchd_handshake.inc"
 		$cxx $flags -DLAUNCHD_HANDSHAKE_INC="\"$work/launchd_handshake.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
+		;;
+	guest_core_limit)
+		"$here/host/extract-static.sh" "$root/src/darlingserver.cpp" guestCoreLimit > "$work/guest_core_limit.inc"
+		$cxx $flags -DGUEST_CORE_LIMIT_INC="\"$work/guest_core_limit.inc\"" -o "$work/t" "$here/host/${test}_test.cpp"
 		;;
 	prefix_setup)
 		$cxx $flags -o "$work/t" "$here/host/${test}_test.cpp" "$root/src/prefix-setup.cpp"

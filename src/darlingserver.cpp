@@ -438,6 +438,16 @@ static bool readReadyByte(int fd) {
 	return ret == 1;
 };
 
+// The core size limit launchd starts with, which every process of the container inherits. As on macOS,
+// where processes start with XNU's initial limit (DFLCSIZ, 0) and may raise it up to MAXCSIZ (no cap), a
+// crashing program writes no core file unless it (or the shell that started it) raised the limit; the
+// hard limit is the server's, so `ulimit -c unlimited` still turns them on.
+static struct rlimit guestCoreLimit(const struct rlimit& serverLimit) {
+	struct rlimit limit = serverLimit;
+	limit.rlim_cur = 0;
+	return limit;
+};
+
 static void perma_drop_privileges(uid_t uid, gid_t gid) {
 	if (!runningAsRoot()) {
 		return;
@@ -1101,7 +1111,7 @@ int main(int argc, char** argv) {
 #endif
 	}
 
-	// the core limit is raised to the maximum once we are no longer root
+	// the server's core limit is raised to the maximum once we are no longer root (launchd's: guestCoreLimit())
 	if (getrlimit(RLIMIT_CORE, &core_limit) != 0) {
 		fprintf(stderr, "Failed to read default core rlimit: %s\n", strerror(errno));
 		core_limit.rlim_cur = core_limit.rlim_max = 0;
@@ -1251,8 +1261,9 @@ int main(int argc, char** argv) {
 		perma_drop_privileges(originalUID, originalGID);
 		prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
 		umask(userUmask);
-		if (setrlimit(RLIMIT_CORE, &core_limit) != 0) {
-			fprintf(stderr, "Warning: failed to increase core limit for launchd: %s\n", strerror(errno));
+		struct rlimit launchd_core_limit = guestCoreLimit(core_limit);
+		if (setrlimit(RLIMIT_CORE, &launchd_core_limit) != 0) {
+			fprintf(stderr, "Warning: failed to set the core limit for launchd: %s\n", strerror(errno));
 		}
 
 		// decrease the FD limit back to the default
