@@ -132,6 +132,13 @@ calls = [
 		('suspended', 'bool'),
 	]),
 
+	# whether the process (0: the caller) stopped itself because it was started suspended and has not been resumed yet
+	('stopped_at_start', [
+		('target', 'int32_t'),
+	], [
+		('stopped', 'bool'),
+	]),
+
 	('get_tracer', [], [
 		('tracer', 'int32_t'),
 	]),

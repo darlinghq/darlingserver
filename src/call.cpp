@@ -556,14 +556,21 @@ void DarlingServer::Call::Kprintf::processCall() {
 	_sendReply(code);
 };
 
+// A process that was started suspended asks this once at start-up and stops itself if the answer is yes
+// (it stays "stopped at start" until it asks again after being resumed, and then gets "no").
 void DarlingServer::Call::StartedSuspended::processCall() {
 	int code = 0;
 	bool suspended = false;
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			suspended = process->startSuspended();
-			process->setStartSuspended(false);
+			if (process->stoppedAtStart()) {
+				process->setStoppedAtStart(false);
+			} else {
+				suspended = process->startSuspended();
+				process->setStartSuspended(false);
+				process->setStoppedAtStart(suspended);
+			}
 		} else {
 			code = -ESRCH;
 		}
@@ -572,6 +579,28 @@ void DarlingServer::Call::StartedSuspended::processCall() {
 	}
 
 	_sendReply(code, suspended);
+};
+
+void DarlingServer::Call::StoppedAtStart::processCall() {
+	int code = 0;
+	bool stopped = false;
+	std::shared_ptr<Process> targetProcess = nullptr;
+
+	if (_body.target == 0) {
+		if (auto thread = _thread.lock()) {
+			targetProcess = thread->process();
+		}
+	} else if (auto maybeTargetProcess = processRegistry().lookupEntryByNSID(_body.target)) {
+		targetProcess = *maybeTargetProcess;
+	}
+
+	if (targetProcess) {
+		stopped = targetProcess->stoppedAtStart();
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, stopped);
 };
 
 void DarlingServer::Call::GetTracer::processCall() {

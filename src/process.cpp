@@ -236,6 +236,16 @@ void DarlingServer::Process::setStartSuspended(bool startSuspended) {
 	_startSuspended = startSuspended;
 };
 
+bool DarlingServer::Process::stoppedAtStart() const {
+	std::shared_lock lock(_rwlock);
+	return _stoppedAtStart;
+};
+
+void DarlingServer::Process::setStoppedAtStart(bool stoppedAtStart) {
+	std::unique_lock lock(_rwlock);
+	_stoppedAtStart = stoppedAtStart;
+};
+
 bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAddress, void* localBuffer, size_t length, int* errorCode) const {
 	struct iovec local;
 	struct iovec remote;
