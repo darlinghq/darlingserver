@@ -78,9 +78,9 @@ void dtape_mutex_lock(dtape_mutex_t* mutex) {
 
 	dtape_mutex_assert(mutex, false);
 
-	while (true) {
-		libsimple_lock_lock(&mutex->dtape_queue_lock);
+	libsimple_lock_lock(&mutex->dtape_queue_lock);
 
+	while (true) {
 		if (mutex->dtape_owner == 0 || mutex->dtape_owner == (uintptr_t)xthread) {
 			// lock successfully acquired
 			mutex->dtape_owner = (uintptr_t)xthread;
@@ -94,6 +94,18 @@ void dtape_mutex_lock(dtape_mutex_t* mutex) {
 
 		// this call drops the lock
 		dtape_hooks->thread_suspend(thread->context, NULL, NULL, &mutex->dtape_queue_lock);
+
+		// dtape_mutex_unlock() takes the thread it wakes off the queue, but a thread can also resume here without
+		// having been woken, as in dtape_condvar_wait(). leave the queue in that case, too; inserting the link again
+		// while it is still queued would corrupt the queue.
+		libsimple_lock_lock(&mutex->dtape_queue_lock);
+		dtape_mutex_link_t* link;
+		TAILQ_FOREACH(link, &mutex->dtape_queue_head, link) {
+			if (link == &thread->mutex_link) {
+				TAILQ_REMOVE(&mutex->dtape_queue_head, link, link);
+				break;
+			}
+		}
 	}
 };
 

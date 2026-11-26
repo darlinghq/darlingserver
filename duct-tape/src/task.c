@@ -219,6 +219,15 @@ void dtape_task_set_dyld_info(dtape_task_t* task, uint64_t address, uint64_t len
 	dtape_condvar_signal(&task->dyld_info_condvar, SIZE_MAX);
 };
 
+void dtape_task_inherit_dyld_info(dtape_task_t* task, dtape_task_t* parent_task) {
+	// a forked child runs the image its parent runs, with dyld's image information at the same address, and its dyld
+	// never starts again to report it; without this, TASK_DYLD_INFO for the child would wait forever.
+	// the new task is not visible to anyone else yet. the parent's dyld reported its information before the parent's
+	// own code (which is what forks) ran, so it no longer changes.
+	task->dyld_info_addr = __atomic_load_n(&parent_task->dyld_info_addr, __ATOMIC_ACQUIRE);
+	task->dyld_info_length = __atomic_load_n(&parent_task->dyld_info_length, __ATOMIC_ACQUIRE);
+};
+
 void dtape_task_set_sigexc_enabled(dtape_task_t* task, bool enabled) {
 	// FIXME: we should probably have a lock for this
 	task->has_sigexc = enabled;
