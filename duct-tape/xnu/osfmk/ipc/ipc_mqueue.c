@@ -101,6 +101,10 @@
 
 #include <sys/event.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#endif /* __DARLING__ */
+
 extern char     *proc_name_address(void *p);
 
 int ipc_mqueue_full;            /* address is event for queue space */
@@ -921,6 +925,94 @@ out_unlock:
 	return;
 }
 
+#ifdef __DARLING__
+/*
+ *	Routine:	ipc_mqueue_post_queued
+ *	Purpose:
+ *		The messages on a port's queue were put there directly (they
+ *		arrived while the port's queue was in its task's shared region).
+ *		Each goes to a receiver waiting on the port or on a set it is
+ *		in, as ipc_mqueue_post() hands over an arriving message; once no
+ *		receiver is left, the port is preposted to its sets.
+ *
+ *	Conditions:
+ *		mqueue is locked (and stays locked)
+ */
+void
+ipc_mqueue_post_queued(ipc_mqueue_t mqueue)
+{
+	uint64_t reserved_prepost = 0;
+
+	for (;;) {
+		ipc_kmsg_t kmsg = ipc_kmsg_queue_first(&mqueue->imq_messages);
+		spl_t th_spl;
+		thread_t receiver;
+		mach_msg_size_t msize;
+
+		if (kmsg == IKM_NULL) {
+			break;
+		}
+
+		receiver = waitq_wakeup64_identify_locked(&mqueue->imq_wait_queue,
+		    IPC_MQUEUE_RECEIVE,
+		    THREAD_AWAKENED,
+		    &th_spl,
+		    &reserved_prepost,
+		    WAITQ_ALL_PRIORITIES,
+		    WAITQ_KEEP_LOCKED);
+		/* waitq still locked, thread locked */
+
+		if (receiver == THREAD_NULL) {
+			/* no receiver: the port is preposted */
+			break;
+		}
+
+		if (receiver->ith_state == MACH_PEEK_IN_PROGRESS) {
+			ipc_mqueue_peek_on_thread(mqueue, receiver->ith_option, receiver);
+			thread_unlock(receiver);
+			splx(th_spl);
+			break;
+		}
+
+		/* not waiting for a message (see ipc_mqueue_post()): it only runs again */
+		if (receiver->ith_state != MACH_RCV_IN_PROGRESS) {
+			thread_unlock(receiver);
+			splx(th_spl);
+			continue;
+		}
+
+		msize = ipc_kmsg_copyout_size(kmsg, receiver->map);
+		if (receiver->ith_rsize <
+		    (msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(receiver), receiver->ith_option))) {
+			receiver->ith_msize = msize;
+			receiver->ith_state = MACH_RCV_TOO_LARGE;
+		} else {
+			receiver->ith_state = MACH_MSG_SUCCESS;
+		}
+
+		if ((receiver->ith_state == MACH_MSG_SUCCESS) ||
+		    !(receiver->ith_option & MACH_RCV_LARGE)) {
+			ipc_kmsg_rmqueue(&mqueue->imq_messages, kmsg);
+			receiver->ith_kmsg = kmsg;
+			receiver->ith_seqno = mqueue->imq_seqno++;
+			thread_unlock(receiver);
+			splx(th_spl);
+			ipc_mqueue_release_msgcount(mqueue, IMQ_NULL);
+			continue;
+		}
+
+		/* the too-large indication only: the message stays for the next receiver */
+		receiver->ith_receiver_name = mqueue->imq_receiver_name;
+		receiver->ith_kmsg = IKM_NULL;
+		receiver->ith_seqno = 0;
+		thread_unlock(receiver);
+		splx(th_spl);
+	}
+
+	waitq_prepost_release_reserve(reserved_prepost);
+}
+#endif /* __DARLING__ */
+
 
 static void
 ipc_mqueue_receive_results(wait_result_t saved_wait_result)
@@ -1020,6 +1112,13 @@ ipc_mqueue_receive(
 {
 	wait_result_t           wresult;
 	thread_t                self = current_thread();
+
+#ifdef __DARLING__
+	/* a port whose queue is in its task's shared region */
+	if (dtape_sq_mqueue_receive(mqueue, option, max_size, rcv_timeout, self)) {
+		return;
+	}
+#endif /* __DARLING__ */
 
 	imq_lock(mqueue);
 	wresult = ipc_mqueue_receive_on_thread(mqueue, option, max_size,
@@ -1747,6 +1846,9 @@ ipc_mqueue_set_qlimit(
 		}
 	}
 	mqueue->imq_qlimit = (uint16_t)qlimit;
+#ifdef __DARLING__
+	dtape_sq_port_qlimit_changed(ip_from_mq(mqueue));
+#endif /* __DARLING__ */
 	imq_unlock(mqueue);
 }
 

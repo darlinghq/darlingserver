@@ -44,6 +44,21 @@ void dtape_condvar_wait(dtape_condvar_t* condvar, dtape_mutex_t* mutex) {
 	// this also drops the queue lock.
 	dtape_hooks->thread_suspend(thread->context, NULL, NULL, &condvar->queue_lock);
 
+	// dtape_condvar_signal() takes the threads it wakes off the queue, but a thread can also resume here without
+	// having been signaled: e.g. when the call it is waiting in is resumed to handle a signal
+	// (see Thread::_handleInterruptEnterForCurrentThread()). leave the queue in that case, too. a link left on the queue
+	// would be inserted again by the next wait; inserted after itself, it points to itself, and the next signal of the
+	// queue never ends (it keeps resuming this thread).
+	libsimple_lock_lock(&condvar->queue_lock);
+	dtape_mutex_link_t* link;
+	TAILQ_FOREACH(link, &condvar->queue_head, link) {
+		if (link == &thread->mutex_link) {
+			TAILQ_REMOVE(&condvar->queue_head, link, link);
+			break;
+		}
+	}
+	libsimple_lock_unlock(&condvar->queue_lock);
+
 	// we've been awoken; reacquire the mutex
 	dtape_mutex_lock(mutex);
 };

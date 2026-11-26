@@ -273,6 +273,18 @@ extern mach_msg_return_t ipc_kmsg_get(
 	mach_msg_size_t         size,
 	ipc_kmsg_t              *kmsgp);
 
+#ifdef __DARLING__
+/* Make the kmsg of a simple message queued in a task's shared region */
+extern ipc_kmsg_t dtape_kmsg_from_shared(
+	ipc_port_t              port,
+	mach_port_name_t        name,
+	const void              *msg,
+	mach_msg_size_t         size,
+	boolean_t               made_send,
+	const security_token_t  *sec_token,
+	const audit_token_t     *audit_token);
+#endif /* __DARLING__ */
+
 /* Allocate a kernel message buffer and copy a kernel message to the buffer */
 extern mach_msg_return_t ipc_kmsg_get_from_kernel(
 	mach_msg_header_t       *msg,

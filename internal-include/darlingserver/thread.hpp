@@ -30,6 +30,7 @@
 #include <queue>
 #include <atomic>
 #include <vector>
+#include <optional>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -85,6 +86,14 @@ namespace DarlingServer {
 		StackPool::Stack _stack;
 		bool _suspended = false;
 		ucontext_t _resumeContext;
+		ucontext_t _topContext;
+		libsimple_lock_t* _unlockMeWhenSuspending = nullptr;
+		std::function<void()> _currentContinuation = nullptr;
+#if DSERVER_ASAN
+		void* _asanOldFakeStack = nullptr;
+		const void* _asanOldStackBottom = nullptr;
+		size_t _asanOldStackSize = 0;
+#endif
 		dtape_thread_t* _dtapeThread;
 		// atomic so that exec can reset it while holding only the process lock
 		std::atomic<uintptr_t> _cancelMarkedAddress = 0;
@@ -144,6 +153,8 @@ namespace DarlingServer {
 			std::deque<Message> savedReplies;
 			std::shared_ptr<Call> interruptedCall = nullptr;
 			StackPool::Stack savedStack;
+			std::function<void()> savedContinuation;
+			std::function<void()> continuation;
 			int signal = 0;
 		};
 		std::stack<InterruptContext> _interrupts;
@@ -179,7 +190,7 @@ namespace DarlingServer {
 		void _dispose();
 		void _scheduleRelease();
 
-		static void _handleInterruptEnterForCurrentThread();
+		static void _handleInterruptEnterForCurrentThread(bool transparent);
 
 		static StackPool stackPool;
 
@@ -263,8 +274,8 @@ namespace DarlingServer {
 		 */
 		std::shared_ptr<Thread> impersonatingThread() const;
 
-		void loadStateFromUser(uint64_t threadState, uint64_t floatState);
-		void saveStateToUser(uint64_t threadState, uint64_t floatState);
+		void loadStateFromUser(dserver_rpc_architecture_t callerArchitecture, uint64_t threadState, uint64_t floatState);
+		void saveStateToUser(dserver_rpc_architecture_t callerArchitecture, uint64_t threadState, uint64_t floatState);
 
 		int pendingSignal() const;
 
@@ -273,7 +284,7 @@ namespace DarlingServer {
 		 */
 		int setPendingSignal(int signal);
 
-		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
+		void processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress, const std::optional<dtape_exception_state_t>& exceptionState);
 
 		void handleSignal(int signal);
 
@@ -308,7 +319,7 @@ namespace DarlingServer {
 		 */
 		bool getStats(char* name, size_t nameSize, uint64_t& userTimeNs, uint64_t& systemTimeNs) const;
 
-		void waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress);
+		void waitWhileUserSuspended(dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress);
 		void sendSignal(int signal) const;
 
 		/**

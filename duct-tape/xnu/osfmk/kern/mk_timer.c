@@ -47,6 +47,10 @@
 #include <kern/thread_call.h>
 #include <ipc/ipc_kmsg.h>
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/mach_sq.h>
+#endif /* __DARLING__ */
+
 struct mk_timer {
 	decl_simple_lock_data(, lock);
 	thread_call_data_t      mkt_thread_call;
@@ -124,6 +128,11 @@ mk_timer_create_trap(
 	timer->port = ipc_port_make_send_locked(port);
 
 	ip_unlock(port);
+
+#ifdef __DARLING__
+	/* the timer's expiry message is received through the task's shared region, like any other port's */
+	dtape_sq_port_created(myspace, name);
+#endif /* __DARLING__ */
 
 	return name;
 }

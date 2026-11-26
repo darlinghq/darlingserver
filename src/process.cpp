@@ -29,6 +29,8 @@
 #include <kern/cs_blobs.h>
 
 #include <fstream>
+#include <sstream>
+#include <dirent.h>
 #include <cstdio>
 #include <cstring>
 
@@ -44,7 +46,7 @@
 
 static DarlingServer::Log processLog("process");
 
-DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe):
+DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe, bool forkChild):
 	_pid(id),
 	_nspid(nsid),
 	_architecture(architecture)
@@ -99,6 +101,13 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 		_csState = parentProcess->_csState;
 		_csState.darling_flags = CodeSigning::darlingFlagsInheritedByFork(_csState.darling_flags);
 		_csImage = parentProcess->_csImage;
+
+		// fork does not change a task's architecture, only exec does. The task of a program run
+		// under an emulator was registered by the host-native loader, so its fork child reports a
+		// different architecture than its parent's task has.
+		if (forkChild) {
+			_architecture = parentProcess->_architecture;
+		}
 	} else {
 		_resetCodeSigningState();
 
@@ -108,6 +117,10 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 
 	// NOTE: see thread.cpp for why it's okay to use `this` here
 	_dtapeTask = dtape_task_create(parentProcess ? parentProcess->_dtapeTask : nullptr, _nspid, this, static_cast<dserver_rpc_architecture_t>(_architecture));
+	if (parentProcess && forkChild) {
+		// a fork child's dyld does not run again to report its image information (an exec reports it anew)
+		dtape_task_inherit_dyld_info(_dtapeTask, parentProcess->_dtapeTask);
+	}
 	_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
 
 	processLog.info() << "New process created with ID " << _pid << " and NSID " << _nspid;
@@ -135,6 +148,7 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 DarlingServer::Process::~Process() {
 	processLog.info() << *this << ": process being destroyed" << processLog.endLog;
 	_closeMapsDescriptor();
+	_closeSmapsDescriptor();
 };
 
 DarlingServer::Process::ID DarlingServer::Process::id() const {
@@ -339,8 +353,9 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// update the process architecture
 		_architecture = architecture;
 
-		// the old `/proc/<pid>/maps` descriptor refers to the address space that the exec replaced
+		// the old `/proc/<pid>/maps` and smaps descriptors refer to the address space that the exec replaced
 		_closeMapsDescriptor();
+		_closeSmapsDescriptor();
 
 		// replace the old task with a new task that inherits from it
 		auto oldTask = _dtapeTask;
@@ -410,12 +425,6 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 			_resetCodeSigningState();
 			_csState.darling_flags |= kept;
 			_csMayRegister = true;
-		}
-	} else if (isFork) {
-		// fork case
-
-		if (architecture != _architecture) {
-			throw std::runtime_error("Impossible: parent process architecture != child process architecture on fork");
 		}
 	}
 
@@ -520,13 +529,147 @@ void DarlingServer::Process::logToStream(Log::Stream& stream) const {
 	stream << "[P:" << _pid << "(" << _nspid << ")]";
 };
 
+// the fields of /proc/<pid>/stat and /proc/<pid>/task/<tid>/stat that we use
+struct ProcStat {
+	unsigned long long minorFaults;
+	unsigned long long majorFaults;
+	// in clock ticks
+	unsigned long long userTime;
+	unsigned long long systemTime;
+};
+
+static bool readProcStat(const std::string& path, ProcStat& stat) {
+	std::ifstream file(path);
+	std::string line;
+	if (!std::getline(file, line)) {
+		return false;
+	}
+
+	// the command name is parenthesized and may itself contain spaces and parentheses, so parse after the last ')';
+	// the fields after it start with the state (field 3)
+	auto endOfComm = line.rfind(')');
+	if (endOfComm == std::string::npos) {
+		return false;
+	}
+
+	std::istringstream fields(line.substr(endOfComm + 1));
+	std::string field;
+	stat = {};
+	for (int index = 3; index <= 15; ++index) {
+		if (!(fields >> field)) {
+			return false;
+		}
+		unsigned long long value = std::strtoull(field.c_str(), nullptr, 10);
+		if (index == 10) {
+			stat.minorFaults = value;
+		} else if (index == 12) {
+			stat.majorFaults = value;
+		} else if (index == 14) {
+			stat.userTime = value;
+		} else if (index == 15) {
+			stat.systemTime = value;
+		}
+	}
+	return true;
+};
+
+// calls `callback` with the ID of each thread of the host process; false if the threads can't be listed
+template<class F>
+static bool forEachHostThread(pid_t pid, F callback) {
+	DIR* dir = opendir(("/proc/" + std::to_string(pid) + "/task").c_str());
+	if (!dir) {
+		return false;
+	}
+	while (auto entry = readdir(dir)) {
+		char* end = nullptr;
+		unsigned long tid = std::strtoul(entry->d_name, &end, 10);
+		if (end != entry->d_name && *end == '\0') {
+			callback(static_cast<pid_t>(tid));
+		}
+	}
+	closedir(dir);
+	return true;
+};
+
+// the host process whose /proc entries describe this task: the server itself for the kernel task
+pid_t DarlingServer::Process::statisticsPID() const {
+	return (_pid < 0) ? getpid() : _pid;
+};
+
+bool DarlingServer::Process::cpuTimes(CPUTimes& times) const {
+	if (isDead()) {
+		return false;
+	}
+
+	long ticksPerSecond = sysconf(_SC_CLK_TCK);
+	if (ticksPerSecond <= 0) {
+		ticksPerSecond = 100;
+	}
+	uint64_t nsPerTick = 1000000000ULL / ticksPerSecond;
+
+	// the threads first, so that time they use in between does not count as that of exited threads
+	// (the threads of the kernel task are not threads of Linux: all time of the server is that of the task)
+	unsigned long long liveUser = 0;
+	unsigned long long liveSystem = 0;
+	if (_pid >= 0 && !forEachHostThread(statisticsPID(), [&](pid_t tid) {
+		ProcStat stat;
+		if (readProcStat("/proc/" + std::to_string(statisticsPID()) + "/task/" + std::to_string(tid) + "/stat", stat)) {
+			liveUser += stat.userTime;
+			liveSystem += stat.systemTime;
+		}
+	})) {
+		return false;
+	}
+
+	// the process-wide counters also include the time of the threads that have exited
+	ProcStat total;
+	if (!readProcStat("/proc/" + std::to_string(statisticsPID()) + "/stat", total)) {
+		return false;
+	}
+
+	times.liveUserNs = liveUser * nsPerTick;
+	times.liveSystemNs = liveSystem * nsPerTick;
+	times.terminatedUserNs = (total.userTime > liveUser) ? (total.userTime - liveUser) * nsPerTick : 0;
+	times.terminatedSystemNs = (total.systemTime > liveSystem) ? (total.systemTime - liveSystem) * nsPerTick : 0;
+	return true;
+};
+
+bool DarlingServer::Process::eventCounts(EventCounts& counts) const {
+	if (isDead()) {
+		return false;
+	}
+
+	ProcStat total;
+	if (!readProcStat("/proc/" + std::to_string(statisticsPID()) + "/stat", total)) {
+		return false;
+	}
+
+	counts.faults = total.minorFaults + total.majorFaults;
+	// the faults that had to read from storage
+	counts.pageins = total.majorFaults;
+	counts.contextSwitches = 0;
+
+	forEachHostThread(statisticsPID(), [&](pid_t tid) {
+		std::ifstream status("/proc/" + std::to_string(statisticsPID()) + "/task/" + std::to_string(tid) + "/status");
+		std::string line;
+		while (std::getline(status, line)) {
+			unsigned long long value = 0;
+			if (sscanf(line.c_str(), "voluntary_ctxt_switches: %llu", &value) == 1 || sscanf(line.c_str(), "nonvoluntary_ctxt_switches: %llu", &value) == 1) {
+				counts.contextSwitches += value;
+			}
+		}
+	});
+
+	return true;
+};
+
 DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 	if (isDead()) {
 		throw std::system_error(ESRCH, std::generic_category(), "dead process; can't call memoryInfo");
 	}
 
 	MemoryInfo info {};
-	std::ifstream file("/proc/" + std::to_string(_pid) + "/statm");
+	std::ifstream file("/proc/" + std::to_string(statisticsPID()) + "/statm");
 
 	if (!(file >> info.virtualSize >> info.residentSize)) {
 		// the process died after the check above
@@ -548,7 +691,7 @@ DarlingServer::Process::MemoryInfo DarlingServer::Process::memoryInfo() const {
 	uint64_t rssAnon = 0, rssFile = 0, rssShmem = 0, vmSwap = 0, vmHwm = 0;
 	bool haveBreakdown = false;
 	{
-		std::ifstream status("/proc/" + std::to_string(_pid) + "/status");
+		std::ifstream status("/proc/" + std::to_string(statisticsPID()) + "/status");
 		std::string line;
 		while (std::getline(status, line)) {
 			unsigned long long kb = 0;
@@ -712,33 +855,76 @@ bool DarlingServer::Process::_queryRegion(uintptr_t address, bool coveringOrNext
 	return false;
 };
 
-bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const {
-	if (isDead()) {
-		return false;
+void DarlingServer::Process::_closeSmapsDescriptor() {
+	std::unique_lock lock(_smapsMutex);
+	if (_smaps.fd >= 0) {
+		close(_smaps.fd);
 	}
+	_smaps = SmapsCursor();
+};
 
-	std::ifstream file("/proc/" + std::to_string(_pid) + "/smaps");
-	std::string line;
-	bool inRegion = false;
-	uint64_t privateKiB = 0;
-	uint64_t sharedKiB = 0;
+//
+// Reads `/proc/<pid>/smaps` forward from the cursor until the counts of the mapping that starts at `startAddress` are
+// parsed. `found` tells whether that mapping was reached; the return value is false only if the file could not be read.
+//
+// The reads are small and the parsing stops at the last count that is needed, so the kernel, which writes the text of
+// one mapping at a time as the file is read, does not produce the text of mappings that were not asked for yet (their
+// counts would be out of date by the time they are asked for).
+//
+bool DarlingServer::Process::_scanSmaps(uintptr_t startAddress, uint64_t& privateKiB, uint64_t& sharedKiB, bool& found) const {
+	found = false;
 
-	while (std::getline(file, line)) {
-		uintptr_t start;
-		uintptr_t end;
-		char perms[8];
-		uintptr_t offset;
-
-		// a mapping's header line; the lines that follow it (until the next header) describe it
-		if (parseMapsLine(line, start, end, perms, offset)) {
-			if (inRegion) {
-				break;
+	for (;;) {
+		if (_smaps.haveRegion) {
+			if (_smaps.regionStart > startAddress) {
+				// the mapping is not there any more (or was never)
+				return true;
 			}
-			inRegion = start == startAddress;
+			if (_smaps.regionStart == startAddress && _smaps.regionComplete) {
+				privateKiB = _smaps.privateKiB;
+				sharedKiB = _smaps.sharedKiB;
+				_smaps.regionServed = true;
+				found = true;
+				return true;
+			}
+		}
+
+		auto lineEnd = _smaps.pending.find('\n');
+		if (lineEnd == std::string::npos) {
+			char chunk[128];
+			ssize_t count;
+			do {
+				count = read(_smaps.fd, chunk, sizeof(chunk));
+			} while (count < 0 && errno == EINTR);
+			if (count <= 0) {
+				// the end of the file (or an error, e.g. the address space is gone): there is no such mapping after the cursor
+				return count == 0;
+			}
+			_smaps.pending.append(chunk, count);
 			continue;
 		}
 
-		if (!inRegion) {
+		std::string line = _smaps.pending.substr(0, lineEnd);
+		_smaps.pending.erase(0, lineEnd + 1);
+
+		// a mapping's header line starts with a (lowercase hexadecimal) address; the field lines, with a capitalized name
+		if (!line.empty() && ((line[0] >= '0' && line[0] <= '9') || (line[0] >= 'a' && line[0] <= 'f'))) {
+			uintptr_t start;
+			uintptr_t end;
+			char perms[8];
+			uintptr_t offset;
+			if (parseMapsLine(line, start, end, perms, offset)) {
+				_smaps.haveRegion = true;
+				_smaps.regionStart = start;
+				_smaps.privateKiB = 0;
+				_smaps.sharedKiB = 0;
+				_smaps.regionComplete = false;
+				_smaps.regionServed = false;
+			}
+			continue;
+		}
+
+		if (!_smaps.haveRegion || _smaps.regionStart != startAddress) {
 			continue;
 		}
 
@@ -748,13 +934,64 @@ bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& p
 			continue;
 		}
 		if (strcmp(field, "Private_Clean") == 0 || strcmp(field, "Private_Dirty") == 0) {
-			privateKiB += kib;
+			_smaps.privateKiB += kib;
+			if (field[8] == 'D') {
+				// the last of the counts (Shared_* come before Private_*)
+				_smaps.regionComplete = true;
+			}
 		} else if (strcmp(field, "Shared_Clean") == 0 || strcmp(field, "Shared_Dirty") == 0) {
-			sharedKiB += kib;
+			_smaps.sharedKiB += kib;
+		}
+	}
+};
+
+bool DarlingServer::Process::regionResidency(uintptr_t startAddress, uint64_t& privatePages, uint64_t& sharedPages) const {
+	if (isDead()) {
+		return false;
+	}
+
+	uint64_t privateKiB = 0;
+	uint64_t sharedKiB = 0;
+	bool found = false;
+
+	{
+		std::unique_lock lock(_smapsMutex);
+
+		// Reading on from where the previous call stopped serves a walk over the mappings in ascending order.
+		// Anything else (an earlier mapping, the same mapping again, a mapping that was not found) starts reading the
+		// file from its start, which also gives the counts as they are now.
+		bool resumable = _smaps.fd >= 0 && _smaps.haveRegion && (startAddress > _smaps.regionStart || (startAddress == _smaps.regionStart && !_smaps.regionServed));
+
+		auto restart = [&]() {
+			if (_smaps.fd >= 0) {
+				close(_smaps.fd);
+			}
+			_smaps = SmapsCursor();
+			_smaps.fd = open(("/proc/" + std::to_string(_pid) + "/smaps").c_str(), O_RDONLY | O_CLOEXEC);
+			return _smaps.fd >= 0;
+		};
+
+		if (!resumable && !restart()) {
+			return false;
+		}
+
+		bool readable = _scanSmaps(startAddress, privateKiB, sharedKiB, found);
+
+		if (!found && resumable) {
+			if (!restart()) {
+				return false;
+			}
+			readable = _scanSmaps(startAddress, privateKiB, sharedKiB, found);
+		}
+
+		if (!readable) {
+			// the end of the file, or it can't be read: nothing more to resume
+			close(_smaps.fd);
+			_smaps = SmapsCursor();
 		}
 	}
 
-	if (!inRegion) {
+	if (!found) {
 		return false;
 	}
 

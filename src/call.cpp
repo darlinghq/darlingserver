@@ -21,12 +21,15 @@
 #include <darlingserver/call.hpp>
 #include <darlingserver/server.hpp>
 #include <sys/uio.h>
+#include <cstddef>
 
 #include <darlingserver/logging.hpp>
 #include <darlingserver/duct-tape.h>
 #include <darlingserver/config.hpp>
 #include <sys/fcntl.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
+#include <darlingserver/mach-sq.h>
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/system-config.hpp>
 #include <darlingserver/platform-identity.hpp>
@@ -77,6 +80,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			std::shared_ptr<Process> tmp = nullptr;
 
 			int lifetimePipe = -1;
+			bool forkChild = false;
 
 			if (header->number == dserver_callnum_checkin) {
 				auto checkinCall = reinterpret_cast<dserver_rpc_call_checkin_t*>(header);
@@ -84,10 +88,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 					lifetimePipe = requestMessage.extractDescriptorAtIndex(checkinCall->body.lifetime_listener_pipe);
 					checkinCall->body.lifetime_listener_pipe = -1;
 				}
+				forkChild = checkinCall->body.is_fork;
 			}
 
 			try {
-				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe);
+				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe, forkChild);
 			} catch (std::system_error e) {
 				return tmp;
 			}
@@ -255,6 +260,13 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		write(pipeDesc.fd(), &tmp, sizeof(tmp));
 
 		return nullptr;
+	}
+
+	// a sigprocess call from a libsystem_kernel that predates the exception state ends before it. take it as one without
+	// exception state: dropping it as too short would leave the thread waiting for the reply forever
+	if (header->number == dserver_callnum_sigprocess && requestMessage.data().size() == offsetof(dserver_rpc_call_sigprocess_t, body.exception_fault_address)) {
+		requestMessage.data().resize(sizeof(dserver_rpc_call_sigprocess_t), 0);
+		header = reinterpret_cast<dserver_rpc_callhdr_t*>(requestMessage.data().data());
 	}
 
 	// finally, let's construct the call class
@@ -850,6 +862,89 @@ void DarlingServer::Call::FileportMakefd::processCall() {
 	_sendReply(code, fd);
 };
 
+// one object of a shared message queue region: a sealed memfd the server keeps mapped read-write
+static int makeSharedQueueObject(const char* name, size_t size, unsigned int seals, void** mapping) {
+	int fd = memfd_create(name, MFD_CLOEXEC | MFD_ALLOW_SEALING);
+	if (fd < 0) {
+		return -errno;
+	}
+	if (ftruncate(fd, size) < 0) {
+		int code = -errno;
+		close(fd);
+		return code;
+	}
+	void* map = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (map == MAP_FAILED) {
+		int code = -errno;
+		close(fd);
+		return code;
+	}
+	// the server's mapping exists before F_SEAL_FUTURE_WRITE, so it stays writable while the task's can't be
+	if (fcntl(fd, F_ADD_SEALS, seals) < 0) {
+		int code = -errno;
+		munmap(map, size);
+		close(fd);
+		return code;
+	}
+	*mapping = map;
+	return fd;
+};
+
+void DarlingServer::Call::MachSqAttach::processCall() {
+	int code = 0;
+	int sFD = -1;
+	int qFD = -1;
+	void* sMap = nullptr;
+	void* qMap = nullptr;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			// S is the server's (the task maps it read-only); Q is shared. neither can change size
+			sFD = makeSharedQueueObject("darling-mach-sq-s", DSQ_S_SIZE,
+				F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL, &sMap);
+			if (sFD < 0) {
+				code = sFD;
+				sFD = -1;
+			} else {
+				qFD = makeSharedQueueObject("darling-mach-sq-q", DSQ_Q_SIZE,
+					F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL, &qMap);
+				if (qFD < 0) {
+					code = qFD;
+					qFD = -1;
+				}
+			}
+
+			if (code == 0 && !dtape_sq_attach(process->_dtapeTask, sMap, qMap)) {
+				code = -EEXIST;
+			}
+
+			if (code != 0) {
+				if (sMap) {
+					munmap(sMap, DSQ_S_SIZE);
+				}
+				if (qMap) {
+					munmap(qMap, DSQ_Q_SIZE);
+				}
+				if (sFD >= 0) {
+					close(sFD);
+					sFD = -1;
+				}
+				if (qFD >= 0) {
+					close(qFD);
+					qFD = -1;
+				}
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	// the reply takes ownership of the descriptors; the task maps them and closes them
+	_sendReply(code, sFD, qFD);
+};
+
 static DarlingServer::Log systemConfigLog("sysconfig");
 
 // raised once by the first accepted push. every waiter passes the count on when it wakes up,
@@ -1053,7 +1148,11 @@ void DarlingServer::Call::Sigprocess::processCall() {
 
 	if (auto thread = _thread.lock()) {
 		try {
-			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _body.thread_state, _body.float_state);
+			std::optional<dtape_exception_state_t> exceptionState;
+			if (_body.has_exception_state) {
+				exceptionState = dtape_exception_state_t { _body.exception_fault_address, _body.exception_trapno, _body.exception_err };
+			}
+			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _header.architecture, _body.thread_state, _body.float_state, exceptionState);
 			newBSDSignal = thread->pendingSignal();
 		} catch (std::system_error e) {
 			code = -e.code().value();
@@ -1080,7 +1179,7 @@ void DarlingServer::Call::TaskIs64Bit::processCall() {
 };
 
 void DarlingServer::Call::InterruptEnter::processCall() {
-	Thread::_handleInterruptEnterForCurrentThread();
+	Thread::_handleInterruptEnterForCurrentThread(_body.transparent);
 
 	_sendReply(0);
 };
@@ -1326,7 +1425,7 @@ void DarlingServer::Call::ThreadSuspended::processCall() {
 	int code = 0;
 
 	if (auto thread = _thread.lock()) {
-		thread->waitWhileUserSuspended(_body.thread_state, _body.float_state);
+		thread->waitWhileUserSuspended(_header.architecture, _body.thread_state, _body.float_state);
 	} else {
 		code = -ESRCH;
 	}

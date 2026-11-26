@@ -174,6 +174,14 @@ calls = [
 		# these are in/out pointers
 		('thread_state', 'uint64_t'),
 		('float_state', 'uint64_t'),
+
+		# the hardware exception state of the signal frame (x86: trap number, error code and cr2), which
+		# thread_get_state() reports. callers from before these fields were added send a shorter call,
+		# which is taken as one without exception state (see Call::callFromMessage()).
+		('exception_fault_address', 'uint64_t'),
+		('exception_trapno', 'uint32_t'),
+		('exception_err', 'uint32_t'),
+		('has_exception_state', 'bool'),
 	], [
 		('new_bsd_signal_number', 'int32_t'),
 	]),
@@ -184,7 +192,11 @@ calls = [
 		('is_64_bit', 'bool'),
 	]),
 
-	('interrupt_enter', [], [], PUSH_UNKNOWN_REPLIES),
+	# `transparent` is true for the signals of Darling's own machinery (a thread suspension, a server-to-client call),
+	# which the application doesn't see; see dtape_thread_sigexc_enter()
+	('interrupt_enter', [
+		('transparent', 'bool'),
+	], [], PUSH_UNKNOWN_REPLIES),
 
 	('interrupt_exit', [], []),
 
@@ -906,6 +918,28 @@ calls = [
 		('memory_users', 'uint32_t'),
 		('flags', 'uint32_t'),
 	]),
+
+	#
+	# shared message queues (see darlingserver/mach-sq.h)
+	#
+
+	# gives the calling task its shared message queue region: `s_object` is mapped read-only by the task,
+	# `q_object` read-write; both are DSQ_S_SIZE/DSQ_Q_SIZE bytes. fails with EEXIST if it already has one
+	('mach_sq_attach', [], [
+		('s_object', '@fd'),
+		('q_object', '@fd'),
+	]),
+
+	# a receive-only mach_msg() on a port in shared-queue mode. the same as mach_msg_overwrite with
+	# MACH_RCV_MSG only, except that when the port's shared queue is empty and the receive would wait,
+	# it returns DSQ_RCV_WAIT_LOCALLY at once so that the task waits for the queue itself
+	('mach_msg_sq_receive', [
+		('msg', 'void*', 'uint64_t'),
+		('option', 'int32_t'),
+		('rcv_size', 'uint32_t'),
+		('rcv_name', 'uint32_t'),
+		('timeout', 'uint32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | XNU_TRAP_NOSUFFIX | XNU_TRAP_NO_DTAPE_DEF | ALLOW_INTERRUPTIONS),
 ]
 
 ALLOWED_PRIVATE_TYPES = [
