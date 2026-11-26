@@ -1718,7 +1718,8 @@ src_setup_done:
 		target_addr = dtape_hooks->task_map_file(target_map->dtape_task->context, descriptor->memfd, dtape_byte_count_to_page_count_round_up(map_size), prot, req_addr, 0, target_flags);
 	}
 	if (!target_addr) {
-		kr = KERN_FAILURE;
+		// a fixed address that cannot be mapped (the range is in use and VM_FLAGS_OVERWRITE is not set) is KERN_NO_SPACE
+		kr = (flags & VM_FLAGS_ANYWHERE) ? KERN_FAILURE : KERN_NO_SPACE;
 		goto out;
 	}
 
