@@ -65,6 +65,7 @@ struct Call {
 	bool isBSDTrap() const { return false; }
 	void sendBSDReply(int, unsigned) { std::abort(); }
 	void sendBasicReply(int code) { reply = code; }
+	void markArmingRefused() {}
 };
 struct Thread: std::enable_shared_from_this<Thread> {
 	enum class DeferralState { NotDeferred, DeferredNotPending, DeferredPending };
