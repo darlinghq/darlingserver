@@ -401,8 +401,11 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 		// release the main thread's old duct-taped thread
 		dtape_thread_release(oldThread);
 
-		// release the old task
+		// release the old task; destroying it retires its context (Process::_dispose), which takes the lock this
+		// function holds
+		lock.unlock();
 		dtape_task_release(oldTask);
+		lock.lock();
 
 		// create a new fork-wait semaphore for the new task
 		_dtapeForkWaitSemaphore = dtape_semaphore_create(_dtapeTask, 0);
