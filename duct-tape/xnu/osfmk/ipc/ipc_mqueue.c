@@ -1029,6 +1029,12 @@ ipc_mqueue_receive_results(wait_result_t saved_wait_result)
 		return;
 
 	case THREAD_INTERRUPTED:
+#ifdef __DARLING__
+	// a duct-tape thread can be resumed with its wait still THREAD_WAITING (-1): an interrupt (a signal being
+	// processed, dserver_rpc_interrupt_enter) resumes the microthread that blocks in a kernel RPC, such as the
+	// mach_exception_raise of a signal to a debugger. XNU never sees this; treat it as an interrupted wait.
+	case THREAD_WAITING:
+#endif
 		self->ith_state = MACH_RCV_INTERRUPTED;
 		return;
 

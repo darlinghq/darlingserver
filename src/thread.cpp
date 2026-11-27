@@ -382,6 +382,10 @@ void DarlingServer::Thread::makePendingCallActive() {
 	std::unique_lock lock(_rwlock);
 	_activeCall = _pendingCall;
 	_pendingCall = nullptr;
+	// Darwin's BSD syscall dispatch gives every call a fresh `int32_t retval = 0`, and a trap body may leave it
+	// untouched when there is nothing to report (ulock_wake with ULF_NO_ERRNO does). Reset it for every call so
+	// the guest never sees the previous call's value.
+	_bsdReturnValue = 0;
 };
 
 void DarlingServer::Thread::_deactivateCallLocked(std::shared_ptr<Call> expectedCall) {
@@ -648,7 +652,14 @@ void DarlingServer::Thread::doWork() {
 
 		if (_continuationCallback && _pendingCall) {
 			// we can only have one of the two
-			throw std::runtime_error("Thread has both a pending call and a pending continuation");
+			// happens when a process is SIGKILLed while one of its threads waits with a continuation. The thread's
+			// new call wins; its old suspended call can never resume (its stack is gone with a continuation) and is
+			// dropped instead of aborting the server.
+			if (_pendingCallOverride) {
+				throw std::runtime_error("Thread has both a pending call and a pending continuation");
+			}
+			microthreadLog.error() << _tid << "(" << _nstid << "): pending call " << static_cast<int>(_pendingCall->number()) << " and a pending continuation: continuation dropped" << microthreadLog.endLog;
+			_continuationCallback = nullptr;
 		}
 
 		if (_suspended && (_pendingCallOverride || !_pendingCall)) {
@@ -1116,18 +1127,31 @@ int DarlingServer::Thread::pendingSignal() const {
 
 int DarlingServer::Thread::setPendingSignal(int signal) {
 	std::unique_lock lock(_rwlock);
-	int pendingSignal;
 	if (_interrupts.empty()) {
-		throw std::runtime_error("Can't set pending signal with no active interrupts");
-	} else {
-		pendingSignal = _interrupts.top().signal;
-		_interrupts.top().signal = signal;
+		// no interrupt marker to set is not an error: processSignal() tolerates the same state and
+		// pendingSignal() already answers 0 for it
+		static bool reportedMissingInterrupt = false;
+		if (!reportedMissingInterrupt) {
+			reportedMissingInterrupt = true;
+			static DarlingServer::Log log("thread");
+			log.error() << "[set-pending-signal-no-interrupt] setting a pending signal without an "
+				"interrupt context tid=" << _tid << " nstid=" << _nstid << log.endLog;
+		}
+		return 0;
 	}
+	int pendingSignal = _interrupts.top().signal;
+	_interrupts.top().signal = signal;
 	return pendingSignal;
 };
 
 void DarlingServer::Thread::processSignal(int bsdSignalNumber, int linuxSignalNumber, int code, uintptr_t signalAddress, dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress, const std::optional<dtape_exception_state_t>& exceptionState) {
-	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	try {
+		loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	} catch (std::system_error e) {
+		// as in waitWhileUserSuspended (process killed meanwhile)
+		threadLog.warning() << *this << ": failed to load state from user in processSignal: " << e.code() << " (" << e.what() << ")" << threadLog.endLog;
+		return;
+	}
 	dtape_thread_set_exception_state(_dtapeThread, exceptionState ? &*exceptionState : nullptr);
 
 	{
@@ -1705,6 +1729,15 @@ void DarlingServer::Thread::pushCallReply(std::shared_ptr<Call> expectedCall, Me
 
 	std::unique_lock lock(_rwlock);
 
+	if (expectedCall && expectedCall->armingRefused()) {
+		// This Call never owned a slot. Publish its reply on its own route and leave the
+		// active, pending and interrupt slots untouched; trying to deactivate one would throw
+		// and terminate the server while replying to the refused call.
+		lock.unlock();
+		expectedCall->publishFinalReply(std::move(reply));
+		return;
+	}
+
 	if (expectedCall) {
 		_deactivateCallLocked(expectedCall);
 	}
@@ -1826,7 +1859,14 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 };
 
 void DarlingServer::Thread::waitWhileUserSuspended(dserver_rpc_architecture_t callerArchitecture, uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
-	loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	try {
+		loadStateFromUser(callerArchitecture, threadStateAddress, floatStateAddress);
+	} catch (std::system_error e) {
+		// the process was killed between its suspension signal and this call (SIGKILL of a task-suspended app):
+		// the read fails. Uncaught, this aborted darlingserver and took the whole container down.
+		threadLog.warning() << *this << ": failed to load state from user in waitWhileUserSuspended: " << e.code() << " (" << e.what() << ")" << threadLog.endLog;
+		return;
+	}
 	dtape_thread_wait_while_user_suspended(_dtapeThread);
 	try {
 		saveStateToUser(callerArchitecture, threadStateAddress, floatStateAddress);

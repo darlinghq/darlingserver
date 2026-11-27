@@ -53,6 +53,16 @@
 static ZONE_DECLARE(ipc_eventlink_zone, "ipc_eventlink",
     sizeof(struct ipc_eventlink_base), ZC_NONE);
 
+#ifdef __DARLING__
+// duct-tape runs no STARTUP(ZALLOC) phase: the zone is made in dtape_init (zalloc on a NULL zone crashed
+// darlingserver on the first mach_eventlink_create)
+void
+dtape_ipc_eventlink_init(void)
+{
+	ipc_eventlink_zone = zone_create("ipc_eventlink", sizeof(struct ipc_eventlink_base), ZC_NONE);
+}
+#endif
+
 os_refgrp_decl(static, ipc_eventlink_refgrp, "eventlink", NULL);
 
 #if DEVELOPMENT || DEBUG

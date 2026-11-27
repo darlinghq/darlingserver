@@ -156,7 +156,7 @@ add_custom_command(
 # one target per generated file, so that the tests sharing it do not generate it concurrently
 add_custom_target(dserver_test_call_inc DEPENDS ${gen}/call.inc)
 
-foreach(topic call_peer_uid call_pid_order call_push_reply_pipe call_thread_owner call_fork_checkin call_sigprocess_legacy)
+foreach(topic call_peer_uid call_pid_order call_push_reply_pipe call_thread_owner call_fork_checkin call_sigprocess_legacy call_refused_pending)
 	dserver_host_test(${topic} SOURCES ${host}/${topic}_test.cpp)
 	target_include_directories(dserver_${topic}_test PRIVATE ${host})
 	target_compile_definitions(dserver_${topic}_test PRIVATE CALL_FROM_MESSAGE_INC="${gen}/call.inc")

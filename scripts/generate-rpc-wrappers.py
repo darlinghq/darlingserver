@@ -538,6 +538,36 @@ calls = [
 	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | ALLOW_INTERRUPTIONS),
 
 	#
+	# mach eventlink "traps" (XNU BSD syscalls 496-498: their 64-bit result, count and error, is written to
+	# `result` in the caller's memory)
+	#
+
+	('mach_eventlink_signal', [
+		('eventlink_port', 'uint32_t'),
+		('signal_count', 'uint64_t'),
+		('result', 'uint64_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
+	('mach_eventlink_wait_until', [
+		('eventlink_port', 'uint32_t'),
+		('wait_count', 'uint64_t'),
+		('deadline', 'uint64_t'),
+		('clock_id', 'uint32_t'),
+		('option', 'uint32_t'),
+		('result', 'uint64_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF | ALLOW_INTERRUPTIONS),
+
+	('mach_eventlink_signal_wait_until', [
+		('eventlink_port', 'uint32_t'),
+		('wait_count', 'uint64_t'),
+		('signal_count', 'uint64_t'),
+		('deadline', 'uint64_t'),
+		('clock_id', 'uint32_t'),
+		('option', 'uint32_t'),
+		('result', 'uint64_t*', 'uint64_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF | ALLOW_INTERRUPTIONS),
+
+	#
 	# mk_timer traps
 	#
 
@@ -1640,8 +1670,8 @@ for call in calls:
 				fd_index += 1
 
 			# On recent versions of clang, the compiler will throw out an error if there is
-			# a mismatch with certain integer types. 
-			if len(param) > 2: 
+			# a mismatch with certain integer types.
+			if len(param) > 2:
 				val = "(" + param[2] + ")" + val
 
 			library_source.write("\t\t\t." + param_name + " = " + val + ",\n")
@@ -1760,12 +1790,14 @@ for call in calls:
 	library_source.write("\t}\n\n")
 
 	library_source.write("retry_receive:\n")
+	# Darling: a pushed unknown reply's recvmsg shrank msg_controllen; restore it before receiving again
+	library_source.write("\treplymsg.msg_controllen = sizeof(controlbuf);\n")
 	library_source.write("\tlong_status = dserver_rpc_hooks_receive_message(server_socket, &replymsg);\n\n")
 
 	library_source.write("\tif (long_status == dserver_rpc_hooks_get_interrupt_status()) {\n")
 	library_source.write("\t\tgoto retry_receive;\n")
 	library_source.write("\t}\n\n")
-	
+
 	library_source.write("\tif (long_status < 0) {\n")
 	if (flags & ALLOW_INTERRUPTIONS) == 0:
 		library_source.write("\t\tdserver_rpc_hooks_atomic_end(&atomic_save);\n")

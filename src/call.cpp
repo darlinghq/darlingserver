@@ -289,7 +289,17 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	#undef CALL_CASE
 
 	if (thread) {
-		thread->setPendingCall(result);
+		try {
+			thread->setPendingCall(result);
+		} catch (const std::exception& ex) {
+			// A competing call was rejected before it entered a thread slot. Reply -EAGAIN so the
+			// guest can retry instead of unwinding to the server's top-level guard and dying.
+			callLog.error() << "setPendingCall rejected call (number " << header->number
+				<< "): " << ex.what() << "; replying -EAGAIN instead of dropping" << callLog.endLog;
+			result->markArmingRefused();
+			result->sendBasicReply(-EAGAIN);
+			return nullptr;
+		}
 		return result;
 	} else {
 		Thread::kernelAsync([result]() {
@@ -329,6 +339,10 @@ bool DarlingServer::Call::isBSDTrap() const {
 
 void DarlingServer::Call::sendReply(Message&& reply) {
 	Server::sharedInstance().sendMessage(std::move(reply));
+};
+
+void DarlingServer::Call::publishFinalReply(Message&& reply) {
+	sendReply(std::move(reply));
 };
 
 //
@@ -1222,6 +1236,17 @@ void DarlingServer::Call::InterruptExit::processCall() {
 
 	{
 		std::unique_lock lock(thread->_rwlock);
+
+		// an interrupt exit without a matching enter has nothing to restore; std::stack::top() on an empty
+		// stack is undefined behaviour
+		if (thread->_interrupts.empty()) {
+			static std::atomic<int> interrupt_imbalance_reported{0};
+			if (interrupt_imbalance_reported.fetch_add(1) < 16) {
+				callLog.error() << *thread << ": interrupt exit with no matching enter; nothing to restore"
+				    << callLog.endLog;
+			}
+			return;
+		}
 
 		auto tmp = std::move(thread->_interrupts.top());
 

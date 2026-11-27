@@ -42,6 +42,7 @@ struct Log {
 	int endLog = 0;
 	Log& debug() { return *this; }
 	Log& warning() { return *this; }
+	Log& error() { return *this; }
 	Log& info() { return *this; }
 	template<class T> Log& operator<<(const T&) { return *this; }
 };
@@ -65,6 +66,7 @@ struct Call {
 	bool isBSDTrap() const { return false; }
 	void sendBSDReply(int, unsigned) { std::abort(); }
 	void sendBasicReply(int code) { reply = code; }
+	void markArmingRefused() {}
 };
 struct Thread: std::enable_shared_from_this<Thread> {
 	enum class DeferralState { NotDeferred, DeferredNotPending, DeferredPending };

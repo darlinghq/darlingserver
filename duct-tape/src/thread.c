@@ -646,7 +646,13 @@ void dtape_thread_sigexc_exit(dtape_thread_t* thread) {
 
 	thread_lock(&thread->xnu_thread);
 	user_state = LIST_FIRST(&thread->user_states);
-	LIST_REMOVE(user_state, link);
+	// the list head may be the embedded default state (installed at thread creation, part of this allocation):
+	// it must not be freed, and an exit without a matching enter2 has nothing allocated to pop
+	if (user_state != NULL && user_state != &thread->default_state) {
+		LIST_REMOVE(user_state, link);
+	} else {
+		user_state = NULL;
+	}
 	thread_unlock(&thread->xnu_thread);
 
 	free(user_state);
