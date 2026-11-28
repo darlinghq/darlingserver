@@ -180,7 +180,7 @@ kern_return_t processor_assign(processor_t processor, processor_set_t new_pset, 
 };
 
 kern_return_t processor_control(processor_t processor, processor_info_t info, mach_msg_type_number_t count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: cpu_control(), which no x86 platform implements.
 	if (processor == PROCESSOR_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -189,7 +189,7 @@ kern_return_t processor_control(processor_t processor, processor_info_t info, ma
 };
 
 kern_return_t processor_exit_from_user(processor_t processor) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Linux CPUs are not taken offline from a container (XNU: !ml_cpu_can_exit()).
 	if (processor == PROCESSOR_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -198,7 +198,7 @@ kern_return_t processor_exit_from_user(processor_t processor) {
 };
 
 kern_return_t processor_get_assignment(processor_t processor, processor_set_t* pset) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: every online processor is in pset0.
 	if (processor == PROCESSOR_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -274,43 +274,43 @@ kern_return_t processor_info(processor_t processor, processor_flavor_t flavor, h
 };
 
 kern_return_t processor_set_create(host_t host, processor_set_t* new_set, processor_set_t* new_name) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: there is only pset0.
 	return KERN_FAILURE;
 };
 
 kern_return_t processor_set_destroy(processor_set_t pset) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: pset0 is never destroyed.
 	return KERN_FAILURE;
 };
 
 kern_return_t processor_set_max_priority(processor_set_t pset, int max_priority, boolean_t change_threads) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: obsolete.
 	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t processor_set_policy_control(processor_set_t pset, int flavor, processor_set_info_t policy_info, mach_msg_type_number_t count, boolean_t change) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: obsolete.
 	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t processor_set_policy_disable(processor_set_t pset, int policy, boolean_t change_threads) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: obsolete.
 	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t processor_set_policy_enable(processor_set_t pset, int policy) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: obsolete.
 	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t processor_set_stack_usage(processor_set_t pset, unsigned int* totalp, vm_size_t* spacep, vm_size_t* residentp, vm_size_t* maxusagep, vm_offset_t* maxstackp) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU without MACH_DEBUG.
 	return KERN_NOT_SUPPORTED;
 };
@@ -471,13 +471,13 @@ kern_return_t processor_set_tasks_with_flavor(processor_set_t pset, mach_task_fl
 };
 
 kern_return_t processor_set_threads(processor_set_t pset, thread_array_t* thread_list, mach_msg_type_number_t* count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU release kernels answer this one KERN_FAILURE (DEVELOPMENT/DEBUG only).
 	return KERN_FAILURE;
 };
 
 kern_return_t processor_start_from_user(processor_t processor) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Linux CPUs are not brought online from a container.
 	if (processor == PROCESSOR_NULL) {
 		return KERN_INVALID_ARGUMENT;

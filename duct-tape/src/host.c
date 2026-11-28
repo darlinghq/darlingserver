@@ -256,7 +256,7 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 			return KERN_SUCCESS;
 		};
 
-		// these four aborted the server (dtape_stub_unsafe) on a guest host_info() call. Answers as XNU's
+		// Answers as XNU's
 		// host_info() (duct-tape/xnu/osfmk/kern/host.c) gives them.
 		case HOST_SCHED_INFO: {
 			if (*count < HOST_SCHED_INFO_COUNT) {
@@ -278,7 +278,7 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 			if (*count < HOST_CAN_HAS_DEBUGGER_COUNT) {
 				return KERN_FAILURE;
 			}
-			// a simulator host lets processes be debugged
+			// debugging is allowed: Darling does not restrict it
 			((host_can_has_debugger_info_t)info)->can_has_debugger = 1;
 			*count = HOST_CAN_HAS_DEBUGGER_COUNT;
 			return KERN_SUCCESS;
@@ -303,13 +303,13 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 };
 
 kern_return_t host_default_memory_manager(host_priv_t host_priv, memory_object_default_t* default_manager, memory_object_cluster_size_t cluster_size) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (aborted the server). No default pager.
+	// guest-reachable through MIG. No default pager.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_get_boot_info(host_priv_t host_priv, kernel_boot_info_t boot_info) {
-	// guest-reachable (host_priv MIG); was dtape_stub_unsafe. XNU copies PE_boot_args(): there are none.
+	// guest-reachable (host_priv MIG). XNU copies PE_boot_args(): there are none.
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
@@ -318,7 +318,7 @@ kern_return_t host_get_boot_info(host_priv_t host_priv, kernel_boot_info_t boot_
 };
 
 kern_return_t host_get_UNDServer(host_priv_t host_priv, UNDServerRef* serverp) {
-	// guest-reachable (host_priv MIG); was dtape_stub_unsafe. No user notification daemon is registered.
+	// guest-reachable (host_priv MIG). No user notification daemon is registered.
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
@@ -327,19 +327,19 @@ kern_return_t host_get_UNDServer(host_priv_t host_priv, UNDServerRef* serverp) {
 };
 
 kern_return_t host_set_UNDServer(host_priv_t host_priv, UNDServerRef server) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (aborted the server). No user notification daemon.
+	// guest-reachable through MIG. No user notification daemon.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_lockgroup_info(host_t host, lockgroup_info_array_t* lockgroup_infop, mach_msg_type_number_t* lockgroup_infoCntp) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (aborted the server). No lock group statistics.
+	// guest-reachable through MIG. No lock group statistics.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_reboot(host_priv_t host_priv, int options) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (aborted the server). The container is not rebooted from inside.
+	// guest-reachable through MIG. The container is not rebooted from inside.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
@@ -350,13 +350,13 @@ kern_return_t host_security_create_task_token(host_security_t host_security, tas
 };
 
 kern_return_t host_security_set_task_token(host_security_t host_security, task_t task, security_token_t sec_token, audit_token_t audit_token, host_priv_t host_priv) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (aborted the server). Task tokens come from the process credentials (Uidgid RPC).
+	// guest-reachable through MIG. Task tokens come from the process credentials (Uidgid RPC).
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_virtual_physical_table_info(host_t host, hash_info_bucket_array_t* infop, mach_msg_type_number_t* countp) {
-	// guest-reachable (mach_host MIG); was dtape_stub_unsafe. XNU without MACH_VM_DEBUG answers this.
+	// guest-reachable (mach_host MIG). XNU without MACH_VM_DEBUG answers this.
 	return KERN_FAILURE;
 };
 

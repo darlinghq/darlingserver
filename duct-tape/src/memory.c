@@ -1032,13 +1032,17 @@ kern_return_t mach_memory_entry_access_tracking(ipc_port_t entry_port, int* acce
 	return KERN_NOT_SUPPORTED;
 };
 
+#ifndef VM_LEDGER_TAG_UNCHANGED
+#define VM_LEDGER_TAG_UNCHANGED ((int)-1) // newer SDKs; this tree's imported headers lack it
+#endif
+
 kern_return_t mach_memory_entry_ownership(ipc_port_t entry_port, task_t owner, int ledger_tag, int ledger_flags) {
 	if (ledger_flags & ~VM_LEDGER_FLAGS) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	// Some callers pass -1 (VM_LEDGER_TAG_UNCHANGED in newer XNU; not defined in this tree's
-	// headers): keep the tag and change only the owner.
-	if (ledger_tag != VM_LEDGER_TAG_NONE && ledger_tag != -1 && (ledger_tag < 0 || ledger_tag > VM_LEDGER_TAG_MAX)) {
+	// VM_LEDGER_TAG_UNCHANGED (-1, defined in the public <mach/vm_statistics.h> of newer SDKs) keeps the tag and
+	// changes only the owner. VM_LEDGER_TAG_NONE is accepted too.
+	if (ledger_tag != VM_LEDGER_TAG_NONE && ledger_tag != VM_LEDGER_TAG_UNCHANGED && (ledger_tag < 0 || ledger_tag > VM_LEDGER_TAG_MAX)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 	if (!is_named_entry_port(entry_port)) {
@@ -1058,7 +1062,7 @@ kern_return_t mach_memory_entry_purgable_control(ipc_port_t entry_port, vm_purga
 };
 
 kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp, mach_msg_type_number_t* namesCntp, mach_zone_info_array_t* infop, mach_msg_type_number_t* infoCntp, mach_memory_info_array_t* memoryInfop, mach_msg_type_number_t* memoryInfoCntp) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// No zone allocator here; XNU answers this way when its zone info is unavailable to the caller.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -1067,7 +1071,7 @@ kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp,
 };
 
 kern_return_t mach_memory_object_memory_entry(host_t host, boolean_t internal, vm_size_t size, vm_prot_t permission, memory_object_t pager, ipc_port_t* entry_handle) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// There are no pagers (convert_port_to_memory_object() gives none); mach_make_memory_entry_64() makes entries.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -1080,7 +1084,7 @@ kern_return_t mach_memory_object_memory_entry(host_t host, boolean_t internal, v
 };
 
 kern_return_t mach_memory_object_memory_entry_64(host_t host, boolean_t internal, vm_object_offset_t size, vm_prot_t permission, memory_object_t pager, ipc_port_t* entry_handle) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// There are no pagers (convert_port_to_memory_object() gives none); mach_make_memory_entry_64() makes entries.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -1097,37 +1101,37 @@ void pmap_require(pmap_t pmap) {
 };
 
 kern_return_t vm_allocate_cpm(host_priv_t host_priv, vm_map_t map, vm_address_t* addr, vm_size_t size, int flags) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU builds without VM_CPM answer KERN_FAILURE.
 	return KERN_FAILURE;
 };
 
 kern_return_t vm32_mapped_pages_info(vm_map_t map, page_address_array_t* pages, mach_msg_type_number_t* pages_count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU without MACH_VM_DEBUG.
 	return KERN_FAILURE;
 };
 
 kern_return_t vm32_region_info(vm_map_t map, vm32_offset_t address, vm_info_region_t* regionp, vm_info_object_array_t* objectsp, mach_msg_type_number_t* objectsCntp) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU without MACH_VM_DEBUG.
 	return KERN_FAILURE;
 };
 
 kern_return_t vm32_region_info_64(vm_map_t map, vm32_offset_t address, vm_info_region_64_t* regionp, vm_info_object_array_t* objectsp, mach_msg_type_number_t* objectsCntp) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU without MACH_VM_DEBUG.
 	return KERN_FAILURE;
 };
 
 memory_object_t convert_port_to_memory_object(mach_port_t port) {
-	// called by the mach_memory_object_memory_entry(_64) MIG routines for their pager argument; was
-	// dtape_stub_unsafe. There are no memory object (pager) ports here.
+	// called by the mach_memory_object_memory_entry(_64) MIG routines for their pager argument.
+	// There are no memory object (pager) ports here.
 	return MEMORY_OBJECT_NULL;
 };
 
 kern_return_t mach_vm_behavior_set(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, vm_behavior_t new_behavior) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// The hints are only advice (Linux pages them as it likes); accepted after XNU's argument checks.
 	if (map == VM_MAP_NULL || start + size < start) {
 		return KERN_INVALID_ARGUMENT;
@@ -1146,17 +1150,17 @@ kern_return_t mach_vm_behavior_set(vm_map_t map, mach_vm_offset_t start, mach_vm
 };
 
 kern_return_t mach_vm_inherit(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, vm_inherit_t new_inheritance) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
-	// Inheritance is not tracked (a Darling fork is a Linux fork: private mappings are copied, shared ones shared);
-	// the call succeeds after XNU's argument checks.
+	// Inheritance is not tracked: a Darling fork is a Linux fork, which copies private mappings. VM_INHERIT_COPY
+	// is therefore what every mapping already does and is accepted (after XNU's argument checks); sharing the
+	// range with a child, or leaving it out of the child, cannot be done and is refused rather than ignored.
 	if (map == VM_MAP_NULL || start + size < start || new_inheritance > VM_INHERIT_LAST_VALID) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	return KERN_SUCCESS;
+	return new_inheritance == VM_INHERIT_COPY ? KERN_SUCCESS : KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_vm_machine_attribute(vm_map_t map, mach_vm_address_t addr, mach_vm_size_t size, vm_machine_attribute_t attribute, vm_machine_attribute_val_t* value) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// x86 keeps caches coherent: XNU's pmap_attribute() on Intel answers KERN_INVALID_ARGUMENT for everything but
 	// MATTR_CACHE, which needs no work.
 	if (map == VM_MAP_NULL || addr + size < addr) {
@@ -1366,11 +1370,10 @@ kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page
 		default:
 			return KERN_INVALID_ARGUMENT;
 	}
-	vm_page_info_basic_t basic = (vm_page_info_basic_t)info;
-	memset(basic, 0, *count * sizeof(int));
-	basic->disposition = VM_PAGE_QUERY_PAGE_PRESENT;
-	basic->ref_count = 1;
-	return KERN_SUCCESS;
+
+	// Page accounting is not implemented; let the caller handle unsupported queries.
+	*count = 0;
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t mach_vm_page_query(vm_map_t map, mach_vm_offset_t offset, int* disposition, int* ref_count) {
@@ -1439,7 +1442,7 @@ kern_return_t mach_vm_purgable_control(vm_map_t map, mach_vm_offset_t address, v
 };
 
 kern_return_t mach_vm_read_list(vm_map_t map, mach_vm_read_entry_t data_list, natural_t count) {
-	// guest-reachable through MIG (also vm32 read_list); was dtape_stub_unsafe. XNU's own body
+	// guest-reachable through MIG (also vm32 read_list). XNU's own body
 	// (xnu://7195.141.2/osfmk/vm/vm_user.c) on our vm_map_copyin / vm_map_copyout.
 	mach_msg_type_number_t i;
 	kern_return_t error;
@@ -2003,8 +2006,8 @@ kern_return_t mach_vm_remap_new_external(vm_map_t target_map, mach_vm_offset_t* 
 };
 
 kern_return_t mach_vm_wire_external(host_priv_t host_priv, vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, vm_prot_t access) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
-	// Nothing is paged out of a simulator's processes in a way they could notice, so wiring is accepted (as
+	// guest-reachable through MIG.
+	// Nothing is paged out of a guest's processes in a way they could notice, so wiring is accepted (as
 	// vm_map_wire_kernel and vm32__task_wire here) after XNU's checks.
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
@@ -2016,7 +2019,7 @@ kern_return_t mach_vm_wire_external(host_priv_t host_priv, vm_map_t map, mach_vm
 };
 
 kern_return_t mach_zone_force_gc(host_t host) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
 	}
@@ -2034,7 +2037,7 @@ kern_return_t mach_zone_get_zlog_zones(host_priv_t host, mach_zone_name_array_t*
 };
 
 kern_return_t mach_zone_info(host_priv_t host, mach_zone_name_array_t* namesp, mach_msg_type_number_t* namesCntp, mach_zone_info_array_t* infop, mach_msg_type_number_t* infoCntp) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// No zone allocator to describe.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -2043,7 +2046,7 @@ kern_return_t mach_zone_info(host_priv_t host, mach_zone_name_array_t* namesp, m
 };
 
 kern_return_t mach_zone_info_for_largest_zone(host_priv_t host, mach_zone_name_t* namep, mach_zone_info_t* infop) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// No zone allocator to describe.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -2052,7 +2055,7 @@ kern_return_t mach_zone_info_for_largest_zone(host_priv_t host, mach_zone_name_t
 };
 
 kern_return_t mach_zone_info_for_zone(host_priv_t host, mach_zone_name_t name, mach_zone_info_t* infop) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// No zone allocator to describe.
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -2061,12 +2064,14 @@ kern_return_t mach_zone_info_for_zone(host_priv_t host, mach_zone_name_t name, m
 };
 
 kern_return_t vm_map_page_query_internal(vm_map_t target_map, vm_map_offset_t offset, int* disposition, int* ref_count) {
-	// reached from vm32 map_page_query (MIG); was dtape_stub_unsafe. Same answer as mach_vm_page_query().
-	return mach_vm_page_query(target_map, offset, disposition, ref_count);
+	// Page accounting is not implemented; let the caller handle unsupported queries.
+	if (disposition) *disposition = 0;
+	if (ref_count) *ref_count = 0;
+	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t vm_map_purgable_control(vm_map_t map, vm_map_offset_t address, vm_purgable_t control, int* state) {
-	// reached from vm32 purgable_control (MIG); was dtape_stub_unsafe. Same answer as mach_vm_purgable_control().
+	// reached from vm32 purgable_control (MIG). Same answer as mach_vm_purgable_control().
 	return mach_vm_purgable_control(map, address, control, state);
 };
 
@@ -2096,7 +2101,7 @@ kern_return_t vm32__task_wire(vm_map_t map, boolean_t must_wire) {
 };
 
 kern_return_t vm32__map_exec_lockdown(vm_map_t map) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Nothing to lock down: accepted, as XNU does for a valid map.
 	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_ARGUMENT;

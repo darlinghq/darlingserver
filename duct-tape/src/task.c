@@ -307,7 +307,7 @@ void task_watchport_elem_deallocate(struct task_watchport_elem* watchport_elem) 
 };
 
 kern_return_t task_create_suid_cred(task_t task, suid_cred_path_t path, suid_cred_uid_t uid, suid_cred_t* sc_p) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// No setuid credentials here (guest setuid is emulated through the Uidgid RPC).
 	if (task == TASK_NULL || task != current_task()) {
 		return KERN_INVALID_ARGUMENT;
@@ -316,7 +316,7 @@ kern_return_t task_create_suid_cred(task_t task, suid_cred_path_t path, suid_cre
 };
 
 kern_return_t task_dyld_process_info_notify_deregister(task_t task, mach_port_name_t rcv_name) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Registration is refused (below), so nothing is ever registered.
 	if (task == TASK_NULL) {
 		return KERN_INVALID_TASK;
@@ -325,7 +325,7 @@ kern_return_t task_dyld_process_info_notify_deregister(task_t task, mach_port_na
 };
 
 kern_return_t task_dyld_process_info_notify_register(task_t task, ipc_port_t sright) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// dyld image notifications to another process are not implemented; on failure the MIG server destroys the
 	// send right.
 	if (task == TASK_NULL) {
@@ -339,13 +339,13 @@ kern_return_t task_dyld_process_info_notify_register(task_t task, ipc_port_t sri
 };
 
 kern_return_t task_generate_corpse(task_t task, ipc_port_t* corpse_task_port) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU answers this when corpses are disabled.
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t task_get_assignment(task_t task, processor_set_t* pset) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: every task is in pset0.
 	if (task == TASK_NULL) {
 		return KERN_FAILURE;
@@ -355,7 +355,7 @@ kern_return_t task_get_assignment(task_t task, processor_set_t* pset) {
 };
 
 kern_return_t task_get_state(task_t  task, int flavor, thread_state_t state, mach_msg_type_number_t* state_count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU (x86 machine_task_get_state): the task-wide debug state new threads inherit. None is ever set here.
 	if (task == TASK_NULL || !state || !state_count) {
 		return KERN_INVALID_ARGUMENT;
@@ -753,13 +753,13 @@ bool task_is_driver(task_t task) {
 };
 
 kern_return_t task_map_corpse_info(task_t task, task_t corpse_task, vm_address_t* kcd_addr_begin, uint32_t* kcd_size) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// There are no corpses (task_generate_corpse() fails), so corpse_task never is one.
 	return KERN_INVALID_ARGUMENT;
 };
 
 kern_return_t task_map_corpse_info_64(task_t task, task_t corpse_task, mach_vm_address_t* kcd_addr_begin, mach_vm_size_t* kcd_size) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// There are no corpses (task_generate_corpse() fails), so corpse_task never is one.
 	return KERN_INVALID_ARGUMENT;
 };
@@ -874,7 +874,7 @@ void task_policy_set_deallocate(task_policy_set_t task_policy_set) {
 };
 
 kern_return_t task_purgable_info(task_t task, task_purgable_info_t* stats) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Nothing is purgeable here: every queue is empty (XNU fills them from vm_purgeable_stats()).
 	if (task == TASK_NULL || stats == NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -884,7 +884,7 @@ kern_return_t task_purgable_info(task_t task, task_purgable_info_t* stats) {
 };
 
 kern_return_t task_register_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU with kdebug tracing off: the out-of-line copy is consumed and dropped.
 	if (!infos_copy) {
 		return KERN_INVALID_ADDRESS;
@@ -894,7 +894,7 @@ kern_return_t task_register_dyld_image_infos(task_t task, dyld_kernel_image_info
 };
 
 kern_return_t task_register_dyld_shared_cache_image_info(task_t task, dyld_kernel_image_info_t cache_img, boolean_t no_cache, boolean_t private_cache) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU only traces it (kdebug).
 	if (task == TASK_NULL || task != current_task()) {
 		return KERN_INVALID_TASK;
@@ -906,8 +906,8 @@ kern_return_t task_register_dyld_shared_cache_image_info(task_t task, dyld_kerne
 // preempted or interrupted, so it never moves one back to a range's recovery address.
 // task_restartable_ranges_synchronize therefore has nothing to wait for.
 kern_return_t task_restartable_ranges_register(task_t task, task_restartable_range_t* ranges, mach_msg_type_number_t count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
-	// After VibeDarling/darlingserver 7856569: accepted (with XNU's checks) but not enforced; a thread interrupted
+	// guest-reachable through MIG.
+	// Accepted (with XNU's checks) but not enforced; a thread interrupted
 	// inside a range is not sent to its recovery address. Same as before for every caller that got this far.
 	if (task != current_task()) {
 		return KERN_FAILURE;
@@ -928,8 +928,8 @@ kern_return_t task_restartable_ranges_register(task_t task, task_restartable_ran
 };
 
 kern_return_t task_restartable_ranges_synchronize(task_t task) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
-	// After VibeDarling/darlingserver 7856569 (see task_restartable_ranges_register).
+	// guest-reachable through MIG.
+	// See task_restartable_ranges_register.
 	if (task != current_task()) {
 		return KERN_FAILURE;
 	}
@@ -948,7 +948,7 @@ kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t
 };
 
 kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU: no flavor is settable (TASK_TRACE_MEMORY_INFO is KERN_NOT_SUPPORTED with CONFIG_ATM).
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -962,7 +962,7 @@ kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* 
 };
 
 kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Task-wide debug state (hardware breakpoints for every new thread) is not implemented: clearing it (all zero,
 	// what task_get_state() reports) succeeds, setting a breakpoint fails.
 	if (task == TASK_NULL || !state) {
@@ -988,12 +988,12 @@ kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach
 };
 
 void task_suspension_token_deallocate(task_suspension_token_t token) {
-	// was dtape_stub_unsafe; task_resume2() (and the task_suspend2 MIG routine) reached it. As XNU: these are task references.
+	//; task_resume2() (and the task_suspend2 MIG routine) reached it. As XNU: these are task references.
 	task_deallocate((task_t)token);
 };
 
 kern_return_t task_terminate(task_t task) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU refuses BSD tasks (all of them here); a process is ended with kill().
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -1002,7 +1002,7 @@ kern_return_t task_terminate(task_t task) {
 };
 
 kern_return_t task_unregister_dyld_image_infos(task_t task, dyld_kernel_image_info_array_t infos_copy, mach_msg_type_number_t infos_len) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU with kdebug tracing off: the out-of-line copy is consumed and dropped.
 	if (!infos_copy) {
 		return KERN_INVALID_ADDRESS;

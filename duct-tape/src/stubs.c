@@ -230,6 +230,6 @@ bool work_interval_port_type_render_server(mach_port_name_t port_name) {
 };
 
 ipc_port_t convert_suid_cred_to_port(suid_cred_t sc) {
-	// task_create_suid_cred() never makes one (it fails); was dtape_stub_unsafe.
+	// task_create_suid_cred() never makes one (it fails).
 	return IP_NULL;
 };

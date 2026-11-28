@@ -499,8 +499,8 @@ kern_return_t handle_ux_exception(thread_t xthread, int exception, mach_exceptio
 	if (thread->processing_signal) {
 		dtape_hooks->thread_set_pending_signal(thread->context, ux_signal);
 	} else {
-		// was dtape_stub_unsafe: an exception message sent to the kernel's (ux) handler for a thread that is
-		// not in signal processing aborted the server. The signal is not introduced into the thread (not
+		// an exception message sent to the kernel's (ux) handler for a thread that is
+		// not in signal processing. The signal is not introduced into the thread (not
 		// implemented); the exception is dropped with a warning, as for an exception with no handler.
 		dtape_log_warning("handle_ux_exception: dropping signal %d (exception %d) for a thread outside signal processing", ux_signal, exception);
 	}
@@ -1538,7 +1538,7 @@ void thread_poll_yield(thread_t self) {
 };
 
 kern_return_t act_get_state_to_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t* count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// As XNU: thread_get_state_to_user() for another thread.
 	if (thread == current_thread()) {
 		return KERN_INVALID_ARGUMENT;
@@ -1547,7 +1547,7 @@ kern_return_t act_get_state_to_user(thread_t thread, int flavor, thread_state_t 
 };
 
 kern_return_t act_set_state_from_user(thread_t thread, int flavor, thread_state_t state, mach_msg_type_number_t count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// As XNU: thread_set_state_from_user() for another thread.
 	if (thread == current_thread()) {
 		return KERN_INVALID_ARGUMENT;
@@ -1619,7 +1619,7 @@ void dtape_thread_returning_to_user(dtape_thread_t* thread) {
 };
 
 kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread_state_flavor_t flavor, thread_state_t in_state, mach_msg_type_number_t in_state_count, thread_state_t out_state, mach_msg_type_number_t* out_state_count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU's checks; on x86 the state needs no conversion between threads (no pointer authentication).
 	if (direction != THREAD_CONVERT_THREAD_STATE_TO_SELF && direction != THREAD_CONVERT_THREAD_STATE_FROM_SELF) {
 		return KERN_INVALID_ARGUMENT;
@@ -1636,7 +1636,7 @@ kern_return_t thread_convert_thread_state(thread_t thread, int direction, thread
 };
 
 kern_return_t thread_create_from_user(task_t task, thread_t* new_thread) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Threads are Linux threads the process makes itself (bsdthread_create); one cannot be made from outside.
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -1646,7 +1646,7 @@ kern_return_t thread_create_from_user(task_t task, thread_t* new_thread) {
 };
 
 kern_return_t thread_create_running_from_user(task_t task, int flavor, thread_state_t new_state, mach_msg_type_number_t new_state_count, thread_t* new_thread) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// Threads are Linux threads the process makes itself (bsdthread_create); one cannot be made from outside.
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -1923,7 +1923,7 @@ kern_return_t thread_policy_set(thread_t thread, thread_policy_flavor_t flavor, 
 };
 
 kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU's thread_set_mach_voucher() without the bank ledger / thread group parts. XNU allows it for the current
 	// thread or one not started yet; user threads here are never marked started, so only the current one.
 	if (thread == THREAD_NULL) {
@@ -1943,7 +1943,7 @@ kern_return_t thread_set_mach_voucher(thread_t thread, ipc_voucher_t voucher) {
 };
 
 kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t policy, policy_base_t base, mach_msg_type_number_t base_count, policy_limit_t limit, mach_msg_type_number_t limit_count) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU's argument checks (osfmk/kern/mk_sp.c); the policy itself is not applied (Linux schedules the thread),
 	// as thread_policy() / thread_policy_set() here.
 	int max, bas;
@@ -1986,7 +1986,7 @@ kern_return_t thread_set_policy(thread_t thread, processor_set_t pset, policy_t 
 };
 
 kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wired) {
-	// guest-reachable through MIG; was dtape_stub_unsafe (a guest call aborted darlingserver and every process).
+	// guest-reachable through MIG.
 	// XNU's thread_wire_internal(): only the current thread, and only a VM-privilege flag.
 	if (host_priv == NULL || thread != current_thread()) {
 		return KERN_INVALID_ARGUMENT;
