@@ -256,18 +256,41 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 			return KERN_SUCCESS;
 		};
 
-		case HOST_SCHED_INFO:
-			dtape_stub_safe("HOST_SCHED_INFO");
-			return KERN_INVALID_ARGUMENT;
+		// Answers as XNU's
+		// host_info() (duct-tape/xnu/osfmk/kern/host.c) gives them.
+		case HOST_SCHED_INFO: {
+			if (*count < HOST_SCHED_INFO_COUNT) {
+				return KERN_FAILURE;
+			}
+			host_sched_info_t sched_info = (host_sched_info_t)info;
+			// XNU: the initial quantum in ms (10 ms for the timeshare scheduler)
+			sched_info->min_timeout = sched_info->min_quantum = 10;
+			*count = HOST_SCHED_INFO_COUNT;
+			return KERN_SUCCESS;
+		}
 		case HOST_RESOURCE_SIZES:
-			dtape_stub_safe("HOST_RESOURCE_SIZES");
+			if (*count < HOST_RESOURCE_SIZES_COUNT) {
+				return KERN_FAILURE;
+			}
+			// XNU: "Fail until ledgers are implemented"
 			return KERN_INVALID_ARGUMENT;
-		case HOST_CAN_HAS_DEBUGGER:
-			dtape_stub_safe("HOST_CAN_HAS_DEBUGGER");
-			return KERN_INVALID_ARGUMENT;
+		case HOST_CAN_HAS_DEBUGGER: {
+			if (*count < HOST_CAN_HAS_DEBUGGER_COUNT) {
+				return KERN_FAILURE;
+			}
+			// debugging is allowed: Darling does not restrict it
+			((host_can_has_debugger_info_t)info)->can_has_debugger = 1;
+			*count = HOST_CAN_HAS_DEBUGGER_COUNT;
+			return KERN_SUCCESS;
+		}
 		case HOST_VM_PURGABLE:
-			dtape_stub_safe("HOST_VM_PURGABLE");
-			return KERN_INVALID_ARGUMENT;
+			if (*count < HOST_VM_PURGABLE_COUNT) {
+				return KERN_FAILURE;
+			}
+			// no purgeable memory accounting: every queue is empty
+			memset(info, 0, HOST_VM_PURGABLE_COUNT * sizeof(integer_t));
+			*count = HOST_VM_PURGABLE_COUNT;
+			return KERN_SUCCESS;
 
 		case HOST_MACH_MSG_TRAP:
 		case HOST_SEMAPHORE_TRAPS:
@@ -280,31 +303,43 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
 };
 
 kern_return_t host_default_memory_manager(host_priv_t host_priv, memory_object_default_t* default_manager, memory_object_cluster_size_t cluster_size) {
+	// guest-reachable through MIG. No default pager.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_get_boot_info(host_priv_t host_priv, kernel_boot_info_t boot_info) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable (host_priv MIG). XNU copies PE_boot_args(): there are none.
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_HOST;
+	}
+	boot_info[0] = '\0';
+	return KERN_SUCCESS;
 };
 
 kern_return_t host_get_UNDServer(host_priv_t host_priv, UNDServerRef* serverp) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable (host_priv MIG). No user notification daemon is registered.
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_HOST;
+	}
+	*serverp = IP_NULL;
+	return KERN_SUCCESS;
 };
 
 kern_return_t host_set_UNDServer(host_priv_t host_priv, UNDServerRef server) {
+	// guest-reachable through MIG. No user notification daemon.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_lockgroup_info(host_t host, lockgroup_info_array_t* lockgroup_infop, mach_msg_type_number_t* lockgroup_infoCntp) {
+	// guest-reachable through MIG. No lock group statistics.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_reboot(host_priv_t host_priv, int options) {
+	// guest-reachable through MIG. The container is not rebooted from inside.
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
@@ -315,13 +350,14 @@ kern_return_t host_security_create_task_token(host_security_t host_security, tas
 };
 
 kern_return_t host_security_set_task_token(host_security_t host_security, task_t task, security_token_t sec_token, audit_token_t audit_token, host_priv_t host_priv) {
+	// guest-reachable through MIG. Task tokens come from the process credentials (Uidgid RPC).
 	dtape_stub_safe();
 	return KERN_NOT_SUPPORTED;
 };
 
 kern_return_t host_virtual_physical_table_info(host_t host, hash_info_bucket_array_t* infop, mach_msg_type_number_t* countp) {
-	dtape_stub_safe();
-	return KERN_NOT_SUPPORTED;
+	// guest-reachable (mach_host MIG). XNU without MACH_VM_DEBUG answers this.
+	return KERN_FAILURE;
 };
 
 // The page counts of vm_statistics(64) that Linux can tell us, in pages of the size guests see
@@ -384,8 +420,33 @@ kern_return_t host_statistics(host_t host, host_flavor_t flavor, host_info_t inf
 			return KERN_SUCCESS;
 		}
 
+		// guest-reachable (host_statistics MIG); the default case aborted the server
+		case HOST_LOAD_INFO: {
+			if (*count < HOST_LOAD_INFO_COUNT) {
+				return KERN_FAILURE;
+			}
+			host_load_info_t load_info = (host_load_info_t)info;
+			struct sysinfo si;
+			long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+			if (sysinfo(&si) < 0) {
+				memset(&si, 0, sizeof(si));
+			}
+			if (ncpu < 1) {
+				ncpu = 1;
+			}
+			for (int i = 0; i < 3; i++) {
+				// Linux: 16-bit fixed point; Darwin: LOAD_SCALE (1000)
+				uint64_t load = ((uint64_t)si.loads[i] * LOAD_SCALE) >> 16;
+				uint64_t cap = (uint64_t)ncpu * LOAD_SCALE;
+				load_info->avenrun[i] = (integer_t)load;
+				load_info->mach_factor[i] = (integer_t)(load < cap ? cap - load : 0);
+			}
+			*count = HOST_LOAD_INFO_COUNT;
+			return KERN_SUCCESS;
+		}
+
 		default:
-			dtape_stub_safe();
+			// XNU: an unknown flavor (HOST_EXPIRED_TASK_INFO is host_statistics64's)
 			return KERN_INVALID_ARGUMENT;
 	}
 };

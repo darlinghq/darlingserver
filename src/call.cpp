@@ -386,7 +386,7 @@ void DarlingServer::Call::Checkin::processCall() {
 		if (auto process = thread->process()) {
 			// the process needs to know when the checkin occurs, in case it has a pending replacement
 			// and also to notify its parent about when the fork is complete
-			process->notifyCheckin(static_cast<Process::Architecture>(_header.architecture), _body.is_fork);
+			process->notifyCheckin(static_cast<Process::Architecture>(_header.architecture), _body.is_fork, thread->nsid() == process->nsid());
 		} else {
 			code = -ESRCH;
 		}
@@ -422,6 +422,12 @@ void DarlingServer::Call::Checkout::processCall() {
 
 						auto replacingWithDarlingProcess = _body.executing_macho;
 
+						// record it before the reply lets the client exec: the new image's main-thread check-in
+						// then always finds it, however late the pipe's hangup is handled (Process::notifyCheckin)
+						if (replacingWithDarlingProcess) {
+							process->noteExecCheckout();
+						}
+
 						std::weak_ptr<Process> weakProcess = process;
 						Server::sharedInstance().addMonitor(std::make_shared<Monitor>(fd, Monitor::Event::HangUp, false, true, [fd, weakProcess, replacingWithDarlingProcess](std::shared_ptr<Monitor> monitor, Monitor::Event events) {
 							Server::sharedInstance().removeMonitor(monitor);
@@ -443,16 +449,18 @@ void DarlingServer::Call::Checkout::processCall() {
 
 							if (result == 0) {
 								// the execve succeeded
-								if (replacingWithDarlingProcess) {
-									process->setPendingReplacement();
-								} else {
+								if (!replacingWithDarlingProcess) {
 									// the Darling process was replaced with a non-Darling process
 									// treat it like death
 									process->notifyDead();
 								}
+								// a Darling image's exec was recorded at the checkout; its main-thread check-in
+								// completes it (it may have done so already)
 							} else {
-								// the execve failed
-								// do nothing in this case
+								// the execve failed (the old image goes on)
+								if (replacingWithDarlingProcess) {
+									process->noteExecFailed();
+								}
 							}
 						}));
 					}
