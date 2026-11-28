@@ -72,43 +72,7 @@ static bool runningAsRoot() {
 	return runMode == DarlingServer::RunMode::Mode::Root;
 }
 
-// The user's directory of this kind (an xdg-user-dirs name such as "DOWNLOAD"), exactly as
-// xdg-user-dir prints it, including its fallback to $HOME (or $HOME/Desktop) when the file or the
-// entry is missing. The configuration file is read and parsed here rather than by running
-// xdg-user-dir, a shell script that sources it: this runs with the user's ids only, and nothing the
-// user configures gets to run. An empty result (xdg-user-dir printing an empty line) means no link.
-static bool xdgDirectory(const std::string& config, const char* name, const char* home, std::string& dir)
-{
-	dir = DarlingServer::PrefixSetup::userDirOrDefault(config, name, home);
-	return !dir.empty();
-}
 
-// Reads the user's user-dirs.dirs, from $XDG_CONFIG_HOME or else ~/.config. Without one, contents
-// stays empty and every directory gets xdg-user-dir's fallback.
-static bool readUserDirsConfig(const char* home, std::string& contents)
-{
-	const char* configHome = getenv("XDG_CONFIG_HOME");
-	std::string path = (configHome && configHome[0] == '/') ? std::string(configHome) : std::string(home) + "/.config";
-	path += "/user-dirs.dirs";
-
-	int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-	if (fd < 0)
-		return false;
-
-	struct stat st;
-	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
-	{
-		close(fd);
-		return false;
-	}
-
-	char buffer[4096];
-	ssize_t got;
-	while (contents.size() < 65536 && (got = read(fd, buffer, sizeof(buffer))) > 0)
-		contents.append(buffer, got);
-	close(fd);
-	return true;
-}
 
 void setupUserHome(const char* prefix, uid_t originalUID)
 {
@@ -161,30 +125,36 @@ void setupUserHome(const char* prefix, uid_t originalUID)
 	// symlink /Users/$LOGIN/LinuxHome -> $HOME
 	symlink(buf2, buf);
 
-	std::string userDirsConfig;
-	readUserDirsConfig(home, userDirsConfig);
-
-	static const char* xdgmap[][2] = {
-		{ "DESKTOP", "Desktop" },
-		{ "DOWNLOAD", "Downloads" },
-		{ "PUBLICSHARE", "Public" },
-		{ "DOCUMENTS", "Documents" },
-		{ "MUSIC", "Music" },
-		{ "PICTURES", "Pictures" },
-		{ "VIDEOS", "Movies" },
+	// These are standard directories in a macOS home directory. Create them as
+	// independent directories in the prefix rather than linking them to locations
+	// on the host.
+	static const char* userDirs[] = {
+		"Desktop",
+		"Downloads",
+		"Public",
+		"Documents",
+		"Music",
+		"Pictures",
+		"Movies",
 	};
 
-	for (int i = 0; i < sizeof(xdgmap) / sizeof(xdgmap[0]); i++)
+	for (size_t i = 0; i < sizeof(userDirs) / sizeof(userDirs[0]); i++)
 	{
-		std::string dir;
-		if (!xdgDirectory(userDirsConfig, xdgmap[i][0], home, dir))
-			continue;
+		struct stat st;
 
-		snprintf(buf2, sizeof(buf2), "/Volumes/SystemRoot%s", dir.c_str());
-		snprintf(buf, sizeof(buf), "%s/Users/%s/%s", prefix, login, xdgmap[i][1]);
+		snprintf(buf, sizeof(buf), "%s/Users/%s/%s", prefix, login, userDirs[i]);
 
-		unlink(buf);
-		symlink(buf2, buf);
+		if (lstat(buf, &st) == 0)
+		{
+			if (S_ISLNK(st.st_mode))
+				unlink(buf);
+			else if (S_ISDIR(st.st_mode))
+				continue;
+			else
+				unlink(buf);
+		}
+
+		mkdir(buf, 0755);
 	}
 
 	// Give the home what a new macOS account gets: what it lacks of the user template. This is where
