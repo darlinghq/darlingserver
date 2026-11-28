@@ -61,6 +61,7 @@ namespace DarlingServer {
 		std::shared_ptr<FD> _vchrootDescriptor;
 		dtape_task_t* _dtapeTask = nullptr;
 		std::weak_ptr<Process> _parentProcess;
+		bool _forkParentGone = false;
 		dtape_semaphore_t* _dtapeForkWaitSemaphore = nullptr;
 		std::vector<uint32_t> _groups;
 		dserver_cs_state_t _csState {};
@@ -68,13 +69,17 @@ namespace DarlingServer {
 		bool _csMayRegister = false;
 		void _resetCodeSigningState() {}
 
-		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1, bool forkChild = false);
+		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1, bool forkChild = false, NSID forkParentNSID = 0);
 	};
 
 	static struct {
 		std::map<pid_t, std::shared_ptr<Process>> m;
 		std::optional<std::shared_ptr<Process>> lookupEntryByID(pid_t id) {
 			if (m.count(id)) return m[id];
+			return std::nullopt;
+		}
+		std::optional<std::shared_ptr<Process>> lookupEntryByNSID(pid_t nsid) {
+			for (auto& [id, p] : m) if (p->_nspid == nsid) return p;
 			return std::nullopt;
 		}
 	} registry;
@@ -107,6 +112,23 @@ int main(int, char**) {
 
 	Process execd(getpid(), 2, Arch::x86_64, -1, false);
 	CHECK(hasArchitecture(execd, Arch::x86_64), "a process that is no fork child keeps the reported architecture");
+
+	// the process that called fork() died before the child checked in, so PPid names the reaper, not the forker
+	{
+		auto reaper = registry.m[getppid()];
+		Process orphaned(getpid(), 2, Arch::x86_64, -1, true, 77);
+		CHECK(orphaned._forkParentGone, "a fork child whose named parent is gone is marked, so that no one is woken for it");
+		CHECK(orphaned._parentProcess.lock() == reaper, "it still inherits from the process the kernel reports");
+
+		auto forker = std::make_shared<Process>(getpid(), 77, Arch::i386, -1, false);
+		registry.m[4242] = forker;
+		Process named(getpid(), 2, Arch::x86_64, -1, true, 77);
+		CHECK(!named._forkParentGone && named._parentProcess.lock() == forker, "a fork child takes the parent it names over the one PPid reports");
+		CHECK(hasArchitecture(named, Arch::i386), "and inherits that parent's architecture");
+
+		Process unnamed(getpid(), 2, Arch::x86_64, -1, true);
+		CHECK(!unnamed._forkParentGone && unnamed._parentProcess.lock() == reaper, "a fork child that names no parent keeps the PPid lookup");
+	}
 
 	std::printf("%s (%d failures)\n", fails ? "FAILED" : "OK", fails);
 	return fails != 0;

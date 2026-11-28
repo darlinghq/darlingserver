@@ -152,6 +152,8 @@ namespace DarlingServer {
 		bool _scanSmaps(uintptr_t startAddress, uint64_t& privateKiB, uint64_t& sharedKiB, bool& found) const;
 		void _closeSmapsDescriptor();
 		std::weak_ptr<Process> _parentProcess;
+		// a fork child whose forking process was gone when it checked in; no one waits for it in fork()
+		bool _forkParentGone = false;
 		bool _startSuspended = false;
 		bool _stoppedAtStart = false;
 		// execs announced at checkout and not yet completed by the new image's main-thread check-in
@@ -205,7 +207,13 @@ namespace DarlingServer {
 		using ID = pid_t;
 		using NSID = ID;
 
-		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1, bool forkChild = false);
+		/**
+		 * `forkParentNSID` is, for a fork child, the container PID of the process that called fork(), as the child saw it
+		 * before the fork. The child may check in after that process has died, when the kernel has already made the
+		 * child the reaper's, so the parent recorded here is the one the child names rather than the one the kernel
+		 * reports. Zero means the caller does not know it.
+		 */
+		Process(ID id, NSID nsid, Architecture architecture, int pipe = -1, bool forkChild = false, NSID forkParentNSID = 0);
 		Process(KernelProcessConstructorTag tag);
 		~Process();
 

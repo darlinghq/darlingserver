@@ -46,7 +46,7 @@
 
 static DarlingServer::Log processLog("process");
 
-DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe, bool forkChild):
+DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int pipe, bool forkChild, NSID forkParentNSID):
 	_pid(id),
 	_nspid(nsid),
 	_architecture(architecture)
@@ -83,6 +83,17 @@ DarlingServer::Process::Process(ID id, NSID nsid, Architecture architecture, int
 			}
 
 			break;
+		}
+	}
+
+	if (forkChild && forkParentNSID > 0) {
+		// the process that called fork() may have died before this check-in, in which case the kernel
+		// already reports the container's reaper as the parent
+		if (auto maybeForker = processRegistry().lookupEntryByNSID(forkParentNSID)) {
+			parentProcess = *maybeForker;
+			_parentProcess = parentProcess;
+		} else {
+			_forkParentGone = true;
 		}
 	}
 
@@ -468,15 +479,20 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture, bool isFor
 			setExecutablePath(parent->executablePath());
 			setExecutableUuid(parent->executableUuid());
 
-			{
-				// the parent may have died (or be dying) before we checked in;
-				// its fork-wait semaphore is gone then and there's no one left to wake up
-				std::shared_lock parentLock(parent->_rwlock);
-				if (parent->_dtapeForkWaitSemaphore) {
-					dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
+			// when the forking process was gone, the process above is only the reaper that inherited this child;
+			// it did not fork it and does not wait for it, so it must not be woken for it (its next fork() would
+			// return before that child has checked in and inherited its ports)
+			if (!_forkParentGone) {
+				{
+					// the parent may have died (or be dying) before we checked in;
+					// its fork-wait semaphore is gone then and there's no one left to wake up
+					std::shared_lock parentLock(parent->_rwlock);
+					if (parent->_dtapeForkWaitSemaphore) {
+						dtape_semaphore_up(parent->_dtapeForkWaitSemaphore);
+					}
 				}
+				parent->_notifyListeningKqchannels(NOTE_FORK, nsid());
 			}
-			parent->_notifyListeningKqchannels(NOTE_FORK, nsid());
 		}
 	}
 };
