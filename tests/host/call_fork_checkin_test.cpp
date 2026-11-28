@@ -8,7 +8,7 @@ using namespace DarlingServer;
 static int fails;
 #define CHECK(c, what) do { int ok_ = (c); std::printf("%s %s\n", ok_ ? "PASS" : "FAIL", what); if (!ok_) fails++; } while (0)
 
-static Message checkin(pid_t pid, bool isFork) {
+static Message checkin(pid_t pid, bool isFork, pid_t parentPid = 0) {
 	Message m;
 	m.bytes.resize(sizeof(dserver_rpc_call_checkin_t));
 	auto call = reinterpret_cast<dserver_rpc_call_checkin_t*>(m.bytes.data());
@@ -17,6 +17,7 @@ static Message checkin(pid_t pid, bool isFork) {
 	call->header.tid = pid;
 	call->body.lifetime_listener_pipe = -1;
 	call->body.is_fork = isFork;
+	call->body.parent_pid = parentPid;
 	m.kernelPid = pid + 400; m.addr = "sender";
 	return m;
 }
@@ -43,6 +44,9 @@ int main(int, char**) {
 
 	send(checkin(200, false));
 	CHECK(procs.m.count(200) && !procs.m[200]->_forkChild, "a check-in after exec creates the process as no fork child");
+
+	send(checkin(400, true, 100));
+	CHECK(procs.m.count(400) && procs.m[400]->_forkParentNSID == 100, "a fork child's check-in hands the process the parent it names");
 
 	send(dummy(300));
 	CHECK(procs.m.count(300) && !procs.m[300]->_forkChild, "another first call creates the process as no fork child");

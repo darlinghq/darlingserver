@@ -81,6 +81,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 			int lifetimePipe = -1;
 			bool forkChild = false;
+			Process::NSID forkParentNSID = 0;
 
 			if (header->number == dserver_callnum_checkin) {
 				auto checkinCall = reinterpret_cast<dserver_rpc_call_checkin_t*>(header);
@@ -89,10 +90,11 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 					checkinCall->body.lifetime_listener_pipe = -1;
 				}
 				forkChild = checkinCall->body.is_fork;
+				forkParentNSID = checkinCall->body.parent_pid;
 			}
 
 			try {
-				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe, forkChild);
+				tmp = std::make_shared<Process>(requestMessage.pid(), header->pid, static_cast<Process::Architecture>(header->architecture), lifetimePipe, forkChild, forkParentNSID);
 			} catch (std::system_error e) {
 				return tmp;
 			}

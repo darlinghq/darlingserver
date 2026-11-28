@@ -28,7 +28,7 @@ enum : uint32_t { dserver_callnum_checkin = 1, dserver_callnum_dummy = 2, dserve
 #define DSERVER_CONSTRUCT_CASES CALL_CASE(dummy, DummyCall) CALL_CASE(sigprocess, SigprocessCall) CALL_CASE(dbg, DbgCall)
 
 typedef struct { uint32_t number; pid_t pid; pid_t tid; uint32_t architecture; } dserver_rpc_callhdr_t;
-typedef struct { dserver_rpc_callhdr_t header; struct { int lifetime_listener_pipe; uint64_t stack_hint; bool is_fork; } body; } dserver_rpc_call_checkin_t;
+typedef struct { dserver_rpc_callhdr_t header; struct { int lifetime_listener_pipe; uint64_t stack_hint; bool is_fork; int parent_pid; } body; } dserver_rpc_call_checkin_t;
 typedef struct { dserver_rpc_callhdr_t header; } dserver_rpc_call_dummy_t;
 typedef struct { dserver_rpc_callhdr_t header; } dserver_rpc_call_dbg_t;
 // the sigprocess call as scripts/generate-rpc-wrappers.py lays it out
@@ -108,7 +108,9 @@ namespace DarlingServer {
 		enum class Architecture { x86_64 };
 		pid_t _id, _nsid;
 		bool _forkChild;
-		Process(pid_t id, pid_t nsid, Architecture, int, bool forkChild = false): _id(id), _nsid(nsid), _forkChild(forkChild) {}
+		pid_t _forkParentNSID;
+		using NSID = pid_t;
+		Process(pid_t id, pid_t nsid, Architecture, int, bool forkChild = false, pid_t forkParentNSID = 0): _id(id), _nsid(nsid), _forkChild(forkChild), _forkParentNSID(forkParentNSID) {}
 		pid_t id() const { return _id; }
 		pid_t nsid() const { return _nsid; }
 		bool readMemory(uint64_t, void*, uint64_t) { return true; }
